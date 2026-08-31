@@ -28,8 +28,6 @@ class Settings(BaseSettings):
     whisper_model: str = "small"
     whisper_device: str = "cpu"
     whisper_compute_type: str = "int8"
-    data_formulator_public_url: str = "http://127.0.0.1:5567"
-
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

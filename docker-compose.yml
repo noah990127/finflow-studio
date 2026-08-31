@@ -29,8 +29,6 @@ services:
       FINFLOW_OFFICE_INTERNAL_URL: http://onlyoffice-documentserver
       FINFLOW_OFFICE_API_BASE_URL: http://java-api:8080
       FINFLOW_OFFICE_JWT_SECRET: ${ONLYOFFICE_JWT_SECRET:-finflow-office-secret}
-      DATA_FORMULATOR_URL: ${DATA_FORMULATOR_PUBLIC_URL:-http://localhost:5567}
-      DATA_FORMULATOR_INTERNAL_URL: http://data-formulator:5567
     depends_on:
       postgres:
         condition: service_healthy
@@ -39,8 +37,6 @@ services:
       minio-init:
         condition: service_completed_successfully
       onlyoffice-documentserver:
-        condition: service_started
-      data-formulator:
         condition: service_started
     volumes:
       - finflow-files:/app/data/storage
@@ -67,7 +63,6 @@ services:
       WHISPER_DEVICE: ${WHISPER_DEVICE:-cpu}
       WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-int8}
       HF_HOME: /app/models
-      DATA_FORMULATOR_PUBLIC_URL: ${DATA_FORMULATOR_PUBLIC_URL:-http://localhost:5567}
     volumes:
       - finflow-models:/app/models
     healthcheck:
@@ -75,14 +70,6 @@ services:
       interval: 10s
       timeout: 3s
       retries: 20
-    restart: unless-stopped
-
-  data-formulator:
-    build: ./data-formulator
-    ports:
-      - "5567:5567"
-    volumes:
-      - finflow-data-formulator:/home/appuser/.data_formulator
     restart: unless-stopped
 
   postgres:
@@ -150,4 +137,3 @@ volumes:
   finflow-objects:
   finflow-onlyoffice-data:
   finflow-onlyoffice-logs:
-  finflow-data-formulator:

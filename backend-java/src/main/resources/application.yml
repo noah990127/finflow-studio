@@ -48,9 +48,6 @@ finflow:
     query-timeout-seconds: ${FINFLOW_EXTRACT_QUERY_TIMEOUT_SECONDS:3600}
   worker:
     base-url: ${WORKER_BASE_URL:http://localhost:8001}
-  data-formulator:
-    url: ${DATA_FORMULATOR_URL:http://127.0.0.1:5567}
-    internal-url: ${DATA_FORMULATOR_INTERNAL_URL:${DATA_FORMULATOR_URL:http://127.0.0.1:5567}}
   office:
     enabled: ${FINFLOW_OFFICE_ENABLED:false}
     document-server-url: ${FINFLOW_OFFICE_DOCUMENT_SERVER_URL:http://localhost:8082}

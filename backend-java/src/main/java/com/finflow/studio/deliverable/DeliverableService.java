@@ -200,7 +200,7 @@ public class DeliverableService {
         var safeTitle = title.replaceAll("[^a-zA-Z0-9._\\-\\u4e00-\\u9fff]", "_");
         if (safeTitle.length() > 180) safeTitle = safeTitle.substring(0, 180);
         var key = projectId + "/deliverables/" + resourceId + "/v" + version + "/" + safeTitle + "." +
-                (format.equals("mermaid") ? "mmd" : List.of("financial_report", "html_slides").contains(format) ? "html" : format);
+                (format.equals("mermaid") ? "mmd" : format.equals("financial_report") ? "json" : format.equals("html_slides") ? "html" : format);
         return blobStore.putBytes(key, bytes, maxFileBytes);
     }
 

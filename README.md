@@ -5,7 +5,6 @@
 - `frontend`：Vue 3 业务工作台；
 - `backend-java`：JDK 21 / Spring Boot 主服务；
 - `worker-python`：FastAPI 文件、表格和输出计算服务；
-- `data-formulator`：交互式财务报告的轻量开源服务适配；
 - `docker-compose.yml`：生产依赖和前后端服务编排。
 
 ## 本地启动
@@ -47,6 +46,7 @@ FinFlow Studio 是一个面向个人深度工作的智能工作流平台。当�
 - Vue Flow 可视化工作流编排，支持选择已有文件、数据连接、表格、Ref、AI 分析和成果生成；
 - 工作流草稿、一键检查、不可变版本、逐步运行记录、停止和从失败处续跑。
 - CSV 大文件游标分页预览，以及 PDF、PowerPoint、Word 和文本的在线查看。
+- 内置 ECharts 财务报告和 Perspective 自助分析，无需额外部署 BI 或报告设计服务。
 
 ## 本机启动
 

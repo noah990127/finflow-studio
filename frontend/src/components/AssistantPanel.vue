@@ -31,7 +31,7 @@ const floatingStyle = computed(() => ({ left: `${position.value.x}px`, top: `${p
 function panelSize() {
   return assistant.open
     ? { width: Math.min(390, window.innerWidth - 28), height: Math.min(720, window.innerHeight - 32) }
-    : { width: Math.min(390, window.innerWidth - 32), height: 62 }
+    : { width: 52, height: 52 }
 }
 function clampPosition() {
   const size = panelSize()

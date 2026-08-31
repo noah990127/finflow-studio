@@ -18,13 +18,10 @@ import java.util.Map;
 public class DeliverableController {
     private final DeliverableService deliverables;
     private final WorkerClient worker;
-    private final DataFormulatorService dataFormulator;
 
-    public DeliverableController(DeliverableService deliverables, WorkerClient worker,
-                                 DataFormulatorService dataFormulator) {
+    public DeliverableController(DeliverableService deliverables, WorkerClient worker) {
         this.deliverables = deliverables;
         this.worker = worker;
-        this.dataFormulator = dataFormulator;
     }
 
     @PostMapping("/deliverables")
@@ -36,9 +33,6 @@ public class DeliverableController {
 
     @GetMapping("/deliverables/{id}")
     public Response get(@PathVariable String id) { return deliverables.get(id); }
-
-    @PostMapping("/deliverables/{id}/data-formulator/sync")
-    public Map<String, Object> syncDataFormulator(@PathVariable String id) { return dataFormulator.sync(id); }
 
     @DeleteMapping("/deliverables/{id}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
@@ -61,7 +55,8 @@ public class DeliverableController {
             case "docx" -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
             case "pdf" -> "application/pdf";
             case "excalidraw" -> "application/json; charset=UTF-8";
-            case "financial_report", "html_slides" -> "text/html; charset=UTF-8";
+            case "financial_report" -> "application/json; charset=UTF-8";
+            case "html_slides" -> "text/html; charset=UTF-8";
             default -> "text/plain; charset=UTF-8";
         });
         response.setHeader("Content-Length", Long.toString(Files.size(path)));
@@ -74,17 +69,28 @@ public class DeliverableController {
     public void content(@PathVariable String id, @RequestParam(required = false) Integer version,
                         HttpServletResponse response) throws IOException {
         var item = deliverables.get(id);
-        if (!List.of("financial_report", "html_slides").contains(item.format())) throw new IllegalArgumentException("当前输出件不支持内嵌预览");
+        if (!"html_slides".equals(item.format())) throw new IllegalArgumentException("当前输出件不支持内嵌网页预览");
         var path = deliverables.path(id, version);
         response.setContentType("text/html; charset=UTF-8");
         response.setHeader("Cache-Control", "no-store");
         response.setHeader("X-Content-Type-Options", "nosniff");
         response.setHeader("X-Frame-Options", "SAMEORIGIN");
-        var policy = "html_slides".equals(item.format())
-                ? "default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; font-src data:; frame-ancestors 'self'; base-uri 'none'; form-action 'none'; object-src 'none'"
-                : "default-src 'none'; style-src 'unsafe-inline'; frame-src http://127.0.0.1:5567 http://localhost:5567; frame-ancestors 'self'; base-uri 'none'; form-action 'none'";
+        var policy = "default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; font-src data:; frame-ancestors 'self'; base-uri 'none'; form-action 'none'; object-src 'none'";
         response.setHeader("Content-Security-Policy", policy);
-        response.setHeader("Content-Disposition", "inline; filename=" + ("html_slides".equals(item.format()) ? "web-presentation.html" : "financial-report.html"));
+        response.setHeader("Content-Disposition", "inline; filename=web-presentation.html");
+        try (var input = Files.newInputStream(path); var output = response.getOutputStream()) { input.transferTo(output); }
+    }
+
+    @GetMapping("/deliverables/{id}/report-spec")
+    public void reportSpec(@PathVariable String id, @RequestParam(required = false) Integer version,
+                           HttpServletResponse response) throws IOException {
+        var item = deliverables.get(id);
+        if (!"financial_report".equals(item.format())) throw new IllegalArgumentException("当前输出件不是财务报告");
+        var path = deliverables.path(id, version);
+        response.setContentType("application/json; charset=UTF-8");
+        response.setHeader("Cache-Control", "no-store");
+        response.setHeader("X-Content-Type-Options", "nosniff");
+        response.setHeader("Content-Length", Long.toString(Files.size(path)));
         try (var input = Files.newInputStream(path); var output = response.getOutputStream()) { input.transferTo(output); }
     }
 

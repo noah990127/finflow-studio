@@ -29,7 +29,6 @@ from .charting import add_native_ppt_chart, chart_png, normalize_ppt_chart_ids, 
 from .citations import inline_sources, normalize_markers, reference_entries
 from .models import DeliverableChart, DeliverableRequest, DeliverableSection
 from .ppt_skills import HUAWEI_STYLE_C, render as render_ppt_skill
-from .config import settings
 
 
 BLUE = PptColor(47, 107, 202)
@@ -316,32 +315,16 @@ def create_pdf(request: DeliverableRequest) -> bytes:
 
 def create_financial_report(request: DeliverableRequest) -> bytes:
     request = _normalize_document_request(request)
-    sections = []
-    for section in request.sections:
-        paragraphs = "".join(f"<p>{escape(item)}</p>" for item in section.paragraphs if item.strip())
-        bullets = "".join(f"<li>{escape(item)}</li>" for item in section.bullets if item.strip())
-        sections.append(
-            f'<section><h2>{escape(section.heading)}</h2>{paragraphs}'
-            f'{f"<ul>{bullets}</ul>" if bullets else ""}'
-            f'</section>'
-        )
-    entries = reference_entries(request)
-    references = "".join(f"<li>{escape(entry)}</li>" for entry in entries)
-    if references:
-        sections.append(f'<section class="references"><h2>参考文献</h2><ol>{references}</ol></section>')
-    data_formulator_url = escape(settings.data_formulator_public_url.rstrip("/"), quote=True)
-    document = f"""<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="generator" content="FinFlow Studio + Data Formulator"><meta name="data-formulator-url" content="{data_formulator_url}">
-<title>{escape(request.title)}</title><style>
-*{{box-sizing:border-box}}body{{margin:0;font-family:Arial,"Microsoft YaHei",sans-serif;color:#253b53;background:#f5f9fd}}
-header{{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:22px 30px;border-bottom:1px solid #d9e5f0;background:#fff}}
-h1{{margin:0;font-size:24px}}header p{{margin:5px 0 0;color:#718398;font-size:13px}}
-header a{{padding:9px 13px;border:1px solid #9fc2e8;border-radius:6px;color:#1767bc;font-size:13px;text-decoration:none;background:#f5faff}}
-main{{max-width:1080px;margin:auto;padding:24px}}section{{padding:20px;border:1px solid #d7e3ee;border-radius:7px;background:#fff}}section+section{{margin-top:14px}}h2{{margin:0 0 12px;font-size:16px}}p,li{{font-size:13px;line-height:1.7}}small{{color:#718398}}
-</style></head><body><header><div><h1>{escape(request.title)}</h1><p>{escape(request.subtitle or '由 FinFlow Studio 工作流生成')}</p></div><a href="{data_formulator_url}" target="_blank" rel="noopener">使用 Data Formulator 自助分析</a></header>
-<main><article>{''.join(sections)}</article></main></body></html>"""
-    return document.encode("utf-8")
+    specification = {
+        "schema_version": 1,
+        "renderer": "finflow-echarts-perspective",
+        "title": request.title,
+        "subtitle": request.subtitle or "由 FinFlow Studio 工作流生成",
+        "theme": request.theme,
+        "sections": [section.model_dump(mode="json") for section in request.sections],
+        "references": reference_entries(request),
+    }
+    return json.dumps(specification, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
 
 def create_mermaid(request: DeliverableRequest) -> bytes:

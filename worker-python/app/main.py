@@ -358,7 +358,7 @@ async def generate_pdf(request: DeliverableRequest) -> Response:
 
 @app.post("/v1/deliverables/financial_report")
 async def generate_financial_report(request: DeliverableRequest) -> Response:
-    return Response(create_financial_report(request), media_type="text/html; charset=utf-8")
+    return Response(create_financial_report(request), media_type="application/json; charset=utf-8")
 
 
 @app.post("/v1/deliverables/mermaid")
