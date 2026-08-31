@@ -1,0 +1,36 @@
+from typing import Literal
+
+from pydantic import AliasChoices, Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    service_name: str = "finflow-worker"
+    llm_provider: str = Field(default="codex", validation_alias=AliasChoices("FINFLOW_LLM_PROVIDER", "LLM_PROVIDER"))
+    openai_api_key: str = ""
+    openai_base_url: str = "https://api.openai.com/v1"
+    openai_model: str = "gpt-5.6-sol"
+    openai_reasoning_effort: Literal["low", "medium", "high", "xhigh"] = "low"
+    openai_max_output_tokens: int = 2500
+    codex_cli_path: str = ""
+    codex_cli_model: str = "gpt-5.6-sol"
+    codex_cli_reasoning_effort: Literal["low", "medium", "high", "xhigh"] = "low"
+    codex_cli_force_http: bool = True
+    codex_cli_timeout_seconds: float = 240.0
+    deepseek_api_key: str = ""
+    deepseek_base_url: str = "https://api.deepseek.com"
+    deepseek_chat_model: str = "deepseek-v4-flash"
+    max_upload_bytes: int = 500 * 1024 * 1024
+    max_transform_input_bytes: int = 100 * 1024 * 1024 * 1024
+    knowledge_chunk_chars: int = 1200
+    knowledge_chunk_overlap: int = 150
+    request_timeout_seconds: float = 60.0
+    whisper_model: str = "small"
+    whisper_device: str = "cpu"
+    whisper_compute_type: str = "int8"
+    data_formulator_public_url: str = "http://127.0.0.1:5567"
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+
+settings = Settings()

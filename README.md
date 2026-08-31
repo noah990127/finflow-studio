@@ -1,0 +1,107 @@
+# FinFlow Studio
+
+面向个人专注工作的财经数据工作流平台。代码目录即当前目录：
+
+- `frontend`：Vue 3 业务工作台；
+- `backend-java`：JDK 21 / Spring Boot 主服务；
+- `worker-python`：FastAPI 文件、表格和输出计算服务；
+- `data-formulator`：交互式财务报告的轻量开源服务适配；
+- `docker-compose.yml`：生产依赖和前后端服务编排。
+
+## 本地启动
+
+```bash
+cd worker-python && .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8001
+cd backend-java && mvn spring-boot:run
+cd frontend && npm run dev -- --port 5174
+```
+
+打开 `http://127.0.0.1:5174/`。不配置模型 API Key 时，资料解析、数据抽取、表格加工和文件输出仍可用，智能分析使用本地提取式降级。
+
+## 生产部署
+
+```bash
+docker compose up --build -d
+```
+
+生产环境通过 `DATABASE_PASSWORD`、`DEEPSEEK_API_KEY` 和各数据源密码环境变量注入密钥。数据库连接配置中的密码字段只能填写 `env:变量名`，不会保存明文。
+
+FinFlow Studio 是一个面向个人深度工作的智能工作流平台。当前仓库包含三个可独立运行的应用：
+
+- `frontend`：Vue 3 + TypeScript 的蓝白业务界面；
+- `backend-java`：JDK 21、Spring Boot 4、Spring AI 的主后端与 AI 安全执行控制面；
+- `worker-python`：FastAPI 资料解析、Ref 检索和文件分析 Worker。
+
+## 已实现的第一版能力
+
+- 创建和读取个人项目；
+- 全局 AI 助手会话；
+- 当前页面和选中对象的上下文快照；
+- 自动生成可读任务步骤；
+- `READ_ONLY`、`DRAFT_ONLY`、`CREATE_VERSION` 风险分级；
+- 修改型计划的版本、哈希、过期和确认校验；
+- 幂等任务创建、后台执行、事件历史、SSE、取消与撤销；
+- Codex Responses API 模型网关，保留 DeepSeek 适配；没有 API Key 时自动使用本地安全计划器和提取式分析；
+- Python 本地摘要、Ref 检索和样本数据概况；
+- Vue 项目工作台和完整 AI 任务面板。
+- Vue Flow 可视化工作流编排，支持选择已有文件、数据连接、表格、Ref、AI 分析和成果生成；
+- 工作流草稿、一键检查、不可变版本、逐步运行记录、停止和从失败处续跑。
+- CSV 大文件游标分页预览，以及 PDF、PowerPoint、Word 和文本的在线查看。
+
+## 本机启动
+
+### 1. Python Worker
+
+```bash
+cd worker-python
+python3 -m venv .venv
+source .venv/bin/activate
+pip install '.[dev]'
+python -m uvicorn app.main:app --reload --port 8001
+```
+
+### 2. Java 主后端
+
+需要 JDK 21：
+
+```bash
+cd backend-java
+mvn spring-boot:run
+```
+
+默认使用文件型 H2，数据保存在 `backend-java/data`。切换 PostgreSQL 或 openGauss 时设置 `DATABASE_URL`、`DATABASE_USERNAME`、`DATABASE_PASSWORD` 和 JDBC Driver。
+
+### 3. Vue 前端
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+打开 `http://127.0.0.1:5173`。若端口被占用，可执行 `npm run dev -- --port 5174`。
+
+## 配置 Codex 分析
+
+取得 API Key 后：
+
+```bash
+export FINFLOW_LLM_PROVIDER=codex
+export OPENAI_API_KEY='你的 OpenAI API Key'
+export OPENAI_MODEL=gpt-5.6-sol
+export OPENAI_REASONING_EFFORT=medium
+```
+
+API Key 只在 Python 服务端读取，不会进入浏览器，也不会复用桌面 Codex 登录态。没有 Key 时项目、计划、确认、任务和手动页面仍然可用。
+
+## 测试
+
+```bash
+cd backend-java && mvn test
+cd worker-python && .venv/bin/python -m pytest
+cd frontend && npm run build
+```
+
+## Docker Compose
+
+仓库包含 `docker-compose.yml`。当前开发机未安装 Docker，因此本轮以本机三服务运行作为验证方式。

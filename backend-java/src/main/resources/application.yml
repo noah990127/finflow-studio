@@ -1,0 +1,61 @@
+server:
+  port: ${SERVER_PORT:8080}
+
+spring:
+  servlet:
+    multipart:
+      max-file-size: ${FINFLOW_MAX_FILE_SIZE:500MB}
+      max-request-size: ${FINFLOW_MAX_REQUEST_SIZE:510MB}
+  application:
+    name: finflow-backend
+  datasource:
+    url: ${DATABASE_URL:jdbc:h2:file:./data/finflow;MODE=PostgreSQL}
+    username: ${DATABASE_USERNAME:sa}
+    password: ${DATABASE_PASSWORD:}
+    driver-class-name: ${DATABASE_DRIVER:org.h2.Driver}
+  sql:
+    init:
+      mode: always
+  threads:
+    virtual:
+      enabled: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+
+finflow:
+  transform:
+    max-output-bytes: ${FINFLOW_TRANSFORM_MAX_OUTPUT_BYTES:107374182400}
+  storage:
+    provider: ${FINFLOW_STORAGE_PROVIDER:local}
+    root: ${FINFLOW_STORAGE_ROOT:./data/storage}
+    cache-root: ${FINFLOW_STORAGE_CACHE_ROOT:./data/blob-cache}
+    max-file-bytes: ${FINFLOW_MAX_FILE_BYTES:524288000}
+    s3:
+      bucket: ${FINFLOW_S3_BUCKET:finflow}
+      region: ${FINFLOW_S3_REGION:us-east-1}
+      endpoint: ${FINFLOW_S3_ENDPOINT:}
+      access-key: ${FINFLOW_S3_ACCESS_KEY:}
+      secret-key: ${FINFLOW_S3_SECRET_KEY:}
+      path-style: ${FINFLOW_S3_PATH_STYLE:true}
+  extract:
+    max-output-bytes: ${FINFLOW_EXTRACT_MAX_OUTPUT_BYTES:107374182400}
+    fetch-size: ${FINFLOW_EXTRACT_FETCH_SIZE:5000}
+    progress-interval: ${FINFLOW_EXTRACT_PROGRESS_INTERVAL:10000}
+    query-timeout-seconds: ${FINFLOW_EXTRACT_QUERY_TIMEOUT_SECONDS:3600}
+  worker:
+    base-url: ${WORKER_BASE_URL:http://localhost:8001}
+  data-formulator:
+    url: ${DATA_FORMULATOR_URL:http://127.0.0.1:5567}
+    internal-url: ${DATA_FORMULATOR_INTERNAL_URL:${DATA_FORMULATOR_URL:http://127.0.0.1:5567}}
+  office:
+    enabled: ${FINFLOW_OFFICE_ENABLED:false}
+    document-server-url: ${FINFLOW_OFFICE_DOCUMENT_SERVER_URL:http://localhost:8082}
+    internal-document-server-url: ${FINFLOW_OFFICE_INTERNAL_URL:http://onlyoffice-documentserver}
+    api-base-url: ${FINFLOW_OFFICE_API_BASE_URL:http://java-api:8080}
+    jwt-secret: ${FINFLOW_OFFICE_JWT_SECRET:}
+  workflow:
+    scheduler-poll-ms: ${FINFLOW_WORKFLOW_SCHEDULER_POLL_MS:30000}

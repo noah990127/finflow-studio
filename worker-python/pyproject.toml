@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "finflow-worker"
+version = "0.1.0"
+description = "FinFlow Studio document, knowledge and file analysis worker"
+requires-python = ">=3.9"
+dependencies = [
+  "fastapi>=0.116,<1.0",
+  "uvicorn[standard]>=0.35,<1.0",
+  "pydantic>=2.11,<3.0",
+  "pydantic-settings>=2.10,<3.0",
+  "httpx>=0.28,<1.0",
+  "python-multipart>=0.0.20,<1.0",
+  "pypdf>=6.0,<7.0",
+  "python-docx>=1.2,<2.0",
+  "python-pptx>=1.0,<2.0",
+  "reportlab>=4.4,<5.0",
+  "pillow>=11.0,<12.0",
+  "openpyxl>=3.1,<4.0",
+  "duckdb>=1.4,<2.0",
+  "sqlglot>=27,<29",
+  "faster-whisper>=1.2,<2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.4,<9.0",
+  "pytest-asyncio>=1.1,<2.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
