@@ -1,0 +1,76 @@
+{
+  "name": "启明智造经营与资本市场联合分析",
+  "description": "模拟上市公司上半年经营质量、预算达成、现金流、客户风险与外部市场环境的综合财经分析案例。所有公司和业务数据均为模拟。",
+  "files": [
+    {"key": "budget", "path": "assets/budget_targets.csv"},
+    {"key": "customers", "path": "assets/customer_concentration.csv"},
+    {"key": "peers", "path": "assets/peer_benchmark.csv"},
+    {"key": "policy", "path": "assets/政策与风险口径说明.txt"},
+    {"key": "research", "path": "assets/券商研报观点摘要_模拟.md"},
+    {"key": "media", "path": "assets/财经媒体行业观察_模拟资料.pdf"},
+    {"key": "management", "path": "assets/启明智造半年报管理层讨论_模拟.docx"}
+  ],
+  "connections": [
+    {
+      "key": "qiming-db",
+      "name": "启明智造经营数据 PostgreSQL",
+      "sourceType": "POSTGRESQL",
+      "jdbcUrlEnv": "FINFLOW_DEMO_DATABASE_URL",
+      "jdbcUrlDefault": "jdbc:postgresql://postgres:5432/finflow",
+      "usernameEnv": "FINFLOW_DEMO_DATABASE_USERNAME",
+      "usernameDefault": "finflow",
+      "secretRef": "env:DATABASE_PASSWORD",
+      "options": {"ApplicationName": "FinFlowQimingDemo"}
+    },
+    {
+      "key": "market-api",
+      "name": "行情与宏观指标数据服务",
+      "sourceType": "HTTP_API",
+      "jdbcUrlEnv": "FINFLOW_QIMING_MARKET_API_URL",
+      "jdbcUrlDefault": "http://demo-api:8011/api/v1/market/monthly-indicators?year=2026",
+      "options": {"format": "jsonl"}
+    }
+  ],
+  "workflow": "workflow.json",
+  "postgresInit": "postgres-init.sql",
+  "legacyRefs": {
+    "10c53418-ae31-4b03-8119-d52ae99fbba6": "connection:qiming-db",
+    "b0044cef-1703-4508-ab8e-f6f01295e8bf": "connection:market-api",
+    "29c47307-9d8c-477c-a0c1-e96f30c5cdf2": "file:budget",
+    "769ecb3b-5ddd-402a-81fe-e8f950134909": "file:peers",
+    "11258442-6c6f-4471-b30d-c32a9c327c4e": "file:customers",
+    "732875d9-f31e-4eb6-ab37-c13d2790a8e2": "file:media",
+    "5d17b19c-908e-4ff2-b6c9-90bd64a0a6fa": "file:management",
+    "f37c5c81-0771-4d4c-b215-8fa986f5a200": "file:research",
+    "976f08c8-bb9b-4188-aabb-1576989468ef": "file:policy"
+  },
+  "deliverables": [
+    {
+      "title": "启明智造2026年上半年经营质量交互报告",
+      "subtitle": "模拟财经业务案例 · 经营管理用途",
+      "format": "financial_report",
+      "includeCitations": false,
+      "citationStyle": "IEEE",
+      "sections": [
+        {
+          "heading": "经营质量与风险",
+          "paragraphs": ["{\"sections\":[{\"heading\":\"收入增长但现金转化仍需改善\",\"paragraphs\":[\"上半年三条业务线保持增长，经营现金流表现弱于收入和订单，需要加强回款、库存与采购节奏联动。\"],\"bullets\":[\"储能系统是收入和订单的主要来源\",\"海外设备受汇率、账期和区域需求影响更明显\"],\"chart\":{\"type\":\"bar\",\"title\":\"同业毛利率比较\",\"categories\":[\"启明智造\",\"同业甲\",\"同业乙\",\"同业丙\",\"行业中位数\"],\"series\":[{\"name\":\"毛利率（%）\",\"values\":[27.1,30.8,34.2,26.9,29.7]}],\"source_ref\":\"模拟同业经营质量基准\"}},{\"heading\":\"客户与营运资本是管理重点\",\"paragraphs\":[\"Top5客户收入集中度较高，部分客户回款周期拉长；库存周转和经营现金转化均弱于行业中位数。\"],\"bullets\":[\"对逾期客户建立分层回款计划\",\"按业务线设置库存和订单联动阈值\",\"将现金流纳入月度经营复盘\"]}]}"],
+          "bullets": [],
+          "refIds": []
+        }
+      ]
+    },
+    {
+      "title": "启明智造2026年上半年经营质量示范汇报",
+      "subtitle": "管理层汇报 · 模拟财经业务案例",
+      "format": "pptx",
+      "pptSkill": "guizang-huawei-style-c",
+      "includeCitations": false,
+      "citationStyle": "IEEE",
+      "sections": [
+        {"heading": "增长延续但经营质量承压", "paragraphs": ["收入和订单保持增长，现金转化、应收和库存成为主要约束。"], "bullets": ["储能系统贡献主要增量", "海外业务回款周期拉长", "毛利率低于行业中位数"], "refIds": []},
+        {"heading": "管理层应优先改善现金循环", "paragraphs": ["未来90天应围绕回款、库存、采购和客户风险建立联合行动。"], "bullets": ["分层推进逾期应收回收", "将库存阈值与订单计划联动", "按月复盘经营现金流偏差"], "refIds": []}
+      ]
+    }
+  ]
+}

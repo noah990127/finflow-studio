@@ -1,0 +1,107 @@
+{
+  "name": "NVIDIA 五年财报分析工作流",
+  "description": "仅使用公开网页和在线数据服务，分析 NVIDIA FY2022-FY2026 的增长、盈利、现金流、业务结构和风险，并生成财经报告与管理层 PPT。",
+  "executionMode": "MANUAL",
+  "expectedVersion": 1,
+  "nodes": [
+    {
+      "id": "nvidia_ir_reports",
+      "type": "LINK_INPUT",
+      "name": "NVIDIA 历年年报",
+      "x": 60,
+      "y": 60,
+      "config": {
+        "url": "https://investor.nvidia.com/financial-info/annual-reports-and-proxies/default.aspx",
+        "title": "NVIDIA Annual Reports and Proxies"
+      }
+    },
+    {
+      "id": "nvidia_sec_2026",
+      "type": "LINK_INPUT",
+      "name": "SEC FY2026 10-K",
+      "x": 60,
+      "y": 210,
+      "config": {
+        "url": "https://www.sec.gov/Archives/edgar/data/1045810/000104581026000021/nvda-20260125.htm",
+        "title": "NVIDIA FY2026 Form 10-K"
+      }
+    },
+    {
+      "id": "nvidia_sec_xbrl",
+      "type": "LINK_INPUT",
+      "name": "SEC XBRL 公司数据",
+      "x": 60,
+      "y": 360,
+      "config": {
+        "url": "https://data.sec.gov/api/xbrl/companyfacts/CIK0001045810.json",
+        "title": "SEC Company Facts - NVIDIA"
+      }
+    },
+    {
+      "id": "nvidia_financial_api",
+      "type": "DATA_EXTRACT",
+      "name": "提取五年财务指标",
+      "x": 60,
+      "y": 510,
+      "config": {
+        "connectionId": "1ba12b1c-ea60-4d56-91b8-1dfcf3c5a735",
+        "sql": "GET",
+        "taskName": "NVIDIA FY2022-FY2026 财务指标",
+        "outputName": "nvidia_fy2022_fy2026_financials.csv",
+        "fetchSize": 5000
+      }
+    },
+    {
+      "id": "nvidia_five_year_analysis",
+      "type": "AI_ANALYSIS",
+      "name": "五年财报与经营质量分析",
+      "x": 430,
+      "y": 260,
+      "config": {
+        "prompt": "基于输入的 NVIDIA FY2022-FY2026 结构化财务指标和三个官方网页来源，形成中文财经分析。必须逐年核对收入、毛利率、营业利润、净利润、经营现金流、研发投入、库存与数据中心收入；计算五年收入和净利润 CAGR、净利率、经营现金流/净利润、研发费用率、库存增速、数据中心收入占比。重点解释 FY2023 周期低点、FY2024-FY2026 AI 基础设施驱动的增长跃迁，以及 FY2026 毛利率回落、45 亿美元 H20 库存与采购义务费用、客户集中、出口限制、供应链与产品迭代风险。区分事实、计算结果和判断，不编造未提供的数据；所有金额统一为百万美元，并给出面向管理层的观察指标与行动建议。",
+        "maxPoints": 12
+      }
+    },
+    {
+      "id": "nvidia_financial_report",
+      "type": "DELIVERABLE",
+      "name": "生成 NVIDIA 五年财经报告",
+      "x": 820,
+      "y": 165,
+      "config": {
+        "title": "NVIDIA FY2022-FY2026 五年财报与经营趋势分析",
+        "subtitle": "AI 基础设施增长、盈利质量与风险观察",
+        "format": "FINANCIAL_REPORT",
+        "heading": "管理层摘要",
+        "targetAudience": "公司管理层、财务负责人和投资研究人员",
+        "lengthHint": "完整五年趋势报告，包含指标表、关键结论、风险和观察清单",
+        "generationPrompt": "生成可直接阅读的中文财经报告。开头给出 5 条结论；随后按增长与业务结构、盈利能力、现金流质量、研发与资本配置、库存与供应链、客户及监管风险展开。数字必须与上游数据一致，明确 FY2022-FY2026 财年口径，不使用空泛模板文字，不出现“第一页、第二页”等制作提示。"
+      }
+    },
+    {
+      "id": "nvidia_management_ppt",
+      "type": "DELIVERABLE",
+      "name": "生成 NVIDIA 管理层 PPT",
+      "x": 820,
+      "y": 385,
+      "config": {
+        "title": "NVIDIA 五年财报分析",
+        "subtitle": "FY2022-FY2026 增长质量、现金流与风险",
+        "format": "PPTX",
+        "pptSkill": "guizang-huawei-style-c",
+        "heading": "核心判断",
+        "targetAudience": "管理层和投资决策人员",
+        "lengthHint": "8-10 页",
+        "generationPrompt": "采用华为企业汇报 Style C，生成 8-10 页可直接汇报的演示文稿。页面结构应有封面、五年核心指标趋势、增长阶段变化、数据中心业务驱动、利润与现金流质量、研发与资本配置、库存及供应链、客户与监管风险、管理层观察清单、结论。不要每页都使用相同四宫格，交替使用大数字、趋势图、对比表、时间轴和结论页；页面标题必须是业务结论，不出现“第几页”或制作说明。"
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e_ir_analysis", "source": "nvidia_ir_reports", "target": "nvidia_five_year_analysis" },
+    { "id": "e_10k_analysis", "source": "nvidia_sec_2026", "target": "nvidia_five_year_analysis" },
+    { "id": "e_xbrl_analysis", "source": "nvidia_sec_xbrl", "target": "nvidia_five_year_analysis" },
+    { "id": "e_data_analysis", "source": "nvidia_financial_api", "target": "nvidia_five_year_analysis" },
+    { "id": "e_analysis_report", "source": "nvidia_five_year_analysis", "target": "nvidia_financial_report" },
+    { "id": "e_analysis_ppt", "source": "nvidia_five_year_analysis", "target": "nvidia_management_ppt" }
+  ]
+}

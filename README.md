@@ -105,3 +105,7 @@ cd frontend && npm run build
 ## Docker Compose
 
 仓库包含 `docker-compose.yml`。当前开发机未安装 Docker，因此本轮以本机三服务运行作为验证方式。
+
+## 可部署示范案例
+
+仓库在 `examples/cases` 中提供两个经过脱敏的可移植案例：英伟达五年财报分析和完全虚构的启明智造经营分析。资源包包含源文件、脱敏连接、工作流、模拟数据库/API和初始成果规格，部署与导入步骤见 `examples/cases/README.md`。

@@ -1,0 +1,199 @@
+{
+  "name": "上半年经营质量与资本市场联合分析",
+  "description": "融合经营数据库、行情宏观 API、预算与同业 CSV、客户风险数据及多类型财经资料，形成经营分析、财务报告和管理层 PPT。",
+  "executionMode": "MANUAL",
+  "schedule": null,
+  "nodes": [
+    {
+      "id": "finance_db",
+      "type": "DATA_EXTRACT",
+      "name": "提取月度经营财务数据",
+      "x": 60,
+      "y": 100,
+      "config": {
+        "connectionId": "10c53418-ae31-4b03-8119-d52ae99fbba6",
+        "taskName": "提取启明智造上半年经营数据",
+        "sql": "SELECT period, business_line, revenue_wan, cost_wan, selling_expense_wan, admin_expense_wan, r_and_d_wan, receivables_wan, inventory_wan, operating_cash_flow_wan, order_backlog_wan FROM market_demo.monthly_financials ORDER BY period, business_line",
+        "fetchSize": 5000,
+        "outputName": "启明智造2026上半年经营数据_DB.csv"
+      }
+    },
+    {
+      "id": "market_api",
+      "type": "DATA_EXTRACT",
+      "name": "获取行情与宏观指标",
+      "x": 60,
+      "y": 230,
+      "config": {
+        "connectionId": "b0044cef-1703-4508-ab8e-f6f01295e8bf",
+        "taskName": "调用行情与宏观指标数据服务",
+        "sql": "GET",
+        "fetchSize": 5000,
+        "outputName": "2026上半年行情与宏观指标_API.csv"
+      }
+    },
+    {
+      "id": "budget_csv",
+      "type": "FILE_INPUT",
+      "name": "月度预算目标",
+      "x": 60,
+      "y": 360,
+      "config": {"resourceId": "29c47307-9d8c-477c-a0c1-e96f30c5cdf2"}
+    },
+    {
+      "id": "peer_csv",
+      "type": "FILE_INPUT",
+      "name": "同业经营质量基准",
+      "x": 60,
+      "y": 510,
+      "config": {"resourceId": "769ecb3b-5ddd-402a-81fe-e8f950134909"}
+    },
+    {
+      "id": "customer_csv",
+      "type": "FILE_INPUT",
+      "name": "大客户集中度与逾期风险",
+      "x": 60,
+      "y": 640,
+      "config": {"resourceId": "11258442-6c6f-4471-b30d-c32a9c327c4e"}
+    },
+    {
+      "id": "media_pdf",
+      "type": "FILE_INPUT",
+      "name": "财经媒体行业观察",
+      "x": 60,
+      "y": 790,
+      "config": {"resourceId": "732875d9-f31e-4eb6-ab37-c13d2790a8e2"}
+    },
+    {
+      "id": "management_docx",
+      "type": "FILE_INPUT",
+      "name": "半年报管理层讨论",
+      "x": 60,
+      "y": 920,
+      "config": {"resourceId": "5d17b19c-908e-4ff2-b6c9-90bd64a0a6fa"}
+    },
+    {
+      "id": "research_md",
+      "type": "FILE_INPUT",
+      "name": "券商研报观点摘要",
+      "x": 60,
+      "y": 1050,
+      "config": {"resourceId": "f37c5c81-0771-4d4c-b215-8fa986f5a200"}
+    },
+    {
+      "id": "policy_txt",
+      "type": "FILE_INPUT",
+      "name": "政策与风险分析口径",
+      "x": 60,
+      "y": 1180,
+      "config": {"resourceId": "976f08c8-bb9b-4188-aabb-1576989468ef"}
+    },
+    {
+      "id": "caijing_link",
+      "type": "LINK_INPUT",
+      "name": "财经网参考入口",
+      "x": 60,
+      "y": 1310,
+      "config": {"title": "财经网", "url": "https://www.caijing.com.cn/"}
+    },
+    {
+      "id": "kpi_detail",
+      "type": "DATA_TRANSFORM",
+      "name": "关联预算与市场指标计算经营 KPI",
+      "x": 390,
+      "y": 260,
+      "config": {
+        "requirements": "按期间和业务线关联实际经营数据、预算目标及市场宏观指标，确定性计算收入预算达成、毛利、毛利率、费用率、现金偏差、应收及库存占收入比例。",
+        "script": "SELECT f.period, f.business_line, f.revenue_wan, b.budget_revenue_wan, ROUND(f.revenue_wan / NULLIF(b.budget_revenue_wan, 0) * 100, 2) AS revenue_budget_attainment_pct, ROUND(f.revenue_wan - b.budget_revenue_wan, 2) AS revenue_budget_variance_wan, f.cost_wan, ROUND(f.revenue_wan - f.cost_wan, 2) AS gross_profit_wan, ROUND((f.revenue_wan - f.cost_wan) / NULLIF(f.revenue_wan, 0) * 100, 2) AS gross_margin_pct, b.budget_gross_margin_pct, ROUND((f.revenue_wan - f.cost_wan) / NULLIF(f.revenue_wan, 0) * 100 - b.budget_gross_margin_pct, 2) AS gross_margin_gap_pct, f.selling_expense_wan, f.admin_expense_wan, f.r_and_d_wan, ROUND((f.selling_expense_wan + f.admin_expense_wan + f.r_and_d_wan) / NULLIF(f.revenue_wan, 0) * 100, 2) AS operating_expense_ratio_pct, f.receivables_wan, ROUND(f.receivables_wan / NULLIF(f.revenue_wan, 0) * 100, 2) AS receivables_to_revenue_pct, f.inventory_wan, ROUND(f.inventory_wan / NULLIF(f.revenue_wan, 0) * 100, 2) AS inventory_to_revenue_pct, f.operating_cash_flow_wan, b.budget_cash_flow_wan, ROUND(f.operating_cash_flow_wan - b.budget_cash_flow_wan, 2) AS cash_flow_budget_variance_wan, f.order_backlog_wan, m.new_energy_equipment_index, m.lithium_material_price_index, m.eur_cny, m.manufacturing_pmi, m.policy_attention_index FROM financials f LEFT JOIN budget b ON f.period = b.period AND f.business_line = b.business_line LEFT JOIN market m ON f.period = m.period ORDER BY f.period, f.business_line",
+        "outputName": "启明智造经营KPI关联明细.csv",
+        "inputAliases": {"finance_db": "financials", "market_api": "market", "budget_csv": "budget"}
+      }
+    },
+    {
+      "id": "management_summary",
+      "type": "DATA_TRANSFORM",
+      "name": "汇总管理层经营质量指标",
+      "x": 690,
+      "y": 260,
+      "config": {
+        "requirements": "分别按总体、业务线和月份汇总收入、预算、毛利、现金流、应收、库存与订单，所有结论必须以该汇总为唯一金额口径。",
+        "script": "WITH d AS (SELECT * FROM detail), s AS (SELECT '总体' AS dimension_type, '2026上半年' AS dimension_name, SUM(revenue_wan) AS revenue_wan, SUM(budget_revenue_wan) AS budget_revenue_wan, SUM(gross_profit_wan) AS gross_profit_wan, SUM(operating_cash_flow_wan) AS operating_cash_flow_wan, SUM(budget_cash_flow_wan) AS budget_cash_flow_wan, SUM(receivables_wan) AS receivables_wan, SUM(inventory_wan) AS inventory_wan, SUM(order_backlog_wan) AS order_backlog_wan FROM d UNION ALL SELECT '业务线', business_line, SUM(revenue_wan), SUM(budget_revenue_wan), SUM(gross_profit_wan), SUM(operating_cash_flow_wan), SUM(budget_cash_flow_wan), SUM(receivables_wan), SUM(inventory_wan), SUM(order_backlog_wan) FROM d GROUP BY business_line UNION ALL SELECT '月份', period, SUM(revenue_wan), SUM(budget_revenue_wan), SUM(gross_profit_wan), SUM(operating_cash_flow_wan), SUM(budget_cash_flow_wan), SUM(receivables_wan), SUM(inventory_wan), SUM(order_backlog_wan) FROM d GROUP BY period) SELECT dimension_type, dimension_name, ROUND(revenue_wan, 2) AS revenue_wan, ROUND(budget_revenue_wan, 2) AS budget_revenue_wan, ROUND(revenue_wan / NULLIF(budget_revenue_wan, 0) * 100, 2) AS revenue_budget_attainment_pct, ROUND(gross_profit_wan, 2) AS gross_profit_wan, ROUND(gross_profit_wan / NULLIF(revenue_wan, 0) * 100, 2) AS gross_margin_pct, ROUND(operating_cash_flow_wan, 2) AS operating_cash_flow_wan, ROUND(budget_cash_flow_wan, 2) AS budget_cash_flow_wan, ROUND(operating_cash_flow_wan - budget_cash_flow_wan, 2) AS cash_flow_budget_variance_wan, ROUND(receivables_wan, 2) AS receivables_wan, ROUND(inventory_wan, 2) AS inventory_wan, ROUND(order_backlog_wan, 2) AS order_backlog_wan FROM s ORDER BY CASE dimension_type WHEN '总体' THEN 1 WHEN '业务线' THEN 2 ELSE 3 END, dimension_name",
+        "outputName": "启明智造管理层经营质量汇总.csv",
+        "inputAliases": {"kpi_detail": "detail"}
+      }
+    },
+    {
+      "id": "knowledge_refs",
+      "type": "REF_SEARCH",
+      "name": "检索财经资料与管理层口径",
+      "x": 690,
+      "y": 650,
+      "config": {
+        "query": "启明智造 新能源设备 收入 毛利率 经营现金流 应收账款 库存 海外业务 客户风险 行业趋势 管理层讨论",
+        "limit": 20
+      }
+    },
+    {
+      "id": "llm_analysis",
+      "type": "AI_ANALYSIS",
+      "name": "LLM 综合经营与市场分析",
+      "x": 1010,
+      "y": 410,
+      "config": {
+        "prompt": "你是上市公司财务分析负责人。请综合上游经营KPI明细、管理层汇总、同业基准、大客户风险和知识Ref，形成2026年上半年经营与资本市场联合分析。金额和比例必须逐项沿用结构化数据，不得自行重新加总；媒体、研报、管理层讨论只能用于解释，不得覆盖结构化事实。内容必须包括：1. 一句话总体判断；2. 总体及三条业务线的收入、预算达成率、毛利率和订单；3. 月度趋势及锂材料价格、PMI、欧元汇率等外部指标的可能影响，明确区分事实与推断；4. 经营现金流与收入利润背离；5. 应收和库存风险；6. Top5客户集中度及逾期情况；7. 与行业中位数及三家同业比较；8. 管理层需要决策的收入质量、回款、库存、定价、采购、汇率和研发事项；9. 给出30天、90天和半年行动计划。所有公司和资料均为模拟案例，报告不构成投资建议。",
+        "maxPoints": 40
+      }
+    },
+    {
+      "id": "financial_report",
+      "type": "DELIVERABLE",
+      "name": "生成综合财经报告",
+      "x": 1330,
+      "y": 310,
+      "config": {
+        "title": "启明智造2026年上半年经营与资本市场联合分析报告",
+        "subtitle": "模拟财经业务案例 · 经营管理用途",
+        "format": "financial_report",
+        "heading": "综合财经分析",
+        "targetAudience": "公司管理层、财务负责人和经营分析人员",
+        "lengthHint": "完整报告",
+        "generationPrompt": "生成结构完整、可供经营会议阅读的财经报告。依次包含执行摘要、核心财务指标、预算差异、分业务线表现、现金流与营运资本、客户风险、同业比较、外部环境、风险判断、管理建议和分阶段行动计划。每个结论需明确数据依据或知识Ref，区分事实、推断和建议，并注明模拟案例及非投资建议。"
+      }
+    },
+    {
+      "id": "management_ppt",
+      "type": "DELIVERABLE",
+      "name": "生成管理层汇报 PPT",
+      "x": 1330,
+      "y": 520,
+      "config": {
+        "title": "启明智造2026年上半年经营质量与市场风险分析",
+        "subtitle": "管理层汇报 · 模拟财经业务案例",
+        "format": "PPTX",
+        "heading": "经营与市场联合分析",
+        "targetAudience": "公司管理层、财务负责人和业务负责人",
+        "lengthHint": "9-11页",
+        "generationPrompt": "生成9-11页管理层演示文稿。正文依次覆盖执行摘要、收入与预算、业务线表现、毛利与原材料、现金流、应收与客户集中度、库存与订单、同业比较、外部市场信号、风险矩阵、管理决策与行动计划。每页使用结论型标题和不超过4条完整要点，金额使用万元，比例保留1位；明确事实、推断与建议，不构成投资建议。",
+        "pptSkill": "guizang-huawei-style-c"
+      }
+    }
+  ],
+  "edges": [
+    {"id": "e_db_detail", "source": "finance_db", "target": "kpi_detail"},
+    {"id": "e_api_detail", "source": "market_api", "target": "kpi_detail"},
+    {"id": "e_budget_detail", "source": "budget_csv", "target": "kpi_detail"},
+    {"id": "e_detail_summary", "source": "kpi_detail", "target": "management_summary"},
+    {"id": "e_detail_ai", "source": "kpi_detail", "target": "llm_analysis"},
+    {"id": "e_summary_ai", "source": "management_summary", "target": "llm_analysis"},
+    {"id": "e_peer_ai", "source": "peer_csv", "target": "llm_analysis"},
+    {"id": "e_customer_ai", "source": "customer_csv", "target": "llm_analysis"},
+    {"id": "e_media_ai", "source": "media_pdf", "target": "llm_analysis"},
+    {"id": "e_management_ai", "source": "management_docx", "target": "llm_analysis"},
+    {"id": "e_research_ai", "source": "research_md", "target": "llm_analysis"},
+    {"id": "e_policy_ai", "source": "policy_txt", "target": "llm_analysis"},
+    {"id": "e_link_ai", "source": "caijing_link", "target": "llm_analysis"},
+    {"id": "e_refs_ai", "source": "knowledge_refs", "target": "llm_analysis"},
+    {"id": "e_ai_report", "source": "llm_analysis", "target": "financial_report"},
+    {"id": "e_ai_ppt", "source": "llm_analysis", "target": "management_ppt"}
+  ]
+}

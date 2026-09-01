@@ -1,0 +1,8 @@
+﻿fiscal_year,period_end,revenue_usd_m,gross_profit_usd_m,operating_income_usd_m,net_income_usd_m,operating_cash_flow_usd_m,rd_expense_usd_m,inventory_usd_m,data_center_revenue_usd_m,gross_margin_pct,source,source_url,latest_10k_url
+FY2022,2022/1/30,26914,17475,10041,9752,9108,5268,2605,10613,64.9,NVIDIA annual reports and SEC EDGAR filings,https://investor.nvidia.com/financial-info/annual-reports-and-proxies/default.aspx,https://www.sec.gov/Archives/edgar/data/1045810/000104581026000021/nvda-20260125.htm
+FY2023,2023/1/29,26974,15356,4224,4368,5641,7339,5159,15005,56.9,NVIDIA annual reports and SEC EDGAR filings,https://investor.nvidia.com/financial-info/annual-reports-and-proxies/default.aspx,https://www.sec.gov/Archives/edgar/data/1045810/000104581026000021/nvda-20260125.htm
+FY2024,2024/1/28,60922,44301,32972,29760,28090,8675,5282,47525,72.7,NVIDIA annual reports and SEC EDGAR filings,https://investor.nvidia.com/financial-info/annual-reports-and-proxies/default.aspx,https://www.sec.gov/Archives/edgar/data/1045810/000104581026000021/nvda-20260125.htm
+FY2025,2025/1/26,130497,97858,81453,72880,64089,12914,10080,115186,75.0,NVIDIA annual reports and SEC EDGAR filings,https://investor.nvidia.com/financial-info/annual-reports-and-proxies/default.aspx,https://www.sec.gov/Archives/edgar/data/1045810/000104581026000021/nvda-20260125.htm
+FY2026,2026/1/25,215938,153463,130387,120067,102718,18497,21403,193500,71.1,NVIDIA annual reports and SEC EDGAR filings,https://investor.nvidia.com/financial-info/annual-reports-and-proxies/default.aspx,https://www.sec.gov/Archives/edgar/data/1045810/000104581026000021/nvda-20260125.htm
+,,,,,,,,,,,,,
+
