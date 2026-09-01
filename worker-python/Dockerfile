@@ -1,6 +1,10 @@
 FROM python:3.12-slim
 WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends \
+ARG DEBIAN_MIRROR=""
+RUN if [ -n "$DEBIAN_MIRROR" ]; then \
+      sed -i "s|http://deb.debian.org|$DEBIAN_MIRROR|g" /etc/apt/sources.list.d/debian.sources; \
+    fi \
+    && apt-get update && apt-get install -y --no-install-recommends \
     fonts-noto-cjk libreoffice-core libreoffice-writer libreoffice-calc libreoffice-impress poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 RUN useradd --system --uid 10001 finflow
