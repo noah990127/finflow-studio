@@ -32,6 +32,10 @@ import java.net.http.HttpResponse;
 
 @Service
 public class DataConnectionService {
+    private record CatalogCandidate(String catalog, String schema, String table, String description,
+                                    String tableType, String technicalName, String groupKey,
+                                    String qualifiedName) { }
+
     private final JdbcClient jdbc;
     private final ObjectMapper objectMapper;
     private final ProjectService projects;
@@ -176,22 +180,30 @@ public class DataConnectionService {
             var metadata = connection.getMetaData();
             var quote = metadata.getIdentifierQuoteString();
             if (quote == null || quote.isBlank()) quote = "\"";
+            var candidates = new ArrayList<CatalogCandidate>();
             try (var tables = metadata.getTables(null, null, "%", new String[]{"TABLE", "VIEW"})) {
                 while (tables.next()) {
                     var catalog = safe(tables.getString("TABLE_CAT"));
                     var schema = safe(tables.getString("TABLE_SCHEM"));
                     var table = tables.getString("TABLE_NAME");
                     if (isSystemSchema(catalog, schema) || table == null || table.isBlank()) continue;
-                    if (count >= 10_000) { truncated = true; break; }
+                    if (candidates.size() >= 10_000) { truncated = true; break; }
                     var technical = !schema.isBlank() ? schema : !catalog.isBlank() ? catalog : "default";
                     var key = catalog + "\u0000" + schema;
-                    technicalNames.putIfAbsent(key, technical);
                     var qualified = qualify(quote, catalog, schema, table, definition.sourceType());
-                    groups.computeIfAbsent(key, ignored -> new ArrayList<>()).add(new DatabaseTableResponse(
-                            catalog, schema, table, safe(tables.getString("REMARKS")),
-                            tables.getString("TABLE_TYPE"), "SELECT * FROM " + qualified));
-                    count++;
+                    candidates.add(new CatalogCandidate(catalog, schema, table,
+                            safe(tables.getString("REMARKS")), tables.getString("TABLE_TYPE"),
+                            technical, key, qualified));
                 }
+            }
+            for (var candidate : candidates) {
+                if (!canSelect(connection, candidate.qualifiedName())) continue;
+                technicalNames.putIfAbsent(candidate.groupKey(), candidate.technicalName());
+                groups.computeIfAbsent(candidate.groupKey(), ignored -> new ArrayList<>()).add(
+                        new DatabaseTableResponse(candidate.catalog(), candidate.schema(), candidate.table(),
+                                candidate.description(), candidate.tableType(),
+                                "SELECT * FROM " + candidate.qualifiedName()));
+                    count++;
             }
         } catch (SQLException exception) {
             throw new IllegalArgumentException("数据目录读取失败：" + sanitize(exception.getMessage()), exception);
@@ -204,6 +216,18 @@ public class DataConnectionService {
         });
         schemas.sort(java.util.Comparator.comparing(DatabaseSchemaResponse::technicalName, String.CASE_INSENSITIVE_ORDER));
         return new DatabaseCatalogResponse(List.copyOf(schemas), count, truncated);
+    }
+
+    boolean canSelect(Connection connection, String qualifiedTable) {
+        try (var statement = connection.prepareStatement("SELECT * FROM " + qualifiedTable + " WHERE 1 = 0")) {
+            statement.setMaxRows(1);
+            statement.setQueryTimeout(3);
+            try (var ignored = statement.executeQuery()) {
+                return true;
+            }
+        } catch (SQLException ignored) {
+            return false;
+        }
     }
 
     private String qualify(String quote, String catalog, String schema, String table, SourceType type) {
