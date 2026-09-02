@@ -250,6 +250,9 @@ public class DataConnectionService {
 
     private String businessSchemaName(String technicalName) {
         if (technicalName.equalsIgnoreCase("public") || technicalName.equalsIgnoreCase("default")) return "主要数据";
+        if (technicalName.equalsIgnoreCase("finance_demo")) return "财经业务示例";
+        if (technicalName.equalsIgnoreCase("demo_examples")) return "案例分析数据";
+        if (technicalName.equalsIgnoreCase("market_demo")) return "市场与经营数据";
         return technicalName.replace('_', ' ');
     }
 
