@@ -16,7 +16,6 @@ const props = defineProps<{ project: Project | null; loading: boolean; error: st
 const projectStore = useProjectsStore()
 const assistant = useAssistantStore()
 const workspace = ref<ProjectWorkspace | null>(null), search = ref(''), notice = ref(''), loadingWorkspace = ref(false), workflowKey = ref(0)
-const resourceOpenKey = ref(0)
 const projectManagerOpen = ref(false), projectFormOpen = ref(false), editingProjectId = ref(''), projectName = ref(''), projectDescription = ref(''), savingProject = ref(false)
 const projectStats = ref<Record<string, { resources: number; workflow: string }>>({})
 const folderFormOpen = ref(false), folderEditingId = ref(''), folderName = ref(''), folderRoot = ref<WorkspaceRootKind>('FILES'), folderParentId = ref<string | undefined>()
@@ -40,6 +39,7 @@ const treeRoots: Array<{ id: UiRoot; label: string; icon: unknown; storageRoot: 
   { id: 'OUTPUT', label: '输出件', icon: FileOutput, storageRoot: 'OUTPUTS' },
 ]
 const activeTab = computed(() => tabs.value.find(tab => tab.id === activeTabId.value) ?? tabs.value[0])
+const openWebTabs = computed(() => tabs.value.filter(tab => tab.kind === 'resource' && tab.resource?.resourceType === 'WEB_URL'))
 const filteredResources = computed(() => (workspace.value?.resources ?? []).filter(item => item.name.toLowerCase().includes(search.value.trim().toLowerCase())))
 
 async function loadWorkspace() {
@@ -97,7 +97,6 @@ function openTab(tab: Tab) {
   activeTabId.value = tab.id
 }
 function openResource(resource: WorkspaceResource) {
-  resourceOpenKey.value += 1
   openTab({ id: `resource-${resource.id}`, title: resource.name, kind: 'resource', resource })
 }
 function openCitationSource(citation: CitationSource) {
@@ -326,7 +325,8 @@ watch(() => props.project?.id, (id, previousId) => {
         <div v-else-if="activeTab?.kind === 'home'" class="project-overview"><header><FolderOpen :size="32"/><div><h1>{{ project?.name }}</h1><p>{{ project?.description || '把文件、数据和资料组织成一条可以反复运行的工作流。' }}</p></div></header><div class="overview-stats"><button v-for="group in groups" :key="group.id" type="button"><component :is="group.icon" :size="19"/><strong>{{ resources(group.id).length }}</strong><span>{{ group.label }}</span></button><button type="button" @click="openWorkflow"><WorkflowIcon :size="19"/><strong>{{ workspace?.workflow.status === 'READY' ? '可运行' : '草稿' }}</strong><span>主工作流</span></button></div><section><h2>最近使用</h2><button v-for="item in filteredResources.slice(0, 8)" :key="item.id" type="button" @click="openResource(item)"><component :is="iconFor(item)" :size="17"/><span>{{ item.name }}</span><small>{{ item.inProjectWorkflow ? '已加入工作流' : '尚未编排' }}</small></button></section></div>
         <WorkflowView v-else-if="activeTab?.kind === 'workflow'" :key="workflowKey" :project="project" :resources="workspace?.resources ?? []" @resources-changed="loadWorkspace" @workflow-changed="syncWorkflow" @open-deliverable="openGeneratedDeliverable" @open-resource="openWorkflowResource" />
         <DataView v-else-if="activeTab?.kind === 'data'" :project="project" />
-        <ResourceWorkbench v-else-if="activeTab?.resource" :key="`${activeTab.resource.id}-${resourceOpenKey}`" :resource="activeTab.resource" @add-to-workflow="addToWorkflow" @manage-data="openData" @delete-resource="deleteResource" @open-source="openCitationSource" />
+        <ResourceWorkbench v-else-if="activeTab?.resource && activeTab.resource.resourceType !== 'WEB_URL'" :key="`${activeTab.resource.id}-${activeTab.resource.currentVersion}`" :resource="activeTab.resource" @add-to-workflow="addToWorkflow" @manage-data="openData" @delete-resource="deleteResource" @open-source="openCitationSource" />
+        <ResourceWorkbench v-for="tab in openWebTabs" v-show="!loading && !loadingWorkspace && !error && activeTabId === tab.id" :key="tab.id" :resource="tab.resource!" @add-to-workflow="addToWorkflow" @manage-data="openData" @delete-resource="deleteResource" @open-source="openCitationSource" />
       </section>
     </main>
 
