@@ -94,6 +94,12 @@ public class DeliverableController {
         try (var input = Files.newInputStream(path); var output = response.getOutputStream()) { input.transferTo(output); }
     }
 
+    @GetMapping("/deliverables/{id}/citations")
+    public List<Map<String, Object>> citations(@PathVariable String id,
+                                               @RequestParam(required = false) Integer version) {
+        return deliverables.citations(id, version);
+    }
+
     @GetMapping("/deliverables/{id}/rendered-preview")
     public void renderedPreview(@PathVariable String id, @RequestParam(required = false) Integer version,
                                 HttpServletResponse response) throws IOException {

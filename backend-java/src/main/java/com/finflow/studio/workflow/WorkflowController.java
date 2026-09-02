@@ -10,6 +10,7 @@ import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -67,6 +68,12 @@ public class WorkflowController {
     @PutMapping("/workflows/{id}")
     public WorkflowResponse update(@PathVariable String id, @Valid @RequestBody SaveRequest request) {
         return definitions.update(id, request);
+    }
+
+    @DeleteMapping("/workflows/{id}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void delete(@PathVariable String id) {
+        definitions.delete(id);
     }
 
     @PostMapping("/projects/{projectId}/workflows/validate")

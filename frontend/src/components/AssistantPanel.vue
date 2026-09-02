@@ -60,7 +60,7 @@ function stopMove() {
 
 const contextLabel = computed(() => {
   if (assistant.selection) return `已选：${assistant.selection.range.join('、')}`
-  return props.project ? `${props.project.name} / 项目工作台` : '个人首页'
+  return props.project ? `${props.project.name} / ${assistant.contextTitle}` : '个人首页'
 })
 
 function send() {
@@ -186,22 +186,22 @@ watch(() => assistant.open, async () => { await nextTick(); clampPosition() })
           </div>
         </section>
 
-        <div v-if="assistant.run?.status === 'SUCCEEDED'" class="result-actions">
+        <div v-if="assistant.run?.status === 'SUCCEEDED' && assistant.run.result?.createdProjectId" class="result-actions">
           <button class="secondary-button" type="button" @click="assistant.rollback">
             <RotateCcw :size="16" /> 撤销本次操作
           </button>
-          <button class="text-button" type="button">查看结果</button>
         </div>
 
         <p v-if="assistant.error" class="assistant-error">{{ assistant.error }}</p>
 
         <div v-if="!assistant.plan" class="assistant-empty">
           <span><Sparkles :size="22" /></span>
-          <strong>从当前工作开始</strong>
-          <p>我能帮你整理数据、检查表格、阅读资料、编排工作流、形成分析并生成输出。</p>
+          <strong>处理工作台上的任何任务</strong>
+          <p>可以查看内容、整理资料、处理数据、编排工作流、生成指定成果，也可以直接操作当前工作区域。</p>
           <div class="prompt-suggestions">
-            <button type="button" @click="assistant.input = '检查当前数据并给出整理建议'">检查数据</button>
-            <button type="button" @click="assistant.input = '结合项目资料生成一份复盘汇报'">生成汇报</button>
+            <button type="button" @click="assistant.input = '介绍当前项目里有哪些内容，并建议下一步'">了解项目</button>
+            <button type="button" @click="assistant.input = '打开当前项目的工作流'">打开工作流</button>
+            <button type="button" @click="assistant.input = '把当前选中的内容加入工作流'">加入工作流</button>
           </div>
         </div>
       </div>
@@ -210,7 +210,7 @@ watch(() => assistant.open, async () => { await nextTick(); clampPosition() })
         <textarea
           v-model="assistant.input"
           rows="2"
-          placeholder="描述你想完成的工作"
+          placeholder="例如：打开工作流，或分析当前文件"
           @keydown.meta.enter.prevent="send"
           @keydown.ctrl.enter.prevent="send"
         ></textarea>

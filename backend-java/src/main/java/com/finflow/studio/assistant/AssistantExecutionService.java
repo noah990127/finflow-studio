@@ -10,6 +10,7 @@ import com.finflow.studio.workflow.WorkflowModels.ExecutionMode;
 import com.finflow.studio.workflow.WorkflowModels.NodeDefinition;
 import com.finflow.studio.workflow.WorkflowModels.NodeType;
 import com.finflow.studio.workflow.WorkflowModels.SaveRequest;
+import com.finflow.studio.workspace.WorkspaceResourceService;
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -38,11 +39,13 @@ public class AssistantExecutionService {
     private final WorkflowDefinitionService workflows;
     private final WorkerClient worker;
     private final ObjectMapper objectMapper;
+    private final WorkspaceResourceService workspace;
 
     public AssistantExecutionService(JdbcClient jdbc, AssistantEventService events,
                                      @Qualifier("applicationTaskExecutor") TaskExecutor taskExecutor,
                                      ProjectService projects, WorkflowDefinitionService workflows,
-                                     WorkerClient worker, ObjectMapper objectMapper) {
+                                     WorkerClient worker, ObjectMapper objectMapper,
+                                     WorkspaceResourceService workspace) {
         this.jdbc = jdbc;
         this.events = events;
         this.taskExecutor = taskExecutor;
@@ -50,6 +53,7 @@ public class AssistantExecutionService {
         this.workflows = workflows;
         this.worker = worker;
         this.objectMapper = objectMapper;
+        this.workspace = workspace;
     }
 
     public RunResponse start(String sessionId, String planId, String idempotencyKey) {
@@ -145,7 +149,7 @@ public class AssistantExecutionService {
                     .update();
             events.publish(run.sessionId(), runId, "assistant.run.completed", Map.of(
                     "runId", runId, "summary", summary, "message", summary, "progress", 100,
-                    "canRollback", true));
+                    "canRollback", effects.containsKey("createdProjectId")));
         } catch (RuntimeException ex) {
             jdbc.sql("update assistant_run set status = 'FAILED', result_summary = :message, finished_at = :finishedAt where id = :id")
                     .param("message", ex.getMessage() == null ? "执行失败" : ex.getMessage())
@@ -216,25 +220,105 @@ public class AssistantExecutionService {
 
     private String executeStep(PlanStep step, Map<String, Object> effects) {
         return switch (step.tool()) {
-            case "project.get_summary" -> "已读取当前项目环境";
-            case "project.create_analysis_workspace" -> createAnalysisProject(step, effects);
+            case "workspace.inspect" -> inspectWorkspace(step, effects);
+            case "workspace.navigate" -> navigate(step, effects);
+            case "assistant.respond" -> respond(step, effects);
+            case "assistant.analyze_context" -> analyzeContext(step, effects);
+            case "project.create_workspace", "project.create_analysis_workspace" -> createAnalysisProject(step, effects);
             case "knowledge.discover_external_sources" -> discoverSources(step, effects);
-            case "workflow.initialize_analysis" -> initializeWorkflow(step, effects);
-            case "dataset.profile" -> "已生成字段质量摘要";
-            case "knowledge.search" -> "已找到相关资料并保留 Ref";
-            case "dataset.create_clean_version" -> "已创建新的整理结果版本";
-            case "analysis.create_draft" -> "已生成分析草稿";
-            case "deliverable.create_draft" -> "已生成可编辑输出草稿";
-            case "deliverable.export" -> "已保存新的输出文件版本";
-            default -> "已完成";
+            case "workflow.initialize", "workflow.initialize_analysis" -> initializeWorkflow(step, effects);
+            case "workflow.prepare" -> prepareWorkflow(step, effects);
+            case "workflow.add_selected_resource" -> addSelectedResource(step, effects);
+            case "workflow.add_data_transform" -> addDataTransform(step, effects);
+            case "workflow.add_outputs" -> addOutputs(step, effects);
+            case "dataset.profile" -> "已确认结构化数据可用于后续处理";
+            default -> throw new IllegalArgumentException("当前版本尚不支持这个工作台动作：" + step.tool());
         };
+    }
+
+    private String inspectWorkspace(PlanStep step, Map<String, Object> effects) {
+        var projectId = argument(step, "project_id", "");
+        if (projectId.isBlank()) return "已读取当前工作环境";
+        var snapshot = workspace.get(projectId);
+        var data = snapshot.resources().stream().filter(item -> "DATA".equals(item.group())).count();
+        var knowledge = snapshot.resources().stream().filter(item -> "KNOWLEDGE".equals(item.group())).count();
+        var outputs = snapshot.resources().stream().filter(item -> "OUTPUT".equals(item.group())).count();
+        effects.put("workspaceCounts", Map.of("data", data, "knowledge", knowledge, "outputs", outputs));
+        effects.put("sourceProjectId", projectId);
+        return "已读取当前项目：数据 " + data + " 项、资料 " + knowledge + " 项、输出 " + outputs + " 项";
+    }
+
+    private String navigate(PlanStep step, Map<String, Object> effects) {
+        var target = argument(step, "target", "HOME");
+        var action = new LinkedHashMap<String, Object>();
+        action.put("type", "OPEN_" + target);
+        var resourceId = argument(step, "resource_id", "");
+        if (!resourceId.isBlank()) action.put("resourceId", resourceId);
+        effects.put("uiAction", action);
+        return switch (target) {
+            case "WORKFLOW" -> "已打开工作流";
+            case "DATA" -> "已打开数据采集";
+            case "RESOURCE" -> "已打开当前内容";
+            default -> "已返回项目概览";
+        };
+    }
+
+    private String respond(PlanStep step, Map<String, Object> effects) {
+        var goal = argument(step, "goal", "请介绍当前项目");
+        if ("NO_STRUCTURED_DATA".equals(argument(step, "reason", ""))) {
+            var message = "当前项目中没有可用于这项任务的结构化数据。请先在左侧“数据”中上传表格，或连接数据库/数据服务，再选择内容让我继续。";
+            effects.put("assistantResponse", message);
+            return message;
+        }
+        try {
+            var result = worker.summarize("""
+                    你是通用个人工作台助手。根据用户目标和工作台摘要给出简洁、可执行的中文回答。
+                    不得声称读取了未提供的文件内容，不得自行创建财务报表或其他成果。
+                    用户目标：%s
+                    工作台摘要：%s
+                    """.formatted(goal, effects.getOrDefault("workspaceCounts", Map.of())), "工作台助手回答", 5);
+            var message = Objects.toString(result.get("summary"), "").trim();
+            if (!message.isBlank()) {
+                effects.put("assistantResponse", message);
+                return message;
+            }
+        } catch (RuntimeException ignored) { }
+        var message = "我已结合当前工作台理解了你的需求。请选择要处理的内容，或明确告诉我需要打开、创建、编排、分析还是输出什么。";
+        effects.put("assistantResponse", message);
+        return message;
+    }
+
+    private String analyzeContext(PlanStep step, Map<String, Object> effects) {
+        var projectId = argument(step, "project_id", "");
+        var resourceId = argument(step, "resource_id", "");
+        var query = resourceId.isBlank()
+                ? jdbc.sql("select source_name, text_content from knowledge_ref where project_id = :projectId order by created_at desc limit 24")
+                    .param("projectId", projectId)
+                : jdbc.sql("select source_name, text_content from knowledge_ref where project_id = :projectId and resource_id = :resourceId order by chunk_index limit 24")
+                    .param("projectId", projectId).param("resourceId", resourceId);
+        var chunks = query.query((rs, rowNum) -> "[" + rs.getString("source_name") + "]\n" + rs.getString("text_content")).list();
+        if (chunks.isEmpty()) {
+            var message = resourceId.isBlank()
+                    ? "当前项目还没有可读取的资料内容。请先选择或上传文件，也可以先采集数据库/API 数据。"
+                    : "当前内容尚未解析出可分析的文本；如果它是数据库或 API，请先预览并采集数据。";
+            effects.put("assistantResponse", message);
+            return message;
+        }
+        var sourceText = String.join("\n\n", chunks);
+        if (sourceText.length() > 60_000) sourceText = sourceText.substring(0, 60_000);
+        var result = worker.summarize("用户问题：" + argument(step, "goal", "请分析这些内容") + "\n\n可用内容：\n" + sourceText,
+                argument(step, "resource_name", "项目资料"), 8);
+        var message = Objects.toString(result.get("summary"), "").trim();
+        if (message.isBlank()) message = "没有从当前内容中提取到足够的信息。";
+        effects.put("assistantResponse", message);
+        effects.put("analyzedChunkCount", chunks.size());
+        return message;
     }
 
     private String createAnalysisProject(PlanStep step, Map<String, Object> effects) {
         var name = argument(step, "project_name", "新的分析项目");
         var description = argument(step, "description", "由 AI 助手创建的个人分析项目");
         var project = projects.create(name, description);
-        workflows.getProjectWorkflow(project.id());
         effects.put("createdProjectId", project.id());
         effects.put("createdProjectName", project.name());
         effects.put("topic", argument(step, "topic", name));
@@ -287,31 +371,171 @@ public class AssistantExecutionService {
                             "whyRelevant", Objects.toString(source.get("why_relevant"), ""))));
             edges.add(new EdgeDefinition("edge_" + shortId(), id, analysisId));
         }
-        var refId = "refs_" + shortId();
-        nodes.add(new NodeDefinition(refId, NodeType.REF_SEARCH, "补充资料与 Ref", 360, 80,
-                Map.of("query", topic + " 财报 经营数据 行业 政策 重大事件 风险")));
-        nodes.add(new NodeDefinition(analysisId, NodeType.AI_ANALYSIS, "综合分析", 650, 210,
-                Map.of("prompt", "围绕" + topic + "，结合所有数据和资料分析增长质量、盈利能力、现金流、行业环境、重大事件与风险。区分事实、推断和待核实信息，并为每项结论保留 Ref。")));
-        edges.add(new EdgeDefinition("edge_" + shortId(), refId, analysisId));
-        var reportId = "report_" + shortId();
-        var pptId = "ppt_" + shortId();
-        nodes.add(new NodeDefinition(reportId, NodeType.DELIVERABLE, "财经分析报告", 970, 120,
-                Map.of("title", topic + "财经分析报告", "format", "FINANCIAL_REPORT", "heading", "核心结论",
-                        "targetAudience", "业务负责人", "lengthHint", "完整", "includeCitations", true,
-                        "citationStyle", "IEEE", "generationPrompt", "生成包含关键指标、趋势图表、结论、风险和规范来源标注的可交互财经报告。")));
-        nodes.add(new NodeDefinition(pptId, NodeType.DELIVERABLE, "管理层汇报", 970, 340,
-                Map.of("title", topic + "管理层汇报", "format", "PPTX", "heading", "核心结论",
-                        "targetAudience", "管理层", "lengthHint", "8-12页", "pptSkill", "guizang-huawei-style-c",
-                        "includeCitations", true, "citationStyle", "IEEE",
-                        "generationPrompt", "生成结论先行、数据可视化充分、适合管理层决策的演示文稿，并规范标注资料来源。")));
-        edges.add(new EdgeDefinition("edge_" + shortId(), analysisId, reportId));
-        edges.add(new EdgeDefinition("edge_" + shortId(), analysisId, pptId));
-        var current = workflows.getProjectWorkflow(projectId);
-        workflows.saveProjectWorkflow(projectId, new SaveRequest("主工作流", "围绕" + topic + "自动搜集资料、形成分析并生成报告与汇报",
-                nodes, edges, ExecutionMode.MANUAL, null, current.currentVersion()));
-        effects.put("workflowId", current.id());
+        var includeAnalysis = Boolean.TRUE.equals(step.arguments().get("include_analysis"));
+        if (includeAnalysis) {
+            var refId = "refs_" + shortId();
+            nodes.add(new NodeDefinition(refId, NodeType.REF_SEARCH, "补充参考资料", 360, 80,
+                    Map.of("query", topic)));
+            nodes.add(new NodeDefinition(analysisId, NodeType.AI_ANALYSIS, "智能分析", 650, 210,
+                    Map.of("prompt", argument(step, "goal", "围绕" + topic + "进行分析，区分事实、推断和待核实信息。"))));
+            edges.add(new EdgeDefinition("edge_" + shortId(), refId, analysisId));
+        }
+        var formats = stringList(step.arguments().get("output_formats"));
+        if (!formats.isEmpty()) addOutputNodes(nodes, edges, formats, includeAnalysis ? analysisId : null, topic, argument(step, "goal", topic));
+        var created = workflows.create(projectId, new SaveRequest("主工作流", "围绕" + topic + "组织和处理项目内容",
+                nodes, edges, ExecutionMode.MANUAL, null, null));
+        effects.put("workflowId", created.id());
         effects.put("sourceCount", nodes.stream().filter(node -> node.type() == NodeType.LINK_INPUT).count());
-        return "已建立包含资料、分析、财经报告和 PPT 的主工作流";
+        effects.put("uiAction", Map.of("type", "OPEN_WORKFLOW"));
+        return formats.isEmpty() ? "已建立工作流，未添加用户没有要求的输出件"
+                : "已建立工作流，并加入 " + String.join("、", formats) + " 输出";
+    }
+
+    private String prepareWorkflow(PlanStep step, Map<String, Object> effects) {
+        var projectId = argument(step, "project_id", "");
+        if (projectId.isBlank()) throw new IllegalStateException("当前项目不可用");
+        var nodes = new ArrayList<NodeDefinition>();
+        var input = selectedInputNode(step, 80, 180);
+        if (input != null) nodes.add(input);
+        var edges = new ArrayList<EdgeDefinition>();
+        var formats = stringList(step.arguments().get("output_formats"));
+        addOutputNodes(nodes, edges, formats, input == null ? null : input.id(), "工作成果", argument(step, "goal", ""));
+        var created = workflows.create(projectId, new SaveRequest(workflowName(step), "由 AI 助手按当前目标创建，可继续在画布中编排",
+                nodes, edges, ExecutionMode.MANUAL, null, null));
+        effects.put("workflowId", created.id());
+        effects.put("uiAction", Map.of("type", "OPEN_WORKFLOW", "workflowId", created.id()));
+        return "已创建工作流“" + created.name() + "”";
+    }
+
+    private String addSelectedResource(PlanStep step, Map<String, Object> effects) {
+        var projectId = argument(step, "project_id", "");
+        var current = workflows.getProjectWorkflow(projectId);
+        var resourceId = argument(step, "resource_id", "");
+        if (current.nodes().stream().anyMatch(node -> node.config() != null && node.config().containsValue(resourceId))) {
+            effects.put("uiAction", Map.of("type", "OPEN_WORKFLOW"));
+            return "当前内容已经在工作流中";
+        }
+        var input = selectedInputNode(step, 80 + (current.nodes().size() % 3) * 260, 100 + (current.nodes().size() / 3) * 150);
+        if (input == null) throw new IllegalStateException("请先在左侧选择要加入工作流的内容");
+        workflows.update(current.id(), new SaveRequest(current.name(), current.description(), append(current.nodes(), input), current.edges(),
+                current.executionMode(), current.schedule(), current.currentVersion()));
+        effects.put("workflowId", current.id());
+        effects.put("uiAction", Map.of("type", "OPEN_WORKFLOW"));
+        return "已把“" + input.name() + "”加入工作流";
+    }
+
+    private String addOutputs(PlanStep step, Map<String, Object> effects) {
+        var projectId = argument(step, "project_id", "");
+        var current = workflows.getProjectWorkflow(projectId);
+        var nodes = new ArrayList<>(current.nodes());
+        var edges = new ArrayList<>(current.edges());
+        var formats = stringList(step.arguments().get("output_formats"));
+        var upstream = nodes.stream().filter(node -> node.type() != NodeType.DELIVERABLE).reduce((left, right) -> right).map(NodeDefinition::id).orElse(null);
+        addOutputNodes(nodes, edges, formats, upstream, "工作成果", argument(step, "goal", "根据当前项目内容生成成果"));
+        workflows.update(current.id(), new SaveRequest(current.name(), current.description(), nodes, edges,
+                current.executionMode(), current.schedule(), current.currentVersion()));
+        effects.put("workflowId", current.id());
+        effects.put("uiAction", Map.of("type", "OPEN_WORKFLOW"));
+        return "已加入 " + String.join("、", formats) + " 输出节点，可在画布中继续调整要求";
+    }
+
+    private String addDataTransform(PlanStep step, Map<String, Object> effects) {
+        var projectId = argument(step, "project_id", "");
+        var current = workflows.getProjectWorkflow(projectId);
+        var nodes = new ArrayList<>(current.nodes());
+        var edges = new ArrayList<>(current.edges());
+        var resourceId = argument(step, "resource_id", "");
+        var upstream = nodes.stream()
+                .filter(node -> node.config() != null && node.config().containsValue(resourceId))
+                .findFirst().orElse(null);
+        if (upstream == null) {
+            upstream = selectedInputNode(step, 80, 180);
+            if (upstream == null) throw new IllegalStateException("请先选择需要加工的数据");
+            nodes.add(upstream);
+        }
+        var transformId = "transform_" + shortId();
+        var goal = argument(step, "goal", "整理当前数据");
+        nodes.add(new NodeDefinition(transformId, NodeType.DATA_TRANSFORM, "数据加工", upstream.x() + 300, upstream.y(),
+                Map.of("requirements", goal, "script", "select * from input_1", "outputName", "processed_data.csv",
+                        "scriptMode", "DRAFT", "transparent", true)));
+        edges.add(new EdgeDefinition("edge_" + shortId(), upstream.id(), transformId));
+        workflows.update(current.id(), new SaveRequest(current.name(), current.description(), nodes, edges,
+                current.executionMode(), current.schedule(), current.currentVersion()));
+        effects.put("workflowId", current.id());
+        effects.put("uiAction", Map.of("type", "OPEN_WORKFLOW"));
+        return "已在工作流中创建数据加工草稿，要求和脚本均可查看、修改和复核";
+    }
+
+    private NodeDefinition selectedInputNode(PlanStep step, double x, double y) {
+        var resourceId = argument(step, "resource_id", "");
+        if (resourceId.isBlank()) return null;
+        var type = argument(step, "resource_type", "");
+        var name = argument(step, "resource_name", "当前内容");
+        var id = "input_" + shortId();
+        return switch (type) {
+            case "DATABASE_CONNECTION", "API_CONNECTION" -> new NodeDefinition(id, NodeType.DATA_EXTRACT, name, x, y,
+                    Map.of("connectionId", resourceId, "sql", "API_CONNECTION".equals(type) ? "GET /" : "select * from your_table",
+                            "outputName", name + ".csv", "fetchSize", 5000));
+            case "DATASET" -> new NodeDefinition(id, NodeType.DATASET_INPUT, name, x, y, Map.of("extractJobId", resourceId));
+            case "WEB_URL" -> new NodeDefinition(id, NodeType.LINK_INPUT, name, x, y,
+                    Map.of("title", name, "url", Objects.toString(step.arguments().get("url"), "https://example.com")));
+            default -> new NodeDefinition(id, NodeType.FILE_INPUT, name, x, y, Map.of("resourceId", resourceId));
+        };
+    }
+
+    private void addOutputNodes(List<NodeDefinition> nodes, List<EdgeDefinition> edges, List<String> formats,
+                                String upstreamId, String topic, String goal) {
+        for (var index = 0; index < formats.size(); index++) {
+            var format = formats.get(index);
+            var id = "output_" + shortId();
+            var title = topic + " - " + outputLabel(format);
+            var config = new LinkedHashMap<String, Object>();
+            config.put("title", title);
+            config.put("format", format);
+            config.put("heading", "工作结果");
+            config.put("targetAudience", "使用者");
+            config.put("lengthHint", "适中");
+            config.put("includeCitations", false);
+            config.put("citationStyle", "IEEE");
+            config.put("generationPrompt", goal.isBlank() ? "根据上游内容生成结构清晰、可编辑的成果。" : goal);
+            if ("PPTX".equals(format)) config.put("pptSkill", "guizang-huawei-style-c");
+            if ("HTML_SLIDES".equals(format)) config.put("pptSkill", "frontend-slides");
+            nodes.add(new NodeDefinition(id, NodeType.DELIVERABLE, outputLabel(format), 900, 100 + index * 180, config));
+            if (upstreamId != null) edges.add(new EdgeDefinition("edge_" + shortId(), upstreamId, id));
+        }
+    }
+
+    private String outputLabel(String format) {
+        return switch (format) {
+            case "PPTX" -> "演示文稿";
+            case "DOCX" -> "Word 文档";
+            case "PDF" -> "PDF 文档";
+            case "MERMAID" -> "Mermaid 图";
+            case "EXCALIDRAW" -> "Excalidraw 图";
+            case "HTML_SLIDES" -> "网页幻灯片";
+            case "FINANCIAL_REPORT" -> "交互报告";
+            default -> format + " 成果";
+        };
+    }
+
+    private List<String> stringList(Object value) {
+        if (!(value instanceof List<?> list)) return List.of();
+        return list.stream().map(Object::toString).filter(item -> !item.isBlank()).distinct().toList();
+    }
+
+    private List<NodeDefinition> append(List<NodeDefinition> source, NodeDefinition item) {
+        var result = new ArrayList<>(source);
+        result.add(item);
+        return result;
+    }
+
+    private String workflowName(PlanStep step) {
+        var goal = argument(step, "goal", "新工作流")
+                .replaceAll("^(请|帮我|给我|新建|新增|创建|搭建|建立)+", "")
+                .replaceAll("[，,。！？].*$", "").trim();
+        if (goal.isBlank()) return "新工作流";
+        if (!goal.contains("工作流")) goal += "工作流";
+        return goal.substring(0, Math.min(goal.length(), 40));
     }
 
     private List<Map<String, Object>> fallbackSources(String topic) {
@@ -324,13 +548,16 @@ public class AssistantExecutionService {
     }
 
     private String finalSummary(List<PlanStep> steps, Map<String, Object> effects) {
+        var response = Objects.toString(effects.get("assistantResponse"), "");
+        if (!response.isBlank()) return response;
         var projectName = Objects.toString(effects.get("createdProjectName"), "");
         if (!projectName.isBlank()) {
             var count = effects.get("sourceCount") instanceof Number number ? number.intValue() : 0;
             var suffix = "search-plan-fallback".equals(effects.get("researchMode")) ? "，其中资料入口需要继续核实" : "";
             return "已创建“" + projectName + "”，整理 " + count + " 个资料入口并建立主工作流" + suffix + "。";
         }
-        return "已完成 " + steps.size() + " 个步骤，结果均保存为新的草稿或版本。";
+        if (effects.containsKey("uiAction")) return "已完成工作台操作。";
+        return "已完成 " + steps.size() + " 个步骤。";
     }
 
     private String argument(PlanStep step, String key, String fallback) {

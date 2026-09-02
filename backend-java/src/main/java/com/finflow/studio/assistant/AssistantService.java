@@ -5,6 +5,7 @@ import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 import com.finflow.studio.assistant.AssistantModels.*;
 import com.finflow.studio.project.ProjectService;
+import com.finflow.studio.workspace.WorkspaceResourceService;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -22,16 +23,18 @@ public class AssistantService {
     private final AssistantPlanner planner;
     private final AssistantExecutionService execution;
     private final AssistantEventService events;
+    private final WorkspaceResourceService workspace;
 
     public AssistantService(JdbcClient jdbc, ObjectMapper objectMapper, ProjectService projects,
                             AssistantPlanner planner, AssistantExecutionService execution,
-                            AssistantEventService events) {
+                            AssistantEventService events, WorkspaceResourceService workspace) {
         this.jdbc = jdbc;
         this.objectMapper = objectMapper;
         this.projects = projects;
         this.planner = planner;
         this.execution = execution;
         this.events = events;
+        this.workspace = workspace;
     }
 
     public SessionResponse createSession(String projectId, String title) {
@@ -81,7 +84,19 @@ public class AssistantService {
         var context = createContext(session, request);
         events.publish(sessionId, null, "assistant.planning.started", Map.of(
                 "progress", 12, "message", "正在提炼任务主题并安排处理步骤"));
-        var plannedWork = planner.plan(request.text(), request.page(), request.selection());
+        var workspaceResponse = workspace.get(session.projectId());
+        var selected = request.selection() == null ? null : workspaceResponse.resources().stream()
+                .filter(resource -> resource.id().equals(request.selection().resourceId()))
+                .findFirst().orElse(null);
+        var workspaceContext = new AssistantPlanner.WorkspaceContext(
+                session.projectId(), workspaceResponse.project().name(),
+                (int) workspaceResponse.resources().stream().filter(resource -> "DATA".equals(resource.group())).count(),
+                (int) workspaceResponse.resources().stream().filter(resource -> "KNOWLEDGE".equals(resource.group())).count(),
+                (int) workspaceResponse.resources().stream().filter(resource -> "OUTPUT".equals(resource.group())).count(),
+                workspaceResponse.resources().stream().anyMatch(resource -> "DATA".equals(resource.group())),
+                selected == null ? null : selected.id(), selected == null ? null : selected.resourceType(),
+                selected == null ? null : selected.name());
+        var plannedWork = planner.plan(request.text(), request.page(), request.selection(), workspaceContext);
         var plan = savePlan(sessionId, context, request.text(), plannedWork);
         saveMessage(sessionId, "ASSISTANT", plannedWork.summary(), modelName(), traceId);
 

@@ -3,12 +3,15 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { BarChart3, ChevronLeft, ChevronRight, Grid3X3, LineChart, RefreshCw, RotateCcw, Save, Sparkles, Table2 } from 'lucide-vue-next'
 import * as echarts from 'echarts'
 import viewerWasmUrl from '@perspective-dev/viewer/dist/wasm/perspective-viewer.wasm?url'
-import { api, type CsvPreview, type FinancialReportSpec, type WorkspaceResource } from '../api/client'
+import { api, type CitationSource, type CsvPreview, type FinancialReportSection, type FinancialReportSpec, type WorkspaceResource } from '../api/client'
+import CitationAnchor from './CitationAnchor.vue'
 import FinancialReportChart from './FinancialReportChart.vue'
 
 const props = defineProps<{ projectId: string; deliverableId: string; reportName: string }>()
+const emit = defineEmits<{ openSource: [citation: CitationSource] }>()
 type ReportRow = Record<string, string | number | null>
-type ReportDataset = { id: string; name: string; rows: ReportRow[]; columns: string[]; truncated: boolean }
+type ReportDataset = { id: string; name: string; version: number; rows: ReportRow[]; columns: string[]; truncated: boolean }
+type CitationSegment = { text: string; citation?: CitationSource }
 type PerspectiveViewer = HTMLElement & { load: (table: unknown) => Promise<void>; restore: (config: Record<string, unknown>) => Promise<void>; save: () => Promise<Record<string, unknown>> }
 type PerspectiveTable = { delete: () => Promise<void> }
 type PerspectiveClient = { table: (rows: ReportRow[]) => Promise<PerspectiveTable> }
@@ -56,6 +59,39 @@ const averageValue = computed(() => metricValues.value.length ? metricValues.val
 const maxValue = computed(() => metricValues.value.length ? Math.max(...metricValues.value) : null)
 const dataPageCount = computed(() => Math.max(1, Math.ceil((active.value?.rows.length ?? 0) / dataPageSize)))
 const visibleDataRows = computed(() => active.value?.rows.slice(dataPage.value * dataPageSize, (dataPage.value + 1) * dataPageSize) ?? [])
+const references = computed(() => report.value?.references.filter((item): item is CitationSource => typeof item !== 'string') ?? [])
+const citationNumbers = computed(() => Object.fromEntries(references.value.map((item, index) => [item.id, index + 1])))
+const datasetCitation = computed<CitationSource | null>(() => active.value ? ({
+  id: `dataset:${active.value.id}:v${active.value.version}`,
+  resource_id: active.value.id,
+  version: active.value.version,
+  source_name: active.value.name,
+  text: `报告当前使用 ${active.value.rows.length.toLocaleString()} 条数据记录。`,
+  location: { type: 'table', column: metric.value || '', rows: `1-${active.value.rows.length}` },
+  content_hash: '',
+  formatted: active.value.name,
+}) : null)
+
+function sectionCitations(section: FinancialReportSection) {
+  return (section.refs ?? []).map(item => references.value.find(reference => reference.id === item.id) ?? item).filter(item => item.id)
+}
+function citationSegments(value: string, section: FinancialReportSection): CitationSegment[] {
+  const candidates = sectionCitations(section).flatMap(citation => {
+    const number = citationNumbers.value[citation.id]
+    return number ? [{ token: `[${number}]`, citation }, { token: `(${citation.source_name}, n.d.)`, citation }] : []
+  })
+  if (!candidates.length) return [{ text: value }]
+  const segments: CitationSegment[] = []
+  let remaining = value
+  while (remaining) {
+    const next = candidates.map(item => ({ ...item, index: remaining.indexOf(item.token) })).filter(item => item.index >= 0).sort((left, right) => left.index - right.index)[0]
+    if (!next) { segments.push({ text: remaining }); break }
+    if (next.index > 0) segments.push({ text: remaining.slice(0, next.index) })
+    segments.push({ text: next.token, citation: next.citation })
+    remaining = remaining.slice(next.index + next.token.length)
+  }
+  return segments
+}
 
 function parseValue(value: string): string | number | null {
   const clean = value.trim()
@@ -79,7 +115,7 @@ async function readPages(resource: WorkspaceResource): Promise<ReportDataset> {
     }
     cursor = page.nextCursor
   } while (page.hasMore && cursor && rows.length < 5000)
-  return { id: resource.id, name: resource.name, rows, columns: page?.columns ?? [], truncated: Boolean(page?.hasMore) }
+  return { id: resource.id, name: resource.name, version: resource.currentVersion, rows, columns: page?.columns ?? [], truncated: Boolean(page?.hasMore) }
 }
 
 async function load() {
@@ -232,23 +268,23 @@ onBeforeUnmount(async () => { chart?.dispose(); perspectiveLoadToken++; if (pers
           <article v-for="(section, sectionIndex) in report.sections" :key="`${section.heading}-${sectionIndex}`" class="ai-report-section">
             <header><span>{{ String(sectionIndex + 1).padStart(2, '0') }}</span><h2>{{ section.heading }}</h2><button class="secondary-button" @click="tab = 'explore'"><Grid3X3 :size="14"/>基于数据继续分析</button></header>
             <div class="ai-report-section-body" :class="{ 'without-chart': !section.chart }">
-              <div class="ai-report-copy"><p v-for="paragraph in section.paragraphs" :key="paragraph">{{ paragraph }}</p><ul v-if="section.bullets.length"><li v-for="bullet in section.bullets" :key="bullet">{{ bullet }}</li></ul></div>
-              <FinancialReportChart v-if="section.chart" :chart="section.chart" :storage-key="`finflow-report-chart:${deliverableId}:${sectionIndex}`"/>
+              <div class="ai-report-copy"><p v-for="paragraph in section.paragraphs" :key="paragraph"><template v-for="(segment, index) in citationSegments(paragraph, section)" :key="index"><CitationAnchor v-if="segment.citation" :citation="segment.citation" :label="segment.text" @open-source="emit('openSource', $event)"/><template v-else>{{ segment.text }}</template></template></p><ul v-if="section.bullets.length"><li v-for="bullet in section.bullets" :key="bullet"><template v-for="(segment, index) in citationSegments(bullet, section)" :key="index"><CitationAnchor v-if="segment.citation" :citation="segment.citation" :label="segment.text" @open-source="emit('openSource', $event)"/><template v-else>{{ segment.text }}</template></template></li></ul></div>
+              <FinancialReportChart v-if="section.chart" :chart="section.chart" :storage-key="`finflow-report-chart:${deliverableId}:${sectionIndex}`" :citations="sectionCitations(section)" :citation-numbers="citationNumbers" @open-source="emit('openSource', $event)"/>
             </div>
           </article>
-          <section v-if="report.references.length" class="ai-report-references"><h2>参考来源</h2><ol><li v-for="entry in report.references" :key="entry">{{ entry }}</li></ol></section>
+          <section v-if="report.references.length" class="ai-report-references"><h2>参考来源</h2><ol><li v-for="(entry, index) in report.references" :key="typeof entry === 'string' ? entry : entry.id"><CitationAnchor v-if="typeof entry !== 'string'" :citation="entry" :label="entry.formatted || `[${index + 1}] ${entry.source_name}`" @open-source="emit('openSource', $event)"/><template v-else>{{ entry }}</template></li></ol></section>
         </section>
         <div class="report-control-row">
           <label>分析指标<select v-model="metric"><option v-for="column in numericColumns" :key="column" :value="column">{{ label(column) }}</option></select></label>
           <div class="report-chart-switch"><button :class="{ active: chartMode === 'line' }" title="折线图" @click="chartMode = 'line'"><LineChart :size="16"/></button><button :class="{ active: chartMode === 'bar' }" title="柱状图" @click="chartMode = 'bar'"><BarChart3 :size="16"/></button></div>
         </div>
         <div class="financial-kpis">
-          <article><span>最新值</span><strong>{{ formatValue(latestValue) }}</strong><small>{{ label(metric) }}</small></article>
-          <article><span>较上期</span><strong :class="{ positive: changeRate !== null && changeRate >= 0, negative: changeRate !== null && changeRate < 0 }">{{ changeRate === null ? '—' : `${changeRate >= 0 ? '+' : ''}${(changeRate * 100).toFixed(1)}%` }}</strong><small>环比变化</small></article>
-          <article><span>期间均值</span><strong>{{ formatValue(averageValue) }}</strong><small>{{ metricValues.length }} 个期间</small></article>
-          <article><span>期间峰值</span><strong>{{ formatValue(maxValue) }}</strong><small>样本内最高</small></article>
+          <article><span>最新值</span><strong>{{ formatValue(latestValue) }}</strong><small>{{ label(metric) }}<CitationAnchor v-if="datasetCitation" compact :citation="datasetCitation" label="来源" @open-source="emit('openSource', $event)"/></small></article>
+          <article><span>较上期</span><strong :class="{ positive: changeRate !== null && changeRate >= 0, negative: changeRate !== null && changeRate < 0 }">{{ changeRate === null ? '—' : `${changeRate >= 0 ? '+' : ''}${(changeRate * 100).toFixed(1)}%` }}</strong><small>环比变化<CitationAnchor v-if="datasetCitation" compact :citation="datasetCitation" label="来源" @open-source="emit('openSource', $event)"/></small></article>
+          <article><span>期间均值</span><strong>{{ formatValue(averageValue) }}</strong><small>{{ metricValues.length }} 个期间<CitationAnchor v-if="datasetCitation" compact :citation="datasetCitation" label="来源" @open-source="emit('openSource', $event)"/></small></article>
+          <article><span>期间峰值</span><strong>{{ formatValue(maxValue) }}</strong><small>样本内最高<CitationAnchor v-if="datasetCitation" compact :citation="datasetCitation" label="来源" @open-source="emit('openSource', $event)"/></small></article>
         </div>
-        <article class="financial-trend-panel"><header><div><strong>{{ label(metric) }}趋势</strong><span>可悬停查看每期数值</span></div></header><div ref="chartEl" class="financial-trend-chart"></div></article>
+        <article class="financial-trend-panel"><header><div><strong>{{ label(metric) }}趋势</strong><span>可悬停查看每期数值</span></div><CitationAnchor v-if="datasetCitation" compact :citation="datasetCitation" label="数据来源" @open-source="emit('openSource', $event)"/></header><div ref="chartEl" class="financial-trend-chart"></div></article>
       </section>
 
       <section v-show="tab === 'explore'" class="perspective-report-panel"><header><div><strong>自助分析</strong><span>拖动字段即可筛选、分组、聚合和更换图表</span></div><nav><span v-if="perspectiveMessage">{{ perspectiveMessage }}</span><button class="secondary-button" @click="resetPerspectiveView"><RotateCcw :size="14"/>恢复默认</button><button class="primary-button" @click="savePerspectiveView"><Save :size="14"/>保存当前分析</button></nav></header><div v-if="perspectiveLoading" class="perspective-report-state"><RefreshCw class="spin" :size="18"/>正在加载分析工具</div><div v-else-if="perspectiveError" class="perspective-report-state error"><strong>分析工具暂时无法显示</strong><span>{{ perspectiveError }}</span><button class="secondary-button" @click="loadPerspective(true)"><RefreshCw :size="14"/>重试</button></div><perspective-viewer ref="viewerEl" theme="Pro Light"></perspective-viewer></section>

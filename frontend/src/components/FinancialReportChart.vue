@@ -2,9 +2,11 @@
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { BarChart3, LineChart, PieChart } from 'lucide-vue-next'
 import * as echarts from 'echarts'
-import type { FinancialReportChart } from '../api/client'
+import type { CitationSource, FinancialReportChart } from '../api/client'
+import CitationAnchor from './CitationAnchor.vue'
 
-const props = defineProps<{ chart: FinancialReportChart; storageKey: string }>()
+const props = withDefaults(defineProps<{ chart: FinancialReportChart; storageKey: string; citations?: CitationSource[]; citationNumbers?: Record<string, number> }>(), { citations: () => [], citationNumbers: () => ({}) })
+const emit = defineEmits<{ openSource: [citation: CitationSource] }>()
 const chartEl = ref<HTMLElement | null>(null)
 const chartType = ref<'bar' | 'line' | 'pie'>(props.chart.type)
 let instance: echarts.ECharts | null = null
@@ -59,5 +61,6 @@ onBeforeUnmount(() => { window.removeEventListener('resize', draw); instance?.di
       </nav>
     </header>
     <div ref="chartEl" class="report-generated-chart-canvas"></div>
+    <footer v-if="citations.length" class="report-chart-citations"><span>图表来源</span><CitationAnchor v-for="citation in citations" :key="citation.id" compact :citation="citation" :label="`[${citationNumbers[citation.id] || 1}]`" @open-source="emit('openSource', $event)"/></footer>
   </section>
 </template>

@@ -1,16 +1,18 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, ref, watch } from 'vue'
 import { Braces, CheckCircle2, ChevronDown, ChevronRight, Database, Download, ExternalLink, Eye, FilePenLine, FileText, Globe2, LoaderCircle, Pencil, Play, Plus, RefreshCw, Save, Search, Server, Trash2, X } from 'lucide-vue-next'
-import { api, deliverableContentUrl, downloadUrl, inlineContentUrl, renderedOfficePreviewUrl, type ConnectionPreview, type CsvPreview, type DataConnection, type DatabaseCatalog, type DatabaseTable, type DocumentPreview, type WorkspaceResource } from '../api/client'
+import { api, deliverableContentUrl, downloadUrl, inlineContentUrl, renderedOfficePreviewUrl, type CitationSource, type ConnectionPreview, type CsvPreview, type DataConnection, type DatabaseCatalog, type DatabaseTable, type DocumentPreview, type WorkspaceResource } from '../api/client'
 import DiagramPreview from './DiagramPreview.vue'
 import OfficeEditor from './OfficeEditor.vue'
+import CitationAnchor from './CitationAnchor.vue'
 
 const InteractiveFinancialReport = defineAsyncComponent(() => import('./InteractiveFinancialReport.vue'))
 
 const props = defineProps<{ resource: WorkspaceResource }>()
-defineEmits<{ addToWorkflow: [resource: WorkspaceResource]; manageData: []; deleteResource: [resource: WorkspaceResource] }>()
+defineEmits<{ addToWorkflow: [resource: WorkspaceResource]; manageData: []; deleteResource: [resource: WorkspaceResource]; openSource: [citation: CitationSource] }>()
 const loading = ref(false), error = ref(''), editing = ref(false), officeFallback = ref(false), csv = ref<CsvPreview | null>(null), document = ref<DocumentPreview | null>(null)
 const connection = ref<DataConnection | null>(null), connectionPreview = ref<ConnectionPreview | null>(null)
+const citations = ref<CitationSource[]>([])
 const previewQuery = ref(''), previewLoading = ref(false), testLoading = ref(false), connectionMessage = ref('')
 const connectionEditing = ref(false), connectionSaving = ref(false), catalogLoading = ref(false), catalog = ref<DatabaseCatalog | null>(null)
 const catalogSearch = ref(''), expandedSchemas = ref<string[]>([]), selectedTable = ref<DatabaseTable | null>(null)
@@ -56,6 +58,12 @@ async function load() {
   } catch (reason) { error.value = reason instanceof Error ? reason.message : '内容没有打开' }
   finally { loading.value = false }
 }
+async function loadCitations() {
+  citations.value = []
+  if (props.resource.resourceType !== 'DELIVERABLE') return
+  try { citations.value = await api.getDeliverableCitations(props.resource.id, props.resource.currentVersion) }
+  catch { citations.value = [] }
+}
 async function loadCatalog() {
   if (!connection.value || connection.value.sourceType === 'HTTP_API') return
   catalogLoading.value = true
@@ -98,6 +106,7 @@ watch(() => props.resource.id, () => {
   editing.value = false
   officeFallback.value = false
   load()
+  loadCitations()
 }, { immediate: true })
 watch(editing, value => { if (!value) load() })
 function officeUnavailable(mode: 'view' | 'edit') { if (mode === 'view') officeFallback.value = true }
@@ -146,6 +155,7 @@ async function previewData() {
         <button class="icon-button" type="button" title="刷新内容" @click="load"><RefreshCw :size="17"/></button>
       </nav>
     </header>
+    <aside v-if="citations.length && !isFinancialReport" class="deliverable-citation-strip"><span>引用来源</span><CitationAnchor v-for="(citation, index) in citations" :key="citation.id" compact :citation="citation" :label="`[${index + 1}]`" @open-source="$emit('openSource', $event)"/></aside>
 
     <div v-if="loading" class="resource-state"><LoaderCircle class="spin" :size="22"/>正在打开内容</div>
     <div v-else-if="error" class="resource-state error"><FileText :size="24"/><strong>暂时无法显示</strong><p>{{ error }}</p></div>
@@ -212,7 +222,7 @@ async function previewData() {
     <OfficeEditor v-else-if="isOfficeDocument" :key="`${resource.id}-${resource.currentVersion}-${editing ? 'edit' : 'view'}`" :resource-id="resource.id" :kind="officeKind" :mode="editing ? 'edit' : 'view'" @unavailable="officeUnavailable" />
     <OfficeEditor v-else-if="editing && isEditable" :key="`${resource.id}-${resource.currentVersion}-edit`" :resource-id="resource.id" :kind="officeKind" mode="edit" />
     <iframe v-else-if="isPdf" class="inline-pdf" :src="inlineContentUrl(resource.id)" :title="resource.name"></iframe>
-    <InteractiveFinancialReport v-else-if="isFinancialReport" :project-id="resource.projectId" :deliverable-id="resource.id" :report-name="resource.name"/>
+    <InteractiveFinancialReport v-else-if="isFinancialReport" :project-id="resource.projectId" :deliverable-id="resource.id" :report-name="resource.name" @open-source="$emit('openSource', $event)"/>
     <section v-else-if="isHtmlSlides" class="html-slides-workbench"><div class="html-slides-badge">网页演示 · HTML + JS · 非 PowerPoint 文件</div><iframe :src="deliverableContentUrl(resource.id)" :title="resource.name" sandbox="allow-scripts" allow="fullscreen"></iframe></section>
     <div v-else-if="csv" class="inline-csv"><table><thead><tr><th class="row-number">#</th><th v-for="(column, index) in csv.columns" :key="`${column}-${index}`">{{ column || `第 ${index + 1} 列` }}</th></tr></thead><tbody><tr v-for="(row, rowIndex) in csv.rows" :key="rowIndex"><td class="row-number">{{ csv.rowOffset + rowIndex + 1 }}</td><td v-for="(_, columnIndex) in csv.columns" :key="columnIndex" :title="row[columnIndex]">{{ row[columnIndex] }}</td></tr></tbody></table><footer>在线显示前 {{ csv.rows.length }} 行<span v-if="csv.hasMore">，文件还有更多数据</span></footer></div>
     <DiagramPreview v-else-if="document && diagramType" :kind="diagramType" :source="diagramSource" />

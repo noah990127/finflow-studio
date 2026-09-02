@@ -70,11 +70,13 @@ def test_apa_7_formats_reference_entries_without_ref_labels() -> None:
 def test_generates_financial_report_workspace() -> None:
     report = json.loads(create_financial_report(request()))
 
-    assert report["schema_version"] == 1
+    assert report["schema_version"] == 2
     assert report["renderer"] == "finflow-echarts-perspective"
     assert report["title"] == "8 月经营复盘"
     assert report["sections"][0]["heading"] == "核心结论"
-    assert "经营报告.pdf" in report["references"][0]
+    assert report["references"][0]["source_name"] == "经营报告.pdf"
+    assert report["references"][0]["location"] == {"page": 12}
+    assert "经营报告.pdf" in report["references"][0]["formatted"]
 
 
 def test_splits_long_analysis_into_readable_slides() -> None:

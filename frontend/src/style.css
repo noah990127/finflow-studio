@@ -365,7 +365,9 @@
 .context-sidebar dd { margin: 0; color: #31455e; text-align: right; }
 .context-sidebar .primary-button { width: 100%; min-height: 36px; padding: 0 8px; font-size: 10px; }
 
-.resource-workbench { min-height: 100%; display: grid; grid-template-rows: auto minmax(0, 1fr); background: #eef3f8; }
+.resource-workbench { position: relative; min-height: 100%; display: grid; grid-template-rows: auto minmax(0, 1fr); background: #eef3f8; }
+.deliverable-citation-strip { position: absolute; z-index: 8; top: 58px; right: 16px; display: flex; align-items: center; gap: 3px; max-width: min(56vw, 520px); padding: 6px 8px; border: 1px solid #cfddeb; border-radius: 6px; background: rgba(255,255,255,.96); box-shadow: 0 5px 18px rgba(29, 59, 93, .12); }
+.deliverable-citation-strip > span { margin-right: 3px; color: #718198; font-size: 9px; white-space: nowrap; }
 .resource-toolbar { min-height: 66px; display: flex; align-items: center; justify-content: space-between; gap: 15px; padding: 12px 18px; border-bottom: 1px solid var(--line); background: #fff; }
 .resource-toolbar span, .resource-toolbar strong { display: block; }
 .resource-toolbar span { color: var(--muted); font-size: 9px; }
@@ -2219,6 +2221,27 @@ button {
 .ai-report-references h2 { margin: 0 0 10px; color: #273950; font-size: 14px; }
 .ai-report-references ol { margin: 0; padding-left: 22px; color: #68778b; }
 .ai-report-references li { margin: 6px 0; font-size: 10px; line-height: 1.55; }
+.citation-anchor { display: inline-flex; align-items: center; gap: 3px; margin: 0 2px; padding: 0; border: 0; border-bottom: 1px dotted #1677ff; border-radius: 0; background: transparent; color: #1265d8; font: inherit; font-weight: 700; line-height: inherit; cursor: help; vertical-align: baseline; }
+.citation-anchor:hover, .citation-anchor:focus-visible { border-bottom-style: solid; color: #084fae; outline: none; }
+.citation-anchor.compact { margin-left: 7px; padding: 2px 4px; border: 1px solid #c9dcf5; border-radius: 4px; background: #f5f9ff; font-size: 10px; line-height: 1.2; }
+.citation-popover { position: absolute; z-index: 2400; width: min(390px, calc(100vw - 24px)); overflow: hidden; border: 1px solid #cbd9e9; border-radius: 7px; background: #fff; box-shadow: 0 14px 38px rgba(26, 54, 88, .2); color: #29384c; }
+.citation-popover > header { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid #e4ebf3; background: #f7faff; }
+.citation-popover > header > span { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 5px; background: #e7f1ff; color: #1265d8; }
+.citation-popover > header div { min-width: 0; }
+.citation-popover > header small, .citation-popover > header strong { display: block; }
+.citation-popover > header small { margin-bottom: 2px; color: #73839a; font-size: 9px; }
+.citation-popover > header strong { overflow: hidden; color: #203047; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.citation-popover dl { display: flex; gap: 18px; margin: 0; padding: 9px 14px 0; }
+.citation-popover dl div { min-width: 0; }
+.citation-popover dt { color: #7a899d; font-size: 9px; }
+.citation-popover dd { margin: 2px 0 0; color: #3d4e64; font-size: 10px; overflow-wrap: anywhere; }
+.citation-popover blockquote { margin: 10px 14px; padding: 9px 11px; border-left: 3px solid #72aef0; background: #f7f9fc; color: #46586e; font-size: 11px; line-height: 1.6; }
+.citation-popover > footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 14px; border-top: 1px solid #edf1f6; }
+.citation-popover > footer span { color: #71839a; font-size: 9px; }
+.citation-popover > footer button { display: inline-flex; align-items: center; gap: 5px; padding: 0; border: 0; background: transparent; color: #1265d8; font-size: 10px; font-weight: 700; cursor: pointer; }
+.report-chart-citations { display: flex; align-items: center; gap: 4px; min-height: 27px; padding: 0 12px 8px; color: #78889c; font-size: 9px; }
+.financial-kpis article small { display: flex; align-items: center; }
+.financial-trend-panel > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .report-control-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
 .report-chart-switch { display: flex; border: 1px solid #cbd7e6; border-radius: 5px; overflow: hidden; background: #fff; }
 .report-chart-switch button { width: 34px; height: 32px; display: grid; place-items: center; border: 0; border-right: 1px solid #dce5f0; background: #fff; color: #66758a; cursor: pointer; }

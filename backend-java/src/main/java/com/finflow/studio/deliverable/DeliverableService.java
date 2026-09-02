@@ -118,6 +118,8 @@ public class DeliverableService {
         if (bytes == null || bytes.length == 0) throw new IllegalArgumentException("编辑结果为空");
         var current = get(id);
         if (current.currentVersion() != expectedVersion) throw new IllegalStateException("输出件已有更新版本，请重新打开后编辑");
+        var sourceSpec = jdbc.sql("select source_spec_json from deliverable_version where resource_id = :id and version_number = :version")
+                .param("id", id).param("version", expectedVersion).query(String.class).single();
         var nextVersion = expectedVersion + 1;
         var stored = store(current.projectId(), id, nextVersion, current.name(), current.format(), bytes);
         var now = Instant.now();
@@ -133,7 +135,7 @@ public class DeliverableService {
                 values (:versionId, :resourceId, :version, :path, :size, :checksum, :spec, :now)
                 """).param("versionId", UUID.randomUUID().toString()).param("resourceId", id)
                 .param("version", nextVersion).param("path", stored.location()).param("size", stored.size())
-                .param("checksum", stored.checksum()).param("spec", "{\"source\":\"onlyoffice\"}")
+                .param("checksum", stored.checksum()).param("spec", sourceSpec)
                 .param("now", now).update();
         return get(id);
     }
@@ -148,18 +150,57 @@ public class DeliverableService {
         return blobStore.materialize(location);
     }
 
+    public List<Map<String, Object>> citations(String id, Integer version) {
+        get(id);
+        var sql = version == null
+                ? "select v.source_spec_json from deliverable_resource r join deliverable_version v on v.resource_id = r.id and v.version_number = r.current_version where r.id = :id"
+                : "select source_spec_json from deliverable_version where resource_id = :id and version_number = :version";
+        var query = jdbc.sql(sql).param("id", id);
+        if (version != null) query.param("version", version);
+        var specification = readMap(query.query(String.class).optional()
+                .orElseThrow(() -> new IllegalArgumentException("输出版本不存在")));
+        var result = new LinkedHashMap<String, Map<String, Object>>();
+        for (var sectionValue : list(specification.get("sections"))) {
+            if (!(sectionValue instanceof Map<?, ?> section)) continue;
+            for (var refValue : list(section.get("refs"))) {
+                if (!(refValue instanceof Map<?, ?> ref)) continue;
+                var citation = new LinkedHashMap<String, Object>();
+                ref.forEach((key, value) -> citation.put(Objects.toString(key), value));
+                var citationId = Objects.toString(citation.get("ref_id"), "");
+                if (citationId.isBlank()) citationId = "citation-" + (result.size() + 1);
+                citation.put("id", citationId);
+                citation.putIfAbsent("resource_id", "");
+                citation.putIfAbsent("version", 0);
+                citation.putIfAbsent("source_name", "未命名资料");
+                citation.putIfAbsent("text", "");
+                citation.putIfAbsent("location", Map.of());
+                citation.putIfAbsent("content_hash", "");
+                citation.putIfAbsent("formatted", citation.get("source_name"));
+                result.putIfAbsent(citationId, citation);
+            }
+        }
+        return List.copyOf(result.values());
+    }
+
     private Map<String, Object> buildPayload(CreateRequest request) {
         var sections = new ArrayList<Map<String, Object>>();
         for (var section : request.sections()) {
             var refs = new ArrayList<Map<String, Object>>();
             for (var refId : section.refIds() == null ? List.<String>of() : section.refIds()) {
                 var ref = jdbc.sql("""
-                                select k.source_name, k.location_json from knowledge_ref k
+                                select k.id, k.resource_id, k.version_number, k.source_name, k.text_content,
+                                    k.location_json, k.content_hash from knowledge_ref k
                                 join file_resource r on r.id = k.resource_id and r.current_version = k.version_number
                                 where k.id = :id and k.project_id = :projectId
                                 """).param("id", refId).param("projectId", request.projectId())
-                        .query((rs, rowNum) -> Map.<String, Object>of("source_name", rs.getString("source_name"),
-                                "location", readMap(rs.getString("location_json")))).optional()
+                        .query((rs, rowNum) -> Map.<String, Object>of(
+                                "ref_id", rs.getString("id"),
+                                "resource_id", rs.getString("resource_id"),
+                                "version", rs.getInt("version_number"),
+                                "source_name", rs.getString("source_name"),
+                                "text", rs.getString("text_content"),
+                                "location", readMap(rs.getString("location_json")),
+                                "content_hash", rs.getString("content_hash"))).optional()
                         .orElseThrow(() -> new IllegalArgumentException("Ref 不存在、已过期或不属于当前项目：" + refId));
                 refs.add(ref);
             }
@@ -232,4 +273,6 @@ public class DeliverableService {
         try { return objectMapper.readValue(value, new TypeReference<>() {}); }
         catch (JacksonException exception) { return Map.of(); }
     }
+
+    private List<?> list(Object value) { return value instanceof List<?> items ? items : List.of(); }
 }

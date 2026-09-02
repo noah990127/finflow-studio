@@ -33,5 +33,6 @@ public final class WorkspaceModels {
             Instant updatedAt,
             String url) { }
 
-    public record Response(Project project, WorkflowSummary workflow, List<Folder> folders, List<Resource> resources) { }
+    public record Response(Project project, WorkflowSummary workflow, List<WorkflowSummary> workflows,
+                           List<Folder> folders, List<Resource> resources) { }
 }

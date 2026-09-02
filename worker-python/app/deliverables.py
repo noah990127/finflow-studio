@@ -26,7 +26,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import Image as ReportLabImage, ListFlowable, ListItem, PageBreak, Paragraph, SimpleDocTemplate, Spacer
 
 from .charting import add_native_ppt_chart, chart_png, normalize_ppt_chart_ids, valid_chart
-from .citations import inline_sources, normalize_markers, reference_entries
+from .citations import inline_sources, normalize_markers, reference_entries, reference_records
 from .models import DeliverableChart, DeliverableRequest, DeliverableSection
 from .ppt_skills import HUAWEI_STYLE_C, render as render_ppt_skill
 
@@ -316,13 +316,13 @@ def create_pdf(request: DeliverableRequest) -> bytes:
 def create_financial_report(request: DeliverableRequest) -> bytes:
     request = _normalize_document_request(request)
     specification = {
-        "schema_version": 1,
+        "schema_version": 2,
         "renderer": "finflow-echarts-perspective",
         "title": request.title,
         "subtitle": request.subtitle or "由 FinFlow Studio 工作流生成",
         "theme": request.theme,
         "sections": [section.model_dump(mode="json") for section in request.sections],
-        "references": reference_entries(request),
+        "references": reference_records(request),
     }
     return json.dumps(specification, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 

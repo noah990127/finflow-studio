@@ -44,8 +44,9 @@ public class WorkspaceResourceService {
 
     public Response get(String projectId) {
         var project = projects.get(projectId);
-        var workflow = workflows.getProjectWorkflow(projectId);
-        var usedIds = referencedResourceIds(workflow.nodes());
+        var projectWorkflows = workflows.list(projectId);
+        var usedIds = new HashSet<String>();
+        projectWorkflows.forEach(workflow -> usedIds.addAll(referencedResourceIds(workflow.nodes())));
         var resources = new ArrayList<Resource>();
         var locations = folders.locations(projectId);
 
@@ -70,17 +71,23 @@ public class WorkspaceResourceService {
                 item.id(), projectId, "DELIVERABLE", "OUTPUT", item.name(), item.format(), item.status(),
                 item.currentVersion(), item.sizeBytes(), usedIds.contains(item.id()), locations.get(resourceKey("DELIVERABLE", item.id())), "OUTPUTS", item.updatedAt(), null)));
 
-        workflow.nodes().stream().filter(node -> node.type() == com.finflow.studio.workflow.WorkflowModels.NodeType.LINK_INPUT).forEach(node -> {
-            var config = node.config() == null ? Map.<String, Object>of() : node.config();
-            var url = Objects.toString(config.get("url"), "");
-            if (!url.isBlank()) resources.add(new Resource(node.id(), projectId, "WEB_URL", "KNOWLEDGE",
-                    Objects.toString(config.getOrDefault("title", node.name()), node.name()), "text/uri-list", "READY", 1, 0,
-                    true, locations.get(resourceKey("WEB_URL", node.id())), "FILES", workflow.updatedAt(), url));
-        });
+        var urls = new HashSet<String>();
+        projectWorkflows.forEach(workflow -> workflow.nodes().stream()
+                .filter(node -> node.type() == com.finflow.studio.workflow.WorkflowModels.NodeType.LINK_INPUT)
+                .forEach(node -> {
+                    var config = node.config() == null ? Map.<String, Object>of() : node.config();
+                    var url = Objects.toString(config.get("url"), "");
+                    if (!url.isBlank() && urls.add(node.id())) resources.add(new Resource(node.id(), projectId,
+                            "WEB_URL", "KNOWLEDGE", Objects.toString(config.getOrDefault("title", node.name()), node.name()),
+                            "text/uri-list", "READY", 1, 0, true,
+                            locations.get(resourceKey("WEB_URL", node.id())), "FILES", workflow.updatedAt(), url));
+                }));
 
         resources.sort((left, right) -> right.updatedAt().compareTo(left.updatedAt()));
-        return new Response(project, new WorkflowSummary(workflow.id(), workflow.name(), workflow.status(),
-                workflow.currentVersion(), workflow.updatedAt()), folders.list(projectId), resources);
+        var summaries = projectWorkflows.stream().map(workflow -> new WorkflowSummary(workflow.id(), workflow.name(),
+                workflow.status(), workflow.currentVersion(), workflow.updatedAt())).toList();
+        var latest = summaries.isEmpty() ? null : summaries.getFirst();
+        return new Response(project, latest, summaries, folders.list(projectId), resources);
     }
 
     private Set<String> referencedResourceIds(java.util.List<NodeDefinition> nodes) {

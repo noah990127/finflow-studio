@@ -32,6 +32,8 @@ export const useAssistantStore = defineStore('assistant', {
     context: null as ContextSnapshot | null,
     run: null as Run | null,
     selection: null as Selection | null,
+    pageContext: 'project-home',
+    contextTitle: '项目概览',
     attachments: [] as FileResource[],
     timeline: [] as TimelineItem[],
     progress: 0,
@@ -48,6 +50,11 @@ export const useAssistantStore = defineStore('assistant', {
     openWithSuggestion(text: string, selection?: Selection) {
       this.open = true
       this.input = text
+      this.selection = selection ?? null
+    },
+    setWorkbenchContext(page: string, title: string, selection?: Selection) {
+      this.pageContext = page
+      this.contextTitle = title
       this.selection = selection ?? null
     },
     async attachFiles(projectId: string, files: File[]) {
@@ -144,7 +151,7 @@ export const useAssistantStore = defineStore('assistant', {
         const attachmentNames = this.attachments.map(item => item.name)
         const prompt = attachmentNames.length ? `${text}\n\n本次重点分析文件：${attachmentNames.join('、')}` : text
         const attachmentSelection = this.attachments[0] ? { type: 'file', resourceId: this.attachments[0].id, range: attachmentNames } : undefined
-        const response = await api.sendMessage(this.sessionId, prompt, this.selection ?? attachmentSelection)
+        const response = await api.sendMessage(this.sessionId, prompt, this.pageContext, this.selection ?? attachmentSelection)
         this.assistantMessage = response.assistantMessage
         this.plan = response.plan
         this.context = response.context
@@ -196,8 +203,12 @@ export const useAssistantStore = defineStore('assistant', {
         this.progressLabel = this.run.resultSummary
         this.streaming = false
         this.pushTimeline(`completed-${this.run.id}`, '处理完成', this.run.resultSummary, 'success')
+        const assistantResponse = typeof this.run.result?.assistantResponse === 'string' ? this.run.result.assistantResponse : ''
+        if (assistantResponse) this.assistantMessage = assistantResponse
         const createdProjectId = typeof this.run.result?.createdProjectId === 'string' ? this.run.result.createdProjectId : ''
         if (createdProjectId) await useProjectsStore().refresh(createdProjectId)
+        const uiAction = this.run.result?.uiAction
+        if (uiAction && typeof uiAction === 'object') window.dispatchEvent(new CustomEvent('finflow:assistant-action', { detail: uiAction }))
       } else if (['FAILED', 'CANCELED'].includes(this.run.status)) {
         this.streaming = false
         this.pushTimeline(`ended-${this.run.id}`, '处理未完成', this.run.resultSummary || '可以检查后重新执行', 'warning')

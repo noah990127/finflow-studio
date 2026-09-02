@@ -1,18 +1,20 @@
 <script setup lang="ts">
-import { computed, nextTick, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { Braces, ChevronDown, ChevronRight, Database, File, FileOutput, FileSpreadsheet, FileText, Folder, FolderInput, FolderOpen, FolderPlus, Globe2, LayoutGrid, MoreHorizontal, Pencil, Plus, Search, Server, Trash2, Upload, Workflow as WorkflowIcon, X } from 'lucide-vue-next'
 import AssistantPanel from '../components/AssistantPanel.vue'
 import ResourceWorkbench from '../components/ResourceWorkbench.vue'
 import ResourceTreeFolder from '../components/ResourceTreeFolder.vue'
-import { api, type Project, type ProjectWorkspace, type Workflow, type WorkflowNode, type WorkspaceFolder, type WorkspaceResource, type WorkspaceRootKind } from '../api/client'
+import { api, type CitationSource, type Project, type ProjectWorkspace, type Workflow, type WorkflowNode, type WorkspaceFolder, type WorkspaceResource, type WorkspaceRootKind } from '../api/client'
 import DataView from './DataView.vue'
 import WorkflowView from './WorkflowView.vue'
 import { useProjectsStore } from '../stores/projects'
+import { useAssistantStore } from '../stores/assistant'
 
 type Tab = { id: string; title: string; kind: 'home' | 'workflow' | 'data' | 'resource'; resource?: WorkspaceResource }
 type UiRoot = 'DATA' | 'KNOWLEDGE' | 'OUTPUT'
 const props = defineProps<{ project: Project | null; loading: boolean; error: string }>()
 const projectStore = useProjectsStore()
+const assistant = useAssistantStore()
 const workspace = ref<ProjectWorkspace | null>(null), search = ref(''), notice = ref(''), loadingWorkspace = ref(false), workflowKey = ref(0)
 const resourceOpenKey = ref(0)
 const projectManagerOpen = ref(false), projectFormOpen = ref(false), editingProjectId = ref(''), projectName = ref(''), projectDescription = ref(''), savingProject = ref(false)
@@ -97,6 +99,14 @@ function openTab(tab: Tab) {
 function openResource(resource: WorkspaceResource) {
   resourceOpenKey.value += 1
   openTab({ id: `resource-${resource.id}`, title: resource.name, kind: 'resource', resource })
+}
+function openCitationSource(citation: CitationSource) {
+  const resource = workspace.value?.resources.find(item => item.id === citation.resource_id)
+  if (!resource) { notice.value = '来源文件已更新或不在当前项目中'; return }
+  openResource(resource)
+  const labels: Record<string, string> = { page: '页码', slide: '幻灯片', paragraph: '段落', table: '表格', sheet: '工作表', rows: '行', row: '行', column: '字段', url: '网址', start_seconds: '开始秒数' }
+  const location = Object.entries(citation.location || {}).filter(([key, value]) => key !== 'type' && value !== null && value !== '').map(([key, value]) => `${labels[key] || key} ${value}`).join(' · ')
+  notice.value = `已打开引用来源${location ? ` · ${location}` : ''}`
 }
 async function openGeneratedDeliverable(deliverableId: string) {
   await loadWorkspace()
@@ -268,6 +278,25 @@ async function deleteResource(resource: WorkspaceResource) {
     await loadWorkspace()
   } catch (reason) { notice.value = reason instanceof Error ? reason.message : '内容没有删除' }
 }
+function handleAssistantAction(event: Event) {
+  const detail = (event as CustomEvent<{ type?: string; resourceId?: string }>).detail
+  if (!detail?.type) return
+  if (detail.type === 'OPEN_WORKFLOW') openWorkflow()
+  else if (detail.type === 'OPEN_DATA') openData()
+  else if (detail.type === 'OPEN_HOME') activeTabId.value = 'home'
+  else if (detail.type === 'OPEN_RESOURCE' && detail.resourceId) {
+    const resource = workspace.value?.resources.find(item => item.id === detail.resourceId)
+    if (resource) openResource(resource)
+  }
+}
+onMounted(() => window.addEventListener('finflow:assistant-action', handleAssistantAction))
+onBeforeUnmount(() => window.removeEventListener('finflow:assistant-action', handleAssistantAction))
+watch(activeTab, tab => {
+  if (!tab) return
+  const page = tab.kind === 'workflow' ? 'workflow' : tab.kind === 'data' ? 'data-collection' : tab.kind === 'resource' ? 'resource' : 'project-home'
+  const selection = tab.resource ? { type: tab.resource.resourceType, resourceId: tab.resource.id, range: [tab.resource.name] } : undefined
+  assistant.setWorkbenchContext(page, tab.title, selection)
+}, { immediate: true })
 watch(() => props.project?.id, (id, previousId) => {
   if (previousId && id !== previousId) { tabs.value = [{ id: 'home', title: '项目概览', kind: 'home' }]; activeTabId.value = 'home' }
   void loadWorkspace()
@@ -297,7 +326,7 @@ watch(() => props.project?.id, (id, previousId) => {
         <div v-else-if="activeTab?.kind === 'home'" class="project-overview"><header><FolderOpen :size="32"/><div><h1>{{ project?.name }}</h1><p>{{ project?.description || '把文件、数据和资料组织成一条可以反复运行的工作流。' }}</p></div></header><div class="overview-stats"><button v-for="group in groups" :key="group.id" type="button"><component :is="group.icon" :size="19"/><strong>{{ resources(group.id).length }}</strong><span>{{ group.label }}</span></button><button type="button" @click="openWorkflow"><WorkflowIcon :size="19"/><strong>{{ workspace?.workflow.status === 'READY' ? '可运行' : '草稿' }}</strong><span>主工作流</span></button></div><section><h2>最近使用</h2><button v-for="item in filteredResources.slice(0, 8)" :key="item.id" type="button" @click="openResource(item)"><component :is="iconFor(item)" :size="17"/><span>{{ item.name }}</span><small>{{ item.inProjectWorkflow ? '已加入工作流' : '尚未编排' }}</small></button></section></div>
         <WorkflowView v-else-if="activeTab?.kind === 'workflow'" :key="workflowKey" :project="project" :resources="workspace?.resources ?? []" @resources-changed="loadWorkspace" @workflow-changed="syncWorkflow" @open-deliverable="openGeneratedDeliverable" @open-resource="openWorkflowResource" />
         <DataView v-else-if="activeTab?.kind === 'data'" :project="project" />
-        <ResourceWorkbench v-else-if="activeTab?.resource" :key="`${activeTab.resource.id}-${resourceOpenKey}`" :resource="activeTab.resource" @add-to-workflow="addToWorkflow" @manage-data="openData" @delete-resource="deleteResource" />
+        <ResourceWorkbench v-else-if="activeTab?.resource" :key="`${activeTab.resource.id}-${resourceOpenKey}`" :resource="activeTab.resource" @add-to-workflow="addToWorkflow" @manage-data="openData" @delete-resource="deleteResource" @open-source="openCitationSource" />
       </section>
     </main>
 

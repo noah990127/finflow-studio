@@ -44,8 +44,8 @@ def _tokens(text: str) -> List[str]:
 async def summarize(request: SummarizeRequest) -> SummarizeResponse:
     try:
         ai_result = await llm.complete(
-            "你是 FinFlow Studio 的财经分析助手。只分析用户提供的数据和参考内容，不补充外部事实。"
-            "明确区分已知内容与推断，使用简洁中文。",
+            "你是 FinFlow Studio 的通用个人工作台助手。只分析用户提供的数据和参考内容，不补充外部事实。"
+            "根据内容类型选择合适的分析方式，明确区分已知内容与推断，使用简洁中文。",
             "请先给出一段综合分析，再列出不超过%d个关键要点。\n\n%s"
             % (request.max_points, request.text),
         )
@@ -94,7 +94,7 @@ def _generation_prompt(request: GenerateContentRequest) -> tuple[str, str]:
         container = "slides" if is_slides else "sections"
         item_title = "title" if is_slides else "heading"
         system = (
-            "你是 FinFlow Studio 的财经成果设计助手。只返回一个合法 JSON 对象，不要使用 Markdown 代码块或附加解释。"
+            "你是 FinFlow Studio 的通用业务成果设计助手。只返回一个合法 JSON 对象，不要使用 Markdown 代码块或附加解释。"
             f"JSON 顶层字段必须为 {container}，每项包含 {item_title}、summary、bullets、chart。"
             "chart 可以为 null；有连续期间、分类对比或构成数据时必须生成图表，格式为："
             '{"type":"bar|line|pie","title":"图表标题","categories":["分类"],'

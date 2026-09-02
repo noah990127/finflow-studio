@@ -19,7 +19,7 @@ def unique_refs(request: DeliverableRequest) -> list[DeliverableRef]:
     seen: set[str] = set()
     for section in request.sections:
         for ref in section.refs:
-            key = ref.source_name + repr(sorted(ref.location.items()))
+            key = ref.ref_id or ref.source_name + repr(sorted(ref.location.items()))
             if key not in seen:
                 seen.add(key)
                 result.append(ref)
@@ -41,6 +41,20 @@ def reference_entries(request: DeliverableRequest) -> list[str]:
     citation_style = style(request)
     return [format_reference(ref, index, citation_style)
             for index, ref in enumerate(unique_refs(request), start=1)]
+
+
+def reference_records(request: DeliverableRequest) -> list[dict[str, object]]:
+    citation_style = style(request)
+    return [{
+        "id": ref.ref_id or f"citation-{index}",
+        "resource_id": ref.resource_id,
+        "version": ref.version,
+        "source_name": ref.source_name,
+        "text": ref.text,
+        "location": ref.location,
+        "content_hash": ref.content_hash,
+        "formatted": format_reference(ref, index, citation_style),
+    } for index, ref in enumerate(unique_refs(request), start=1)]
 
 
 def inline_sources(request: DeliverableRequest, refs: Iterable[DeliverableRef]) -> str:

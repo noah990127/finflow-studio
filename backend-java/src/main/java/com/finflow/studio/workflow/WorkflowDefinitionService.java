@@ -39,9 +39,6 @@ public class WorkflowDefinitionService {
     @Transactional
     public WorkflowResponse create(String projectId, SaveRequest request) {
         projects.get(projectId);
-        if (findProjectWorkflow(projectId).isPresent()) {
-            throw new IllegalStateException("每个项目只能有一个主工作流，请直接编辑现有工作流");
-        }
         return insert(projectId, request);
     }
 
@@ -102,7 +99,26 @@ public class WorkflowDefinitionService {
 
     public List<WorkflowResponse> list(String projectId) {
         projects.get(projectId);
-        return findProjectWorkflow(projectId).map(List::of).orElseGet(List::of);
+        return jdbc.sql("""
+                select d.*, v.definition_json from workflow_definition d
+                join workflow_version v on v.workflow_id = d.id and v.version_number = d.current_version
+                where d.project_id = :projectId order by d.updated_at desc
+                """).param("projectId", projectId).query(this::map).list();
+    }
+
+    @Transactional
+    public void delete(String id) {
+        get(id);
+        var activeRuns = jdbc.sql("""
+                select count(*) from workflow_run where workflow_id = :id
+                and status in ('QUEUED', 'RUNNING', 'CANCEL_REQUESTED', 'WAITING_REVIEW')
+                """).param("id", id).query(Long.class).single();
+        if (activeRuns > 0) throw new IllegalStateException("工作流正在执行，请停止或完成复核后再删除");
+        jdbc.sql("delete from workflow_node_run where run_id in (select id from workflow_run where workflow_id = :id)")
+                .param("id", id).update();
+        jdbc.sql("delete from workflow_run where workflow_id = :id").param("id", id).update();
+        jdbc.sql("delete from workflow_version where workflow_id = :id").param("id", id).update();
+        jdbc.sql("delete from workflow_definition where id = :id").param("id", id).update();
     }
 
     private Optional<WorkflowResponse> findProjectWorkflow(String projectId) {

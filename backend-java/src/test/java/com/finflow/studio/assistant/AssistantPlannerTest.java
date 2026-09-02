@@ -13,10 +13,10 @@ class AssistantPlannerTest {
         var work = planner.plan("新增一个英伟达五年财报分析项目", "project-workbench", null);
 
         assertThat(work.steps()).extracting(AssistantModels.PlanStep::tool).containsExactly(
-                "project.get_summary",
-                "project.create_analysis_workspace",
+                "workspace.inspect",
+                "project.create_workspace",
                 "knowledge.discover_external_sources",
-                "workflow.initialize_analysis"
+                "workflow.initialize"
         );
         assertThat(work.steps().get(1).arguments().get("project_name")).isEqualTo("英伟达五年财报分析");
         assertThat(work.steps().get(1).requiresConfirmation()).isTrue();
@@ -53,5 +53,27 @@ class AssistantPlannerTest {
 
         assertThat(work.steps().get(1).arguments().get("project_name"))
                 .isEqualTo("海力士近五年经营与战略分析");
+    }
+
+    @Test
+    void doesNotInventAReportForAGenericRequestWithoutData() {
+        var planner = new AssistantPlanner(new WorkerClient("http://127.0.0.1:9"));
+
+        var work = planner.plan("帮我看看这个项目下一步该做什么", "project-home", null);
+
+        assertThat(work.steps()).extracting(AssistantModels.PlanStep::tool)
+                .containsExactly("workspace.inspect", "assistant.respond");
+        assertThat(work.steps()).noneMatch(step -> step.tool().contains("output") || step.tool().contains("deliverable"));
+    }
+
+    @Test
+    void asksForDataBeforePlanningDataWork() {
+        var planner = new AssistantPlanner(new WorkerClient("http://127.0.0.1:9"));
+
+        var work = planner.plan("清理数据并检查异常", "project-home", null);
+
+        assertThat(work.steps()).extracting(AssistantModels.PlanStep::tool)
+                .containsExactly("workspace.inspect", "assistant.respond");
+        assertThat(work.steps().get(1).arguments()).containsEntry("reason", "NO_STRUCTURED_DATA");
     }
 }

@@ -87,8 +87,8 @@ class WorkflowFlowTest {
     }
 
     @Test
-    void keepsOneProjectWorkflowAndRejectsStaleSave() {
-        var project = projects.create("唯一工作流测试", "项目级主工作流");
+    void supportsMultipleProjectWorkflowsAndRejectsStaleSave() {
+        var project = projects.create("多工作流测试", "项目级工作流集合");
         var first = definitions.getProjectWorkflow(project.id());
         var same = definitions.getProjectWorkflow(project.id());
         assertThat(same.id()).isEqualTo(first.id());
@@ -103,9 +103,11 @@ class WorkflowFlowTest {
         assertThatThrownBy(() -> definitions.saveProjectWorkflow(project.id(), new SaveRequest("旧版本", "",
                 List.of(node), List.of(), first.currentVersion())))
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("刷新");
-        assertThatThrownBy(() -> definitions.create(project.id(), new SaveRequest("另一个工作流", "",
-                List.of(node), List.of())))
-                .isInstanceOf(IllegalStateException.class).hasMessageContaining("只能有一个");
+        var second = definitions.create(project.id(), new SaveRequest("另一个工作流", "",
+                List.of(node), List.of()));
+        assertThat(second.id()).isNotEqualTo(first.id());
+        assertThat(definitions.list(project.id())).extracting(WorkflowModels.WorkflowResponse::name)
+                .containsExactlyInAnyOrder("主工作流", "另一个工作流");
     }
 
     @Test

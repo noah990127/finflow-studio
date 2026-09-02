@@ -39,9 +39,11 @@ export type OfficeSession = { enabled: boolean; documentServerUrl: string; worki
 export type DataTransformSource = { sourceKind: 'FILE' | 'EXTRACT' | 'CONNECTION'; resourceId: string; alias: string; name: string; query?: string; sheetName?: string }
 export type DataTransformScript = { script: string; summary: string; mode: string; assumptions: string[]; quality_rules: string[]; warnings: string[] }
 export type DataTransformSample = { valid: boolean; sampleRowCount: number; columns: Array<{ name: string; dataType: string }>; rows: Array<Record<string, unknown>>; nullCounts: Record<string, number>; checks: string[]; warnings: string[] }
+export type CitationLocation = Record<string, string | number | boolean | null>
+export type CitationSource = { id: string; resource_id: string; version: number; source_name: string; text: string; location: CitationLocation; content_hash: string; formatted: string }
 export type FinancialReportChart = { type: 'bar' | 'line' | 'pie'; title: string; categories: string[]; series: Array<{ name: string; values: number[] }>; source_ref: string }
-export type FinancialReportSection = { heading: string; paragraphs: string[]; bullets: string[]; chart?: FinancialReportChart }
-export type FinancialReportSpec = { schema_version: number; renderer: string; title: string; subtitle: string; theme: string; sections: FinancialReportSection[]; references: string[] }
+export type FinancialReportSection = { heading: string; paragraphs: string[]; bullets: string[]; refs?: CitationSource[]; chart?: FinancialReportChart }
+export type FinancialReportSpec = { schema_version: number; renderer: string; title: string; subtitle: string; theme: string; sections: FinancialReportSection[]; references: Array<CitationSource | string> }
 export type SystemStatus = { java: Record<string, unknown>; pythonWorker: Record<string, unknown>; llm: Record<string, unknown>; reportEngine: Record<string, unknown> }
 
 async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
@@ -90,8 +92,9 @@ export const api = {
   listPptSkills: () => request<PptSkill[]>('/api/ppt-skills'),
   previewDeliverable: (id: string) => request<DocumentPreview>(`/api/deliverables/${id}/preview`),
   getFinancialReport: (id: string) => request<FinancialReportSpec>(`/api/deliverables/${id}/report-spec`),
+  getDeliverableCitations: (id: string, version?: number) => request<CitationSource[]>(`/api/deliverables/${id}/citations${version ? `?version=${version}` : ''}`),
   createSession: (projectId: string) => request<{ id: string }>(`/api/projects/${projectId}/assistant/sessions`, { method: 'POST', body: JSON.stringify({ title: '项目工作助手' }) }),
-  sendMessage: (sessionId: string, text: string, selection?: Selection) => request<MessageResponse>(`/api/assistant/sessions/${sessionId}/messages`, { method: 'POST', body: JSON.stringify({ text, page: selection ? 'dataset' : 'project-home', route: window.location.pathname, selection, clientContextVersion: 1 }) }),
+  sendMessage: (sessionId: string, text: string, page = 'project-home', selection?: Selection) => request<MessageResponse>(`/api/assistant/sessions/${sessionId}/messages`, { method: 'POST', body: JSON.stringify({ text, page, route: window.location.pathname, selection, clientContextVersion: 1 }) }),
   confirmPlan: (plan: Plan, context: ContextSnapshot) => request<Run>(`/api/assistant/plans/${plan.id}/confirm`, { method: 'POST', body: JSON.stringify({ planVersion: plan.version, planHash: plan.planHash, idempotencyKey: crypto.randomUUID(), expectedResourceVersions: context.resourceVersions }) }),
   getRun: (runId: string) => request<Run>(`/api/assistant/runs/${runId}`),
   rollback: (runId: string) => request<Run>(`/api/assistant/runs/${runId}/rollback`, { method: 'POST' }),

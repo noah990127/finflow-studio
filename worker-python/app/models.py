@@ -116,8 +116,13 @@ class ParsedDocument(BaseModel):
 
 
 class DeliverableRef(BaseModel):
+    ref_id: str = ""
+    resource_id: str = ""
+    version: int = 0
     source_name: str
+    text: str = ""
     location: Dict[str, object] = Field(default_factory=dict)
+    content_hash: str = ""
 
 
 class DeliverableChartSeries(BaseModel):
