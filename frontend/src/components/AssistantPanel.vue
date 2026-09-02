@@ -5,11 +5,8 @@ import {
   Activity,
   Bot,
   Check,
-  ChevronRight,
-  FileUp,
   GripVertical,
   LoaderCircle,
-  Paperclip,
   RotateCcw,
   ShieldCheck,
   Sparkles,
@@ -20,8 +17,6 @@ import type { Project } from '../api/client'
 
 const props = defineProps<{ project: Project | null }>()
 const assistant = useAssistantStore()
-const fileInput = ref<HTMLInputElement | null>(null)
-const dragging = ref(false)
 const position = ref({ x: 24, y: 24 })
 const moving = ref(false)
 let moveOffset = { x: 0, y: 0 }
@@ -66,14 +61,6 @@ const contextLabel = computed(() => {
 function send() {
   if (props.project) assistant.send(props.project.id)
 }
-async function addFiles(items: FileList | File[]) {
-  if (!props.project) return
-  await assistant.attachFiles(props.project.id, Array.from(items))
-}
-function onDrop(event: DragEvent) {
-  dragging.value = false
-  if (event.dataTransfer?.files.length) addFiles(event.dataTransfer.files)
-}
 onMounted(() => {
   try {
     const saved = JSON.parse(localStorage.getItem('finflow-assistant-position') ?? 'null')
@@ -115,12 +102,6 @@ watch(() => assistant.open, async () => { await nextTick(); clampPosition() })
       </header>
 
       <div class="assistant-body">
-        <section class="assistant-files" :class="{ dragging }" @dragenter.prevent="dragging = true" @dragover.prevent @dragleave.prevent="dragging = false" @drop.prevent="onDrop">
-          <FileUp :size="18"/><div><strong>把文件放进来分析</strong><p>支持表格、PDF、Word、PPT、图片和文本资料</p></div>
-          <button class="icon-button" type="button" title="选择文件" :disabled="!project || assistant.busy" @click="fileInput?.click()"><Paperclip :size="16"/></button>
-          <input ref="fileInput" hidden multiple type="file" @change="addFiles(($event.target as HTMLInputElement).files || [])">
-        </section>
-        <div v-if="assistant.attachments.length" class="assistant-attachments"><span v-for="item in assistant.attachments" :key="item.id">{{ item.name }}<button type="button" title="移除" @click="assistant.removeAttachment(item.id)"><X :size="12"/></button></span></div>
         <div v-if="assistant.assistantMessage" class="assistant-summary">
           <Sparkles :size="16" />
           <p>{{ assistant.assistantMessage }}</p>
@@ -211,7 +192,7 @@ watch(() => assistant.open, async () => { await nextTick(); clampPosition() })
         <textarea
           v-model="assistant.input"
           rows="2"
-          placeholder="例如：打开工作流，或分析当前文件"
+          placeholder="告诉我你想完成什么"
           @keydown.meta.enter.prevent="send"
           @keydown.ctrl.enter.prevent="send"
         ></textarea>

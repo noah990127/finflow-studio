@@ -90,13 +90,6 @@
 .html-slides-badge { position: absolute; z-index: 2; top: 10px; left: 10px; padding: 5px 8px; border: 1px solid #ffffff26; background: #101a28d9; color: #dce8f7; font-size: 10px; pointer-events: none; }
 .assistant-side-host { position: fixed; z-index: 900; width: min(390px, calc(100vw - 28px)); height: min(720px, calc(100vh - 32px)); pointer-events: none; }
 .assistant-side-host .assistant-drawer { position: absolute; inset: 0; width: 100%; max-width: none; height: 100%; overflow: hidden; border: 1px solid #c7d8ea; border-radius: 8px; pointer-events: auto; box-shadow: 0 18px 48px rgb(31 68 104 / 22%); }
-.assistant-files { display: grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:9px; padding:11px; border:1px dashed #b9cde2; border-radius:6px; color:#3979ba; background:#f6faff; }
-.assistant-files.dragging { border-color:#2f78c7; background:#eaf4ff; }
-.assistant-files strong { display:block; color:#314b65; font-size:12px; }
-.assistant-files p { margin:3px 0 0; color:#71849a; font-size:9px; }
-.assistant-attachments { display:flex; flex-wrap:wrap; gap:6px; }
-.assistant-attachments span { display:inline-flex; align-items:center; gap:5px; max-width:100%; padding:5px 7px; border:1px solid #d6e2ee; border-radius:5px; color:#49627b; background:#fff; font-size:10px; }
-.assistant-attachments span button { display:grid; place-items:center; padding:0; border:0; color:#8393a5; background:transparent; }
 .ppt-skill-picker { display: grid; gap: 7px; margin: 2px 0 0; padding: 0; border: 0; }
 .ppt-skill-picker legend { margin-bottom: 1px; color: #596b82; font-size: 10px; font-weight: 700; }
 .ppt-skill-picker button { display: grid; grid-template-columns: 34px minmax(0, 1fr); align-items: center; gap: 10px; min-height: 54px; padding: 8px; border: 1px solid #d4dfeb; border-radius: 6px; background: #fff; color: #33465d; text-align: left; }

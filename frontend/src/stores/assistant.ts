@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { api, type AssistantEvent, type ContextSnapshot, type FileResource, type Plan, type Run, type Selection } from '../api/client'
+import { api, type AssistantEvent, type ContextSnapshot, type Plan, type Run, type Selection } from '../api/client'
 import { useProjectsStore } from './projects'
 
 type TimelineItem = {
@@ -34,7 +34,6 @@ export const useAssistantStore = defineStore('assistant', {
     selection: null as Selection | null,
     pageContext: 'project-home',
     contextTitle: '项目概览',
-    attachments: [] as FileResource[],
     timeline: [] as TimelineItem[],
     progress: 0,
     progressLabel: '',
@@ -56,21 +55,6 @@ export const useAssistantStore = defineStore('assistant', {
       this.pageContext = page
       this.contextTitle = title
       this.selection = selection ?? null
-    },
-    async attachFiles(projectId: string, files: File[]) {
-      if (!files.length || this.busy) return
-      this.busy = true
-      this.error = ''
-      try {
-        for (const file of files) this.attachments.push(await api.uploadFile(projectId, file))
-      } catch (error) {
-        this.error = error instanceof Error ? error.message : '文件没有加入分析'
-      } finally {
-        this.busy = false
-      }
-    },
-    removeAttachment(id: string) {
-      this.attachments = this.attachments.filter(item => item.id !== id)
     },
     async ensureSession(projectId: string) {
       if (!this.sessionId || this.sessionProjectId !== projectId) {
@@ -148,16 +132,12 @@ export const useAssistantStore = defineStore('assistant', {
       this.streamLines = ['正在接收你的需求']
       try {
         await this.ensureSession(projectId)
-        const attachmentNames = this.attachments.map(item => item.name)
-        const prompt = attachmentNames.length ? `${text}\n\n本次重点分析文件：${attachmentNames.join('、')}` : text
-        const attachmentSelection = this.attachments[0] ? { type: 'file', resourceId: this.attachments[0].id, range: attachmentNames } : undefined
-        const response = await api.sendMessage(this.sessionId, prompt, this.pageContext, this.selection ?? attachmentSelection)
+        const response = await api.sendMessage(this.sessionId, text, this.pageContext, this.selection ?? undefined)
         this.assistantMessage = response.assistantMessage
         this.plan = response.plan
         this.context = response.context
         this.run = response.run ?? null
         this.input = ''
-        this.attachments = []
         if (!this.timeline.some(item => item.title === '计划已准备好')) this.pushTimeline(
           `plan-${response.plan.id}`, '计划已准备好',
           this.needsConfirmation ? '请检查会修改的内容' : '只读取和生成草稿，可直接进行',
