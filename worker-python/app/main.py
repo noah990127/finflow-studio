@@ -40,6 +40,7 @@ from .deliverables import create_docx, create_excalidraw, create_financial_repor
 from .ppt_skills import catalog as ppt_skill_catalog
 from .spreadsheet_files import profile_spreadsheet, transform_spreadsheet
 from .data_transform import generate_transform, profile_tabular, run_transform, sample_transform
+from .agent import AgentPlanRequest, AgentPlanResponse, load_skills, plan_with_agent
 import json
 
 
@@ -71,12 +72,17 @@ async def render_office_preview(file: UploadFile = File(...), original_name: str
 
 @app.get("/health")
 async def health() -> dict:
+    skills = load_skills(settings.agent_skills_dir)
     return {
         "status": "online",
         "service": settings.service_name,
         "llmConfigured": llm.configured,
         "llmProvider": llm.provider,
         "llmModel": llm.model,
+        "agentEnabled": settings.agent_enabled,
+        "agentFramework": "pydantic-ai",
+        "agentSkillCount": len(skills),
+        "agentMcpConfigured": bool(settings.agent_mcp_config.strip()),
     }
 
 
@@ -97,6 +103,29 @@ async def llm_status() -> LlmStatus:
         model=llm.model,
         message=None if llm.configured else "API Key 尚未配置，当前使用本地提取式分析",
     )
+
+
+@app.get("/v1/agent/status")
+async def agent_status() -> dict:
+    skills = load_skills(settings.agent_skills_dir)
+    return {
+        "enabled": settings.agent_enabled,
+        "modelConfigured": llm.configured,
+        "framework": "pydantic-ai",
+        "skills": [{"name": item.name, "description": item.description} for item in skills],
+        "mcpConfigured": bool(settings.agent_mcp_config.strip()),
+    }
+
+
+@app.post("/v1/agent/plan", response_model=AgentPlanResponse)
+async def plan_agent_task(request: AgentPlanRequest) -> AgentPlanResponse:
+    try:
+        result = await plan_with_agent(request)
+    except RuntimeError as exception:
+        raise HTTPException(status_code=503, detail=str(exception)) from exception
+    if result is None:
+        raise HTTPException(status_code=503, detail="Agent 模型尚未配置")
+    return result
 
 
 @app.post("/v1/knowledge/summarize", response_model=SummarizeResponse)

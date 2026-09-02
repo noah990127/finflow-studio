@@ -153,6 +153,7 @@ watch(() => assistant.open, async () => { await nextTick(); clampPosition() })
               <div>
                 <strong>{{ step.title }}</strong>
                 <p>{{ step.description }}</p>
+                <span v-for="skill in (step.arguments.agent_skills as string[] || [])" :key="skill" class="skill-label">{{ skill }}</span>
                 <span v-if="step.requiresConfirmation" class="change-label">会创建新版本</span>
                 <span v-else class="read-label">只读取或生成草稿</span>
               </div>

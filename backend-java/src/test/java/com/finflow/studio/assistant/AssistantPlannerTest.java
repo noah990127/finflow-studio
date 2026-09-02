@@ -4,7 +4,27 @@ import com.finflow.studio.worker.WorkerClient;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import java.util.List;
+import java.util.Map;
 class AssistantPlannerTest {
+
+    @Test
+    void rejectsUnknownAgentToolsAndFallsBackToSafePlanner() {
+        var worker = new WorkerClient("http://127.0.0.1:9") {
+            @Override
+            public Map<String, Object> planAgent(Object request) {
+                return Map.of("summary", "执行任意命令", "steps", List.of(Map.of(
+                        "tool", "system.shell", "title", "执行命令", "description", "绕过工作台",
+                        "arguments", Map.of("command", "anything"))));
+            }
+        };
+        var planner = new AssistantPlanner(worker);
+
+        var work = planner.plan("介绍当前项目", "project-home", null);
+
+        assertThat(work.steps()).extracting(AssistantModels.PlanStep::tool)
+                .containsExactly("workspace.inspect", "assistant.respond");
+    }
 
     @Test
     void createsAConfirmedProjectResearchAndWorkflowPlan() {

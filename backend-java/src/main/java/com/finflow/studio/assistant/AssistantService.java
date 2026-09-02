@@ -83,7 +83,7 @@ public class AssistantService {
                 "progress", 7, "message", "正在读取当前项目和已选择的内容"));
         var context = createContext(session, request);
         events.publish(sessionId, null, "assistant.planning.started", Map.of(
-                "progress", 12, "message", "正在提炼任务主题并安排处理步骤"));
+                "progress", 12, "message", "正在识别意图并匹配可用能力与技能"));
         var workspaceResponse = workspace.get(session.projectId());
         var selected = request.selection() == null ? null : workspaceResponse.resources().stream()
                 .filter(resource -> resource.id().equals(request.selection().resourceId()))
@@ -95,7 +95,11 @@ public class AssistantService {
                 (int) workspaceResponse.resources().stream().filter(resource -> "OUTPUT".equals(resource.group())).count(),
                 workspaceResponse.resources().stream().anyMatch(resource -> "DATA".equals(resource.group())),
                 selected == null ? null : selected.id(), selected == null ? null : selected.resourceType(),
-                selected == null ? null : selected.name());
+                selected == null ? null : selected.name(),
+                workspaceResponse.resources().stream().limit(120).map(resource -> Map.<String, Object>of(
+                        "id", resource.id(), "name", resource.name(), "type", resource.resourceType(),
+                        "group", resource.group(), "status", resource.status())).toList(),
+                recentMessages(sessionId));
         var plannedWork = planner.plan(request.text(), request.page(), request.selection(), workspaceContext);
         var plan = savePlan(sessionId, context, request.text(), plannedWork);
         saveMessage(sessionId, "ASSISTANT", plannedWork.summary(), modelName(), traceId);
@@ -119,6 +123,19 @@ public class AssistantService {
             run = execution.start(sessionId, plan.id(), "auto-" + plan.id());
         }
         return new MessageResponse(sessionId, plannedWork.summary(), context, plan, run);
+    }
+
+    private List<Map<String, String>> recentMessages(String sessionId) {
+        var messages = jdbc.sql("""
+                select role, content from assistant_message where session_id = :sessionId
+                order by created_at desc limit 8
+                """)
+                .param("sessionId", sessionId)
+                .query((rs, rowNum) -> Map.of("role", rs.getString("role").toLowerCase(Locale.ROOT),
+                        "content", rs.getString("content")))
+                .list();
+        Collections.reverse(messages);
+        return messages;
     }
 
     public PlanResponse getPlan(String id) {

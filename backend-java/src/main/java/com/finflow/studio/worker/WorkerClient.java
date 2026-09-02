@@ -132,6 +132,18 @@ public class WorkerClient {
         return result;
     }
 
+    public Map<String, Object> planAgent(Object request) {
+        var result = client.post().uri("/v1/agent/plan")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(request)
+                .retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {})
+                .timeout(Duration.ofMinutes(4))
+                .block();
+        if (result == null) throw new IllegalStateException("Agent 没有返回计划");
+        return result;
+    }
+
     public Map<String, Object> generateContent(String format, String requirements, String sourceText) {
         var result = client.post().uri("/v1/knowledge/generate")
                 .contentType(MediaType.APPLICATION_JSON)

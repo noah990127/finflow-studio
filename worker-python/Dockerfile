@@ -11,6 +11,7 @@ RUN if [ -n "$DEBIAN_MIRROR" ]; then \
 RUN useradd --system --uid 10001 finflow
 COPY pyproject.toml .
 COPY app app
+COPY skills skills
 RUN pip install --no-cache-dir --index-url "$PIP_INDEX_URL" .
 USER finflow
 EXPOSE 8001

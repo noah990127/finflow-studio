@@ -11,6 +11,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
@@ -25,6 +26,12 @@ public class AssistantPlanner {
     }
 
     public PlannedWork plan(String goal, String page, Selection selection, WorkspaceContext context) {
+        var agentPlan = planWithAgent(goal, page, selection, context);
+        if (agentPlan != null) return agentPlan;
+        return fallbackPlan(goal, page, selection, context);
+    }
+
+    private PlannedWork fallbackPlan(String goal, String page, Selection selection, WorkspaceContext context) {
         var text = goal == null ? "" : goal.trim();
         var normalized = text.toLowerCase(Locale.ROOT);
         var steps = new ArrayList<PlanStep>();
@@ -126,6 +133,107 @@ public class AssistantPlanner {
                     mapOf("goal", text)));
         }
         return new PlannedWork(modelSummary(text, steps, context), List.copyOf(steps));
+    }
+
+    @SuppressWarnings("unchecked")
+    private PlannedWork planWithAgent(String goal, String page, Selection selection, WorkspaceContext context) {
+        try {
+            var request = new LinkedHashMap<String, Object>();
+            request.put("goal", goal == null ? "" : goal.trim());
+            request.put("page", page == null ? "project-home" : page);
+            request.put("project_id", context.projectId());
+            request.put("project_name", context.projectName());
+            request.put("selection", selection == null ? Map.of() : mapOf(
+                    "type", selection.type(), "resource_id", selection.resourceId(), "range", selection.range()));
+            request.put("resources", context.resources());
+            request.put("recent_messages", context.recentMessages());
+            request.put("capabilities", AssistantCapabilityRegistry.catalog());
+            var response = worker.planAgent(request);
+            var selectedSkills = response.get("selected_skills") instanceof List<?> values
+                    ? values.stream().map(String::valueOf).filter(value -> !value.isBlank()).limit(4).toList()
+                    : List.<String>of();
+            var rawSteps = response.get("steps");
+            if (!(rawSteps instanceof List<?> items) || items.isEmpty()) return null;
+            var steps = new ArrayList<PlanStep>();
+            for (var item : items) {
+                if (!(item instanceof Map<?, ?> raw)) continue;
+                var tool = String.valueOf(raw.get("tool"));
+                var capability = AssistantCapabilityRegistry.find(tool).orElse(null);
+                if (capability == null) continue;
+                var arguments = new LinkedHashMap<String, Object>();
+                if (raw.get("arguments") instanceof Map<?, ?> values) {
+                    values.forEach((key, value) -> arguments.put(String.valueOf(key), value));
+                }
+                enrichArguments(arguments, goal, page, context);
+                secureArguments(tool, arguments, context);
+                if (!selectedSkills.isEmpty()) arguments.put("agent_skills", selectedSkills);
+                var title = readable(raw.get("title"), capability.title(), 40);
+                var description = readable(raw.get("description"), capability.description(), 120);
+                steps.add(step(steps.size() + 1, tool, capability.mode(), title, description, capability.risk(), arguments));
+                if (steps.size() >= 10) break;
+            }
+            if (steps.isEmpty()) return null;
+            if (steps.stream().noneMatch(step -> "workspace.inspect".equals(step.tool()))) {
+                steps.addFirst(step(1, "workspace.inspect", "READ", "了解当前工作",
+                        contextDescription(page, context), RiskLevel.READ_ONLY,
+                        mapOf("project_id", context.projectId(), "resource_id", context.selectedResourceId(), "page", page, "goal", goal)));
+                for (var index = 0; index < steps.size(); index++) {
+                    var current = steps.get(index);
+                    steps.set(index, new PlanStep(current.id(), index + 1, current.tool(), current.mode(), current.title(),
+                            current.description(), current.arguments(), current.risk(), current.requiresConfirmation(), current.status()));
+                }
+            }
+            var summary = readable(response.get("summary"), modelSummary(goal, steps, context), 240);
+            return new PlannedWork(summary, List.copyOf(steps));
+        } catch (RuntimeException exception) {
+            return null;
+        }
+    }
+
+    private void enrichArguments(Map<String, Object> arguments, String goal, String page, WorkspaceContext context) {
+        putIfPresent(arguments, "project_id", context.projectId());
+        putIfPresent(arguments, "resource_id", context.selectedResourceId());
+        putIfPresent(arguments, "resource_type", context.selectedResourceType());
+        putIfPresent(arguments, "resource_name", context.selectedResourceName());
+        putIfPresent(arguments, "page", page);
+        putIfPresent(arguments, "goal", goal);
+    }
+
+    private void secureArguments(String tool, Map<String, Object> arguments, WorkspaceContext context) {
+        if (!"project.create_workspace".equals(tool) && context.projectId() != null) {
+            arguments.put("project_id", context.projectId());
+        }
+        var resourceId = Objects.toString(arguments.get("resource_id"), "");
+        var knownResource = context.resources().stream().anyMatch(item -> resourceId.equals(item.get("id")));
+        if (!resourceId.isBlank() && !knownResource) {
+            if (context.selectedResourceId() == null) arguments.remove("resource_id");
+            else arguments.put("resource_id", context.selectedResourceId());
+        }
+        if (arguments.get("output_formats") instanceof List<?> formats) {
+            var allowed = List.of("PPTX", "DOCX", "PDF", "MERMAID", "EXCALIDRAW", "HTML_SLIDES", "FINANCIAL_REPORT");
+            arguments.put("output_formats", formats.stream().map(String::valueOf).map(String::toUpperCase)
+                    .filter(allowed::contains).distinct().toList());
+        }
+        if ("workspace.navigate".equals(tool)) {
+            var target = Objects.toString(arguments.get("target"), "HOME").toUpperCase(Locale.ROOT);
+            arguments.put("target", List.of("HOME", "DATA", "WORKFLOW", "RESOURCE").contains(target) ? target : "HOME");
+        }
+        if ("project.create_workspace".equals(tool)) {
+            var rawName = Objects.toString(arguments.get("project_name"), Objects.toString(arguments.get("topic"), "新的工作"));
+            var topic = inferProjectTopic(rawName);
+            arguments.put("project_name", projectName(topic));
+            arguments.putIfAbsent("topic", topic);
+        }
+    }
+
+    private void putIfPresent(Map<String, Object> values, String key, Object value) {
+        if (!values.containsKey(key) && value != null) values.put(key, value);
+    }
+
+    private String readable(Object value, String fallback, int maxLength) {
+        var text = value == null ? "" : String.valueOf(value).trim();
+        if (text.isBlank()) text = fallback;
+        return text.substring(0, Math.min(text.length(), maxLength));
     }
 
     private boolean isCreateProjectIntent(String text) { return containsAny(text, "新建", "新增", "创建") && text.contains("项目"); }
@@ -254,8 +362,9 @@ public class AssistantPlanner {
 
     public record WorkspaceContext(String projectId, String projectName, int dataCount, int knowledgeCount,
                                    int outputCount, boolean hasStructuredData, String selectedResourceId,
-                                   String selectedResourceType, String selectedResourceName) {
-        public static WorkspaceContext empty() { return new WorkspaceContext(null, "当前项目", 0, 0, 0, false, null, null, null); }
+                                   String selectedResourceType, String selectedResourceName,
+                                   List<Map<String, Object>> resources, List<Map<String, String>> recentMessages) {
+        public static WorkspaceContext empty() { return new WorkspaceContext(null, "当前项目", 0, 0, 0, false, null, null, null, List.of(), List.of()); }
     }
 
     public record PlannedWork(String summary, List<PlanStep> steps) { }

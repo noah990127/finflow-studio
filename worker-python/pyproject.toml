@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "finflow-worker"
 version = "0.1.0"
 description = "FinFlow Studio document, knowledge and file analysis worker"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.116,<1.0",
   "uvicorn[standard]>=0.35,<1.0",
@@ -23,6 +23,7 @@ dependencies = [
   "duckdb>=1.4,<2.0",
   "sqlglot>=27,<29",
   "faster-whisper>=1.2,<2.0",
+  "pydantic-ai-slim[openai,mcp]>=1.0,<2.0",
 ]
 
 [project.optional-dependencies]

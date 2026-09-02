@@ -1272,13 +1272,21 @@ button {
 }
 
 .change-label,
-.read-label {
+.read-label,
+.skill-label {
   display: inline-block;
   margin-top: 8px;
   padding: 3px 6px;
   border-radius: 5px;
   font-size: 10px;
   font-weight: 600;
+}
+
+.skill-label {
+  color: #1769aa;
+  background: #eaf5ff;
+  border-color: #c9e5fb;
+  margin-right: 6px;
 }
 
 .change-label {

@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     whisper_model: str = "small"
     whisper_device: str = "cpu"
     whisper_compute_type: str = "int8"
+    agent_enabled: bool = True
+    agent_skills_dir: str = "skills"
+    agent_mcp_config: str = ""
+    agent_mcp_allowed_tools: str = ""
+    agent_max_steps: int = 10
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

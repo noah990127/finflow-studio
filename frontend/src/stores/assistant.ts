@@ -119,7 +119,7 @@ export const useAssistantStore = defineStore('assistant', {
     eventTitle(type: string) {
       if (type === 'assistant.request.received') return '理解需求'
       if (type === 'assistant.context.started') return '读取当前工作'
-      if (type === 'assistant.planning.started') return '安排处理步骤'
+      if (type === 'assistant.planning.started') return '理解意图与选择能力'
       if (type === 'assistant.plan.ready') return '计划已准备好'
       if (type === 'assistant.confirmation.required') return '等待确认'
       if (type === 'assistant.run.queued') return '准备处理'
