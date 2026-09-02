@@ -1,0 +1,7 @@
+workload_id,business_scenario,model_scale,concurrency,target_latency_ms,power_constraint,data_location,recommended_segment,mandatory_capability
+W01,超大规模模型训练,very_large,64,not_applicable,datacenter,private,AI数据中心,scale_up_and_scale_out
+W02,企业知识助手推理,large,800,120,datacenter,private,AI数据中心,high_throughput_inference
+W03,机器人视觉决策,medium,12,30,edge,edge,边缘AI,realtime_sensor_processing
+W04,工程设计与数字孪生,medium,40,80,workstation,hybrid,专业工作站,graphics_and_ai
+W05,本地模型原型开发,small,4,200,desktop,private,专业工作站,developer_experience
+W06,4K游戏与AI创作,small,1,20,desktop,local,游戏与创作,ray_tracing_and_creator_stack

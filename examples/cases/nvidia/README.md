@@ -1,6 +1,8 @@
 # NVIDIA five-year financial analysis
 
-This case uses a curated structured dataset based on NVIDIA annual reports and SEC EDGAR filings, plus links to the original public sources. It is intended to demonstrate public-web research, structured financial analysis, AI interpretation, interactive reporting, and presentation generation.
+This case uses curated annual and quarterly structured datasets based on NVIDIA annual reports and SEC EDGAR filings, plus a business-mix table, risk monitor, PDF summary, editable Word memo and links to the original public sources. It demonstrates API and database extraction, transparent SQL, Ref retrieval, AI interpretation, interactive reporting, PowerPoint, HTML slides, Word and diagram generation.
+
+Quarterly rows labelled as demonstration splits are not company disclosures and must not be treated as reported facts.
 
 The repository is not affiliated with or endorsed by NVIDIA. Values should be checked against the linked filings before they are used for investment, accounting, or regulatory decisions.
 

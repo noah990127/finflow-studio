@@ -1,0 +1,38 @@
+{
+  "name":"2026 年全球税务政策趋势与企业影响分析",
+  "description":"融合跨国实体税务暴露数据库、全球政策 API、政策事件与情景 CSV、PDF 简报、Word 运营手册和 OECD、欧盟、IRS、联合国官方网页，形成政策地图、现金影响和行动计划。",
+  "files":[
+    {"key":"events","path":"assets/tax_policy_events.csv"},
+    {"key":"readiness","path":"assets/jurisdiction_readiness.csv"},
+    {"key":"scenarios","path":"assets/tax_scenario_assumptions.csv"},
+    {"key":"policy","path":"assets/tax_analysis_policy.md"},
+    {"key":"brief","path":"assets/2026全球税务政策趋势简报.pdf"},
+    {"key":"playbook","path":"assets/全球税务项目实施手册_模拟.docx"}
+  ],
+  "connections":[
+    {"key":"tax-db","name":"全球税务实体暴露 PostgreSQL","sourceType":"POSTGRESQL","jdbcUrlEnv":"FINFLOW_DEMO_DATABASE_URL","jdbcUrlDefault":"jdbc:postgresql://postgres:5432/finflow","usernameEnv":"FINFLOW_DEMO_DATABASE_USERNAME","usernameDefault":"finflow","secretRef":"env:DATABASE_PASSWORD","options":{"ApplicationName":"FinFlowGlobalTaxDemo"}},
+    {"key":"tax-api","name":"2026 全球税务政策数据服务","sourceType":"HTTP_API","jdbcUrlEnv":"FINFLOW_GLOBAL_TAX_API_URL","jdbcUrlDefault":"http://demo-api:8011/api/v1/tax/2026-policy-trends","options":{"format":"jsonl"}}
+  ],
+  "workflow":"workflow.json",
+  "postgresInit":"postgres-init.sql",
+  "legacyRefs":{
+    "30000000-0000-4000-8000-000000000001":"connection:tax-db",
+    "30000000-0000-4000-8000-000000000002":"connection:tax-api",
+    "30000000-0000-4000-8000-000000000011":"file:events",
+    "30000000-0000-4000-8000-000000000012":"file:readiness",
+    "30000000-0000-4000-8000-000000000013":"file:scenarios",
+    "30000000-0000-4000-8000-000000000014":"file:policy",
+    "30000000-0000-4000-8000-000000000015":"file:brief",
+    "30000000-0000-4000-8000-000000000016":"file:playbook"
+  },
+  "deliverables":[
+    {
+      "title":"2026 全球税务趋势与企业影响交互报告","subtitle":"政策时点、实体暴露、现金影响与准备度","format":"financial_report","includeCitations":true,"citationStyle":"GB_T_7714",
+      "sections":[{"heading":"2026 年税务管理重点","paragraphs":["企业需要把全球最低税的申报运营、欧盟 CBAM 正式阶段、ViDA 实施准备、美国企业税变化和联合国税收合作进程纳入统一政策雷达，并按实体暴露、数据完整度和生效时点确定优先级。"],"bullets":["政策事实仅采信官方来源","企业暴露和现金影响均为模拟数据","未生效谈判不得表述为现行法律"],"refIds":[],"citations":[{"id":"tax-cite-1","resourceId":"","version":1,"sourceName":"OECD Global Minimum Tax","text":"2026 年全球最低税工作的重点包含实施协调和合规支持。","location":{"type":"url","url":"https://www.oecd.org/en/about/news/announcements/2026/05/global-minimum-tax-release-of-a-common-understanding-of-implementing-jurisdictions-and-further-administrative-guidance-to-support-compliance.html","section":"Announcement"},"contentHash":"tax-oecd-2026"},{"id":"tax-cite-2","resourceId":"","version":1,"sourceName":"European Commission CBAM","text":"欧盟 CBAM 正式阶段自 2026 年 1 月 1 日起适用。","location":{"type":"url","url":"https://taxation-customs.ec.europa.eu/carbon-border-adjustment-mechanism/cbam-definitive-regime_en","section":"Definitive regime"},"contentHash":"tax-cbam-2026"},{"id":"tax-cite-3","resourceId":"","version":1,"sourceName":"European Commission ViDA","text":"ViDA 在 2026 年进入具体实施工作阶段。","location":{"type":"url","url":"https://taxation-customs.ec.europa.eu/news/vat-digital-age-2026-work-programme-available-2026-05-22_en","section":"2026 work programme"},"contentHash":"tax-vida-2026"}]}]
+    },
+    {
+      "title":"2026 全球税务政策管理层汇报","subtitle":"政策变化、现金风险与 90 天行动","format":"pptx","pptSkill":"guizang-huawei-style-c","includeCitations":true,"citationStyle":"GB_T_7714",
+      "sections":[{"heading":"2026 年税务议程从规则理解转向运营落地","paragraphs":["政策管理需要与法人、财务、交易和供应链数据治理同步推进。"],"bullets":["Pillar Two 聚焦申报与交换准备","CBAM 进入正式阶段","ViDA 推动数字报告准备"],"refIds":[],"citations":[{"id":"tax-ppt-1","resourceId":"","version":1,"sourceName":"OECD 与 European Commission 官方资料","text":"全球最低税、CBAM 和 ViDA 的官方实施资料。","location":{"type":"url","url":"https://www.oecd.org/en/topics/sub-issues/global-minimum-tax.html"},"contentHash":"tax-ppt-policy"}]},{"heading":"资源应优先投向高暴露且数据不完整的实体","paragraphs":["模拟暴露模型将收入、税率、CBAM、交易量与数据完整度放在同一优先级框架。"],"bullets":["先修复关键主数据和账税勾稽","建立政策到流程和责任人的映射","按 30/60/90 天跟踪准备度"],"refIds":[],"citations":[{"id":"tax-ppt-2","resourceId":"","version":1,"sourceName":"FinFlow 模拟实体暴露数据","text":"实体暴露和现金影响为产品演示数据，不代表任何真实企业。","location":{"type":"dataset","table":"demo_examples.global_tax_entity_exposure"},"contentHash":"tax-ppt-demo"}]}]
+    }
+  ]
+}

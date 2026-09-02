@@ -1,50 +1,36 @@
 {
-  "name": "英伟达五年财报与经营趋势分析",
-  "description": "基于 NVIDIA 投资者关系网站、SEC EDGAR 与结构化五年财务数据，分析 FY2022-FY2026 的增长质量、盈利、现金流、业务结构和风险。",
+  "name": "英伟达近五年经营状况分析",
+  "description": "融合 NVIDIA FY2022-FY2026 年度与季度数据、业务结构、风险监测、年报 PDF、经营备忘录、官方投资者关系网页和 SEC 数据，分析增长质量、盈利、现金流、业务结构与经营风险。",
   "files": [
-    {"key": "financials", "path": "assets/nvidia_fy2022_fy2026_financials.csv"}
+    {"key":"financials","path":"assets/nvidia_fy2022_fy2026_financials.csv"},
+    {"key":"business-mix","path":"assets/nvidia_business_mix.csv"},
+    {"key":"risk-monitor","path":"assets/management_risk_monitor.csv"},
+    {"key":"annual-summary","path":"assets/NVIDIA_FY2022_FY2026年报摘要.pdf"},
+    {"key":"risk-memo","path":"assets/NVIDIA经营风险观察备忘录.docx"}
   ],
   "connections": [
-    {
-      "key": "nvidia-api",
-      "name": "NVIDIA 五年财务指标服务",
-      "sourceType": "HTTP_API",
-      "jdbcUrlEnv": "FINFLOW_NVIDIA_API_URL",
-      "jdbcUrlDefault": "http://demo-api:8011/api/v1/companies/nvidia/five-year-financials",
-      "options": {"format": "jsonl"}
-    }
+    {"key":"nvidia-quarterly-db","name":"NVIDIA 季度经营指标 PostgreSQL","sourceType":"POSTGRESQL","jdbcUrlEnv":"FINFLOW_DEMO_DATABASE_URL","jdbcUrlDefault":"jdbc:postgresql://postgres:5432/finflow","usernameEnv":"FINFLOW_DEMO_DATABASE_USERNAME","usernameDefault":"finflow","secretRef":"env:DATABASE_PASSWORD","options":{"ApplicationName":"FinFlowNvidiaFinancialDemo"}},
+    {"key":"nvidia-api","name":"NVIDIA 五年财务指标服务","sourceType":"HTTP_API","jdbcUrlEnv":"FINFLOW_NVIDIA_API_URL","jdbcUrlDefault":"http://demo-api:8011/api/v1/companies/nvidia/five-year-financials","options":{"format":"jsonl"}}
   ],
-  "workflow": "workflow.json",
+  "workflow":"workflow.json",
+  "postgresInit":"postgres-init.sql",
   "legacyRefs": {
-    "1ba12b1c-ea60-4d56-91b8-1dfcf3c5a735": "connection:nvidia-api"
+    "20000000-0000-4000-8000-000000000001":"connection:nvidia-quarterly-db",
+    "1ba12b1c-ea60-4d56-91b8-1dfcf3c5a735":"connection:nvidia-api",
+    "20000000-0000-4000-8000-000000000011":"file:financials",
+    "20000000-0000-4000-8000-000000000012":"file:business-mix",
+    "20000000-0000-4000-8000-000000000013":"file:risk-monitor",
+    "20000000-0000-4000-8000-000000000014":"file:annual-summary",
+    "20000000-0000-4000-8000-000000000015":"file:risk-memo"
   },
   "deliverables": [
     {
-      "title": "NVIDIA FY2022-FY2026 五年增长质量交互报告",
-      "subtitle": "公开财务数据示范案例",
-      "format": "financial_report",
-      "includeCitations": false,
-      "citationStyle": "IEEE",
-      "sections": [
-        {
-          "heading": "五年增长质量",
-          "paragraphs": ["{\"sections\":[{\"heading\":\"收入与盈利进入AI基础设施驱动阶段\",\"paragraphs\":[\"FY2024-FY2026收入、营业利润和经营现金流同步提升，增长已从需求扩张传导至盈利和现金创造。\"],\"bullets\":[\"FY2022-FY2026营业收入由269.14亿美元增至2159.38亿美元\",\"FY2026毛利率为71.1%，较FY2025高点有所回落\"],\"chart\":{\"type\":\"line\",\"title\":\"五年营业收入趋势\",\"categories\":[\"FY2022\",\"FY2023\",\"FY2024\",\"FY2025\",\"FY2026\"],\"series\":[{\"name\":\"营业收入（百万美元）\",\"values\":[26914,26974,60922,130497,215938]}],\"source_ref\":\"NVIDIA annual reports and SEC EDGAR filings\"}},{\"heading\":\"数据中心成为核心增长来源\",\"paragraphs\":[\"数据中心收入在五年内快速提升，同时客户集中、出口限制、供应链和产品迭代风险的重要性上升。\"],\"bullets\":[\"持续跟踪库存增速和采购义务\",\"将毛利率、现金转化和客户集中度纳入管理观察清单\"],\"chart\":{\"type\":\"bar\",\"title\":\"数据中心收入趋势\",\"categories\":[\"FY2022\",\"FY2023\",\"FY2024\",\"FY2025\",\"FY2026\"],\"series\":[{\"name\":\"数据中心收入（百万美元）\",\"values\":[10613,15005,47525,115186,193500]}],\"source_ref\":\"NVIDIA annual reports and SEC EDGAR filings\"}}]}"],
-          "bullets": [],
-          "refIds": []
-        }
-      ]
+      "title":"NVIDIA FY2022-FY2026 经营质量交互报告","subtitle":"增长、盈利、现金流与风险","format":"financial_report","includeCitations":true,"citationStyle":"IEEE",
+      "sections":[{"heading":"五年经营判断","paragraphs":["FY2024-FY2026 的收入、营业利润和经营现金流同步扩张，AI 基础设施需求显著改变业务规模与结构；同时，产品过渡、客户集中、供应链和监管变量进入重点观察范围。"],"bullets":["五年数据统一采用 NVIDIA 财年和百万美元口径","公开披露、计算指标和管理判断分别标注","季度演示拆分不得替代 10-K 原始披露"],"refIds":[],"citations":[{"id":"nvda-cite-1","resourceId":"","version":1,"sourceName":"NVIDIA Annual Reports","text":"历年年报与代理文件是五年经营数据的首要来源。","location":{"type":"url","url":"https://investor.nvidia.com/financial-info/annual-reports-and-proxies/default.aspx","section":"Annual reports"},"contentHash":"nvda-annual-reports"},{"id":"nvda-cite-2","resourceId":"","version":1,"sourceName":"NVIDIA FY2026 Form 10-K","text":"FY2026 经营结果、风险因素和财务报表应回到 SEC 原文复核。","location":{"type":"url","url":"https://www.sec.gov/Archives/edgar/data/1045810/000104581026000021/nvda-20260125.htm","section":"Form 10-K"},"contentHash":"nvda-2026-10k"}]}]
     },
     {
-      "title": "NVIDIA 五年财报分析示范汇报",
-      "subtitle": "FY2022-FY2026 增长、盈利与风险",
-      "format": "pptx",
-      "pptSkill": "guizang-huawei-style-c",
-      "includeCitations": false,
-      "citationStyle": "IEEE",
-      "sections": [
-        {"heading": "AI基础设施需求推动增长跃迁", "paragraphs": ["FY2024-FY2026收入和净利润进入加速阶段。"], "bullets": ["FY2026收入2159.38亿美元", "数据中心收入成为核心来源", "经营现金流与利润同步增强"], "refIds": []},
-        {"heading": "增长同时带来新的管理约束", "paragraphs": ["毛利率回落、库存扩张、客户集中和出口限制需要持续跟踪。"], "bullets": ["建立库存与采购义务监测", "跟踪客户和区域集中度", "观察研发投入转化效率"], "refIds": []}
-      ]
+      "title":"NVIDIA 五年经营状况管理层汇报","subtitle":"FY2022-FY2026 增长质量与风险","format":"pptx","pptSkill":"guizang-huawei-style-c","includeCitations":true,"citationStyle":"IEEE",
+      "sections":[{"heading":"AI 基础设施需求推动经营规模跃迁","paragraphs":["FY2024 起收入、利润和现金创造进入新阶段。"],"bullets":["收入与营业利润同步增长","数据中心成为核心业务引擎","现金流验证了大部分盈利增长"],"refIds":[],"citations":[{"id":"nvda-ppt-1","resourceId":"","version":1,"sourceName":"NVIDIA Annual Reports","text":"五年经营数据来自 NVIDIA 历年年报。","location":{"type":"url","url":"https://investor.nvidia.com/financial-info/annual-reports-and-proxies/default.aspx"},"contentHash":"nvda-ppt-annual"}]},{"heading":"增长质量需要结合结构与风险观察","paragraphs":["高增长提高了产品过渡、供应、客户集中和监管风险的重要性。"],"bullets":["跟踪毛利率与库存变化","观察研发投入和现金转化","按地区与客户运行压力情景"],"refIds":[],"citations":[{"id":"nvda-ppt-2","resourceId":"","version":1,"sourceName":"NVIDIA FY2026 Form 10-K","text":"最新风险与经营披露来自 FY2026 10-K。","location":{"type":"url","url":"https://www.sec.gov/Archives/edgar/data/1045810/000104581026000021/nvda-20260125.htm"},"contentHash":"nvda-ppt-10k"}]}]
     }
   ]
 }

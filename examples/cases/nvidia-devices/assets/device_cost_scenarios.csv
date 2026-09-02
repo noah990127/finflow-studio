@@ -1,0 +1,7 @@
+scenario_id,workload,annual_gpu_hours,latency_level,data_sensitivity,scale_pattern,capex_usd_k,opex_usd_k_3y,estimated_3y_tco_usd_k,decision_weight,notice
+S01,foundation_model_training,420000,batch,high,bursty,6800,2400,9200,0.28,simulated planning scenario
+S02,enterprise_inference,260000,interactive,high,steady,4100,2050,6150,0.24,simulated planning scenario
+S03,robotics_development,48000,realtime,high,distributed,720,530,1250,0.18,simulated planning scenario
+S04,visual_computing,96000,interactive,medium,steady,980,610,1590,0.14,simulated planning scenario
+S05,local_ai_prototyping,18000,interactive,high,small,110,95,205,0.10,simulated planning scenario
+S06,gaming_content_creation,12000,interactive,medium,small,36,24,60,0.06,simulated planning scenario

@@ -1,0 +1,7 @@
+region,entity_count,revenue_usd_m,pillar_two_readiness_pct,e_invoice_readiness_pct,cbam_exposure,transfer_pricing_documentation,overall_owner
+European Union,18,4200,82,71,high,complete,EU_tax_lead
+United States,9,5100,64,55,low,complete,US_tax_lead
+Asia Pacific,26,3800,58,62,medium,partial,APAC_tax_lead
+Middle East,7,920,47,44,medium,partial,MEA_tax_lead
+Latin America,8,760,41,38,low,partial,LATAM_tax_lead
+Africa,5,310,33,29,medium,gap,MEA_tax_lead

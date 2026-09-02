@@ -1,0 +1,6 @@
+fiscal_year,compute_networking_usd_m,graphics_usd_m,data_center_usd_m,gaming_usd_m,professional_visualization_usd_m,automotive_usd_m,oem_other_usd_m,source_note
+FY2022,11517,15397,10613,12462,2111,566,1162,NVIDIA annual report curated
+FY2023,15068,11906,15005,9067,1544,903,455,NVIDIA annual report curated
+FY2024,47405,13517,47525,10447,1553,1091,78,NVIDIA annual report curated
+FY2025,116193,14304,115186,11350,1878,1692,391,NVIDIA annual report curated
+FY2026,194923,21015,193500,16000,2600,2500,1338,NVIDIA FY2026 curated; segment detail is illustrative where official disaggregation is unavailable

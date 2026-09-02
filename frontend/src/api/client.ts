@@ -121,6 +121,29 @@ export const api = {
 }
 
 export const downloadUrl = (kind: 'extract-jobs' | 'files' | 'deliverables', id: string) => `/api/${kind}/${id}/download`
+
+export async function downloadFile(kind: 'extract-jobs' | 'files' | 'deliverables', id: string, fallbackName: string) {
+  const response = await fetch(downloadUrl(kind, id))
+  if (!response.ok) {
+    const raw = await response.text()
+    const body = (() => { try { return JSON.parse(raw) as { message?: string; detail?: string } } catch { return {} } })()
+    throw new Error(body.message ?? body.detail ?? `下载没有完成（HTTP ${response.status}）`)
+  }
+  const disposition = response.headers.get('Content-Disposition') ?? ''
+  const encodedName = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1]
+  const plainName = disposition.match(/filename="?([^";]+)"?/i)?.[1]
+  const fileName = encodedName ? decodeURIComponent(encodedName) : plainName || fallbackName
+  const objectUrl = URL.createObjectURL(await response.blob())
+  const anchor = document.createElement('a')
+  anchor.href = objectUrl
+  anchor.download = fileName
+  anchor.style.display = 'none'
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
+  return fileName
+}
 export const inlineContentUrl = (id: string) => `/api/files/${id}/content`
 export const deliverableContentUrl = (id: string) => `/api/deliverables/${id}/content`
 export const renderedOfficePreviewUrl = (kind: 'files' | 'deliverables', id: string, version: number) => `/api/${kind}/${id}/rendered-preview?version=${version}&renderer=pages`

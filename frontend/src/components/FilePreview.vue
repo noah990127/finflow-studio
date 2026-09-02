@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { ChevronLeft, ChevronRight, Download, X } from 'lucide-vue-next'
-import { api, deliverableContentUrl, downloadUrl, inlineContentUrl, type CsvPreview, type DocumentPreview } from '../api/client'
+import { ChevronLeft, ChevronRight, Download, LoaderCircle, X } from 'lucide-vue-next'
+import { api, deliverableContentUrl, downloadFile, inlineContentUrl, type CsvPreview, type DocumentPreview } from '../api/client'
 
 type PreviewSource = { kind: 'extract-jobs' | 'files' | 'deliverables'; id: string; name: string; format: string }
 const props = defineProps<{ source: PreviewSource }>()
@@ -9,6 +9,7 @@ defineEmits<{ close: [] }>()
 const csv = ref<CsvPreview | null>(null)
 const document = ref<DocumentPreview | null>(null)
 const loading = ref(true)
+const downloading = ref(false)
 const error = ref('')
 const cursors = ref<Array<string | undefined>>([undefined])
 const pageIndex = ref(0)
@@ -41,12 +42,17 @@ async function load() {
   finally { loading.value = false }
 }
 onMounted(load)
+async function download() {
+  downloading.value = true
+  try { await downloadFile(props.source.kind, props.source.id, props.source.name) }
+  finally { downloading.value = false }
+}
 </script>
 
 <template>
   <Teleport to="body"><div class="preview-backdrop" role="presentation" @click.self="$emit('close')">
     <section class="preview-dialog" role="dialog" aria-modal="true" :aria-label="`预览 ${source.name}`">
-      <header class="preview-toolbar"><div><strong>{{ source.name }}</strong><span v-if="csv">第 {{ csv.rowOffset + 1 }} - {{ csv.rowOffset + csv.rows.length }} 行</span><span v-else-if="document">{{ document.pages.length }} {{ document.kind === 'presentation' ? '页幻灯片' : '页' }}</span></div><nav><a class="icon-button" :href="downloadUrl(source.kind, source.id)" title="下载原文件"><Download :size="18"/></a><button class="icon-button" type="button" title="关闭" @click="$emit('close')"><X :size="19"/></button></nav></header>
+      <header class="preview-toolbar"><div><strong>{{ source.name }}</strong><span v-if="csv">第 {{ csv.rowOffset + 1 }} - {{ csv.rowOffset + csv.rows.length }} 行</span><span v-else-if="document">{{ document.pages.length }} {{ document.kind === 'presentation' ? '页幻灯片' : '页' }}</span></div><nav><button class="icon-button" type="button" :disabled="downloading" title="下载原文件" @click="download"><LoaderCircle v-if="downloading" class="spin" :size="18"/><Download v-else :size="18"/></button><button class="icon-button" type="button" title="关闭" @click="$emit('close')"><X :size="19"/></button></nav></header>
       <div v-if="loading" class="preview-state">正在打开文件…</div>
       <div v-else-if="error" class="preview-state error">{{ error }}</div>
       <iframe v-else-if="mode === 'pdf'" class="pdf-preview" :src="inlineContentUrl(source.id)" :title="source.name"></iframe>

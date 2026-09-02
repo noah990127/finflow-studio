@@ -1,0 +1,4 @@
+scenario,global_etr_pct,top_up_tax_usd_m,cbam_cost_usd_m,compliance_cost_usd_m,data_remediation_cost_usd_m,total_cash_impact_usd_m,probability_pct,notice
+base,17.8,24,18,9,6,57,50,simulated management scenario
+upside,18.6,12,11,8,4,35,20,simulated management scenario
+downside,16.9,46,31,13,10,100,30,simulated management scenario

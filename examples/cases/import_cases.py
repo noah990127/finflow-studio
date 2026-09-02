@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Import the two curated FinFlow demo cases through the public HTTP API."""
+"""Import the curated FinFlow demo cases through the public HTTP API."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from urllib.request import Request, urlopen
 
 
 ROOT = Path(__file__).resolve().parent
-CASE_NAMES = ("nvidia", "qiming")
+CASE_NAMES = ("nvidia-devices", "nvidia", "global-tax-2026", "qiming")
 
 
 class Api:

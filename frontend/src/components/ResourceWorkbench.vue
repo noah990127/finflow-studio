@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, ref, watch } from 'vue'
 import { Braces, CheckCircle2, ChevronDown, ChevronRight, Database, Download, ExternalLink, Eye, FilePenLine, FileText, Globe2, LoaderCircle, Pencil, Play, Plus, RefreshCw, Save, Search, Server, Trash2, X } from 'lucide-vue-next'
-import { api, deliverableContentUrl, downloadUrl, inlineContentUrl, renderedOfficePreviewUrl, type CitationSource, type ConnectionPreview, type CsvPreview, type DataConnection, type DatabaseCatalog, type DatabaseTable, type DocumentPreview, type WorkspaceResource } from '../api/client'
+import { api, deliverableContentUrl, downloadFile, inlineContentUrl, renderedOfficePreviewUrl, type CitationSource, type ConnectionPreview, type CsvPreview, type DataConnection, type DatabaseCatalog, type DatabaseTable, type DocumentPreview, type WorkspaceResource } from '../api/client'
 import DiagramPreview from './DiagramPreview.vue'
 import OfficeEditor from './OfficeEditor.vue'
 import CitationAnchor from './CitationAnchor.vue'
@@ -11,6 +11,7 @@ const InteractiveFinancialReport = defineAsyncComponent(() => import('./Interact
 const props = defineProps<{ resource: WorkspaceResource }>()
 defineEmits<{ addToWorkflow: [resource: WorkspaceResource]; manageData: []; deleteResource: [resource: WorkspaceResource]; openSource: [citation: CitationSource] }>()
 const loading = ref(false), error = ref(''), editing = ref(false), officeFallback = ref(false), csv = ref<CsvPreview | null>(null), document = ref<DocumentPreview | null>(null)
+const downloadLoading = ref(false), downloadMessage = ref('')
 const connection = ref<DataConnection | null>(null), connectionPreview = ref<ConnectionPreview | null>(null)
 const citations = ref<CitationSource[]>([]), citationError = ref('')
 const previewQuery = ref(''), previewLoading = ref(false), testLoading = ref(false), connectionMessage = ref('')
@@ -63,6 +64,12 @@ async function loadCitations() {
   if (props.resource.resourceType !== 'DELIVERABLE') return
   try { citations.value = await api.getDeliverableCitations(props.resource.id, props.resource.currentVersion) }
   catch (reason) { citationError.value = reason instanceof Error ? reason.message : '引用信息没有加载成功' }
+}
+async function downloadCurrent() {
+  downloadLoading.value = true; downloadMessage.value = ''
+  try { await downloadFile(sourceKind.value, props.resource.id, props.resource.name) }
+  catch (reason) { downloadMessage.value = reason instanceof Error ? reason.message : '文件下载失败' }
+  finally { downloadLoading.value = false }
 }
 async function loadCatalog() {
   if (!connection.value || connection.value.sourceType === 'HTTP_API') return
@@ -150,11 +157,12 @@ async function previewData() {
         <div v-if="isEditable" class="view-mode-switch"><button type="button" :class="{ active: !editing }" title="查看" @click="editing = false"><Eye :size="15"/></button><button type="button" :class="{ active: editing }" title="在线编辑" @click="editing = true"><FilePenLine :size="15"/></button></div>
         <button class="secondary-button" type="button" @click="$emit('addToWorkflow', resource)"><Plus :size="15"/>{{ resource.inProjectWorkflow ? '已在工作流' : '加入工作流' }}</button>
         <a v-if="isWebUrl" class="secondary-button" :href="resource.url" target="_blank" rel="noopener noreferrer"><ExternalLink :size="15"/>新窗口打开</a>
-        <a v-else-if="!isConnection && !isFinancialReport" class="secondary-button" :href="downloadUrl(sourceKind, resource.id)"><Download :size="15"/>下载</a>
+        <button v-else-if="!isConnection" class="secondary-button" type="button" :disabled="downloadLoading" @click="downloadCurrent"><LoaderCircle v-if="downloadLoading" class="spin" :size="15"/><Download v-else :size="15"/>{{ downloadLoading ? '正在下载' : '下载' }}</button>
         <button class="icon-button danger" type="button" title="删除" @click="$emit('deleteResource', resource)"><Trash2 :size="16"/></button>
         <button class="icon-button" type="button" title="刷新内容" @click="load"><RefreshCw :size="17"/></button>
       </nav>
     </header>
+    <aside v-if="downloadMessage" class="resource-download-message"><span>{{ downloadMessage }}</span><button type="button" title="关闭" @click="downloadMessage = ''"><X :size="14"/></button></aside>
     <aside v-if="(citations.length || citationError) && !isFinancialReport" class="deliverable-citation-strip" :class="{ error: citationError }"><span>{{ citationError || '引用来源 · 悬停查看原文' }}</span><CitationAnchor v-for="(citation, index) in citations" :key="citation.id" compact :citation="citation" :label="`[${index + 1}]`" @open-source="$emit('openSource', $event)"/></aside>
 
     <div v-if="loading" class="resource-state"><LoaderCircle class="spin" :size="22"/>正在打开内容</div>

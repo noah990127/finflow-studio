@@ -372,6 +372,8 @@
 .view-mode-switch button { width: 30px; height: 28px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 4px; color: #6b7c91; background: transparent; }
 .view-mode-switch button.active { color: #1764bd; background: #fff; box-shadow: 0 1px 3px rgba(34, 67, 105, .14); }
 .resource-toolbar a { text-decoration: none; font-size: 10px; }
+.resource-download-message { position: absolute; z-index: 9; top: 58px; left: 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 34px; max-width: min(56vw, 520px); padding: 6px 10px; border: 1px solid #fecaca; border-radius: 6px; background: #fff7f7; box-shadow: 0 5px 18px rgba(29, 59, 93, .12); color: #b42318; font-size: 12px; }
+.resource-download-message button { display: inline-grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; background: transparent; color: inherit; cursor: pointer; }
 .resource-state { min-height: 320px; display: grid; place-content: center; justify-items: center; padding: 30px; color: #6e7f94; text-align: center; }
 .resource-state strong { margin-top: 10px; color: #32465f; }
 .resource-state p { margin: 7px 0 18px; font-size: 11px; }

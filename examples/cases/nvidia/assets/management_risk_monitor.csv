@@ -1,0 +1,7 @@
+risk_id,risk_theme,leading_indicator,fy2026_observation,threshold,monitor_frequency,owner,source_type
+R01,export_controls,restricted_market_revenue_share,material exposure,policy change,monthly,legal_and_finance,official filing
+R02,customer_concentration,top_customer_share,concentrated,greater_than_10_pct,quarterly,sales_finance,official filing
+R03,inventory,inventory_growth_pct,inventory increased,above_revenue_growth,quarterly,supply_chain_finance,financial data
+R04,gross_margin,gross_margin_pct,71.1,below_70_pct,quarterly,fp_and_a,financial data
+R05,supply_commitments,purchase_commitments_usd_m,material,plan_variance_above_10_pct,monthly,procurement_finance,official filing
+R06,product_transition,old_generation_mix,transition risk,unexpected_mix_shift,monthly,product_finance,management judgment

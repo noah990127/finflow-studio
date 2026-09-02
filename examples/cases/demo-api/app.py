@@ -48,6 +48,25 @@ NVIDIA_FIVE_YEAR_FINANCIALS = [
     },
 ]
 
+NVIDIA_PRODUCT_PORTFOLIO = [
+    {"segment": "AI数据中心", "platform": "DGX Vera Rubin NVL72", "generation": "Rubin", "form_factor": "机柜级系统", "target_workload": "大模型训练、推理与Agentic AI", "lifecycle": "2026年下半年合作伙伴可用", "evidence_url": "https://www.nvidia.com/en-us/data-center/technologies/rubin/"},
+    {"segment": "AI数据中心", "platform": "DGX Rubin NVL8", "generation": "Rubin", "form_factor": "8 GPU系统", "target_workload": "企业训练、后训练与推理", "lifecycle": "2026年发布", "evidence_url": "https://www.nvidia.com/en-us/data-center/dgx-rubin-nvl8/"},
+    {"segment": "AI数据中心", "platform": "GB300 NVL72", "generation": "Blackwell Ultra", "form_factor": "机柜级系统", "target_workload": "大规模推理与复杂推理", "lifecycle": "当前产品", "evidence_url": "https://www.nvidia.com/en-us/data-center/products/"},
+    {"segment": "企业服务器", "platform": "RTX PRO 6000 Blackwell Server Edition", "generation": "Blackwell", "form_factor": "PCIe GPU", "target_workload": "企业AI、数据科学与视觉计算", "lifecycle": "当前产品", "evidence_url": "https://www.nvidia.com/en-us/data-center/products/"},
+    {"segment": "边缘AI", "platform": "Jetson AGX Thor", "generation": "Blackwell", "form_factor": "嵌入式模组", "target_workload": "机器人与物理AI", "lifecycle": "当前产品", "evidence_url": "https://www.nvidia.com/en-us/autonomous-machines/embedded-systems/"},
+    {"segment": "专业工作站", "platform": "DGX Spark", "generation": "Grace Blackwell", "form_factor": "桌面AI系统", "target_workload": "本地AI开发与原型验证", "lifecycle": "当前产品", "evidence_url": "https://www.nvidia.com/en-us/products/workstations/dgx-spark/"},
+    {"segment": "汽车", "platform": "DRIVE AGX", "generation": "车规计算平台", "form_factor": "车载系统", "target_workload": "自动驾驶与智能座舱", "lifecycle": "平台产品", "evidence_url": "https://www.nvidia.com/en-us/self-driving-cars/drive-platform/hardware/"},
+    {"segment": "游戏与创作", "platform": "GeForce RTX 5090", "generation": "Blackwell", "form_factor": "消费级GPU", "target_workload": "4K游戏、生成式AI与内容创作", "lifecycle": "当前产品", "evidence_url": "https://www.nvidia.com/en-us/geforce/graphics-cards/50-series/rtx-5090/"},
+]
+
+GLOBAL_TAX_2026_TRENDS = [
+    {"theme": "OECD Pillar Two", "region": "全球", "effective_period": "2024-2026", "status": "执行与申报基础设施完善", "impact": "15%全球最低税的GIR、安全港与数据口径", "priority": 5, "source_url": "https://www.oecd.org/en/about/news/announcements/2026/05/global-minimum-tax-release-of-a-common-understanding-of-implementing-jurisdictions-and-further-administrative-guidance-to-support-compliance.html"},
+    {"theme": "EU CBAM", "region": "欧盟", "effective_period": "2026-01-01", "status": "正式阶段", "impact": "授权申报人、嵌入排放与证书成本", "priority": 5, "source_url": "https://taxation-customs.ec.europa.eu/carbon-border-adjustment-mechanism/cbam-definitive-regime_en"},
+    {"theme": "EU ViDA", "region": "欧盟", "effective_period": "2026准备期", "status": "分阶段实施", "impact": "电子发票、数字报告、平台经济和单一VAT登记", "priority": 4, "source_url": "https://taxation-customs.ec.europa.eu/news/vat-digital-age-2026-work-programme-available-2026-05-22_en"},
+    {"theme": "US OBBBA corporate provisions", "region": "美国", "effective_period": "2026", "status": "多项企业税条款生效", "impact": "利息扣除、BEAT、CAMT与部分能源激励", "priority": 4, "source_url": "https://www.irs.gov/instructions/i8991"},
+    {"theme": "UN tax convention", "region": "全球", "effective_period": "2025-2027谈判", "status": "2026年实质性谈判", "impact": "国际税收合作、服务课税与争议防范", "priority": 3, "source_url": "https://financing.desa.un.org/unfcitc"},
+]
+
 
 @app.get("/health")
 def health() -> dict:
@@ -85,3 +104,13 @@ def nvidia_five_year_financials() -> StreamingResponse:
             }, ensure_ascii=False) + "\n"
 
     return StreamingResponse(rows(), media_type="application/x-ndjson")
+
+
+@app.get("/api/v1/companies/nvidia/product-portfolio")
+def nvidia_product_portfolio() -> StreamingResponse:
+    return StreamingResponse((json.dumps(item, ensure_ascii=False) + "\n" for item in NVIDIA_PRODUCT_PORTFOLIO), media_type="application/x-ndjson")
+
+
+@app.get("/api/v1/tax/2026-policy-trends")
+def global_tax_2026_trends() -> StreamingResponse:
+    return StreamingResponse((json.dumps(item, ensure_ascii=False) + "\n" for item in GLOBAL_TAX_2026_TRENDS), media_type="application/x-ndjson")

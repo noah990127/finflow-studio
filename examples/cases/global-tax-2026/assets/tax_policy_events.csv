@@ -1,0 +1,8 @@
+event_id,theme,jurisdiction,effective_date,status,affected_process,data_requirement,priority,official_source
+T001,OECD Pillar Two,Global,2024-01-01,implementation,GloBE calculation and GIR,entity tax and financial accounts,5,OECD
+T002,GIR filing readiness,Implementing jurisdictions,2026-05-31,administrative coordination,central filing and exchange,portal and exchange relationship,5,OECD
+T003,CBAM definitive regime,European Union,2026-01-01,effective,EU imports of covered goods,embedded emissions and carbon price paid,5,European Commission
+T004,ViDA programme,European Union,2026-05-22,implementation preparation,VAT and e-invoicing roadmap,transaction and platform data,4,European Commission
+T005,BEAT amendments,United States,2026-01-01,effective,base erosion payments,related-party payment details,4,IRS
+T006,Section 163j changes,United States,2026-01-01,effective,business interest limitation,ATI and CFC inclusion mapping,4,IRS
+T007,UN tax convention,Global,2026-02-02,negotiation,cross-border tax cooperation,services and dispute data,3,United Nations

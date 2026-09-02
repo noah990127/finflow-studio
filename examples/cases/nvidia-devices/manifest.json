@@ -1,0 +1,66 @@
+{
+  "name": "NVIDIA 设备与产品组合决策分析",
+  "description": "融合 PostgreSQL 模拟基准、产品组合 API、成本与工作负载 CSV、Word 访谈、PDF 路线资料及 NVIDIA 官方网页，形成设备选型评分、管理报告和多种可视化成果。",
+  "files": [
+    {"key": "cost", "path": "assets/device_cost_scenarios.csv"},
+    {"key": "workloads", "path": "assets/workload_requirements.csv"},
+    {"key": "rules", "path": "assets/device_selection_rules.md"},
+    {"key": "roadmap", "path": "assets/NVIDIA产品路线与应用摘要.pdf"},
+    {"key": "interview", "path": "assets/NVIDIA设备选型访谈纪要_模拟.docx"}
+  ],
+  "connections": [
+    {
+      "key": "device-db", "name": "NVIDIA 设备性能基准 PostgreSQL", "sourceType": "POSTGRESQL",
+      "jdbcUrlEnv": "FINFLOW_DEMO_DATABASE_URL", "jdbcUrlDefault": "jdbc:postgresql://postgres:5432/finflow",
+      "usernameEnv": "FINFLOW_DEMO_DATABASE_USERNAME", "usernameDefault": "finflow",
+      "secretRef": "env:DATABASE_PASSWORD", "options": {"ApplicationName": "FinFlowNvidiaDeviceDemo"}
+    },
+    {
+      "key": "product-api", "name": "NVIDIA 产品组合数据服务", "sourceType": "HTTP_API",
+      "jdbcUrlEnv": "FINFLOW_NVIDIA_PRODUCT_API_URL", "jdbcUrlDefault": "http://demo-api:8011/api/v1/companies/nvidia/product-portfolio",
+      "options": {"format": "jsonl"}
+    }
+  ],
+  "workflow": "workflow.json",
+  "postgresInit": "postgres-init.sql",
+  "legacyRefs": {
+    "10000000-0000-4000-8000-000000000001": "connection:device-db",
+    "10000000-0000-4000-8000-000000000002": "connection:product-api",
+    "10000000-0000-4000-8000-000000000011": "file:cost",
+    "10000000-0000-4000-8000-000000000012": "file:workloads",
+    "10000000-0000-4000-8000-000000000013": "file:rules",
+    "10000000-0000-4000-8000-000000000014": "file:roadmap",
+    "10000000-0000-4000-8000-000000000015": "file:interview"
+  },
+  "deliverables": [
+    {
+      "title": "NVIDIA 设备组合决策交互报告",
+      "subtitle": "训练、推理、机器人与本地开发场景",
+      "format": "financial_report",
+      "includeCitations": true,
+      "citationStyle": "APA_7",
+      "sections": [{
+        "heading": "组合建议",
+        "paragraphs": ["将工作负载适配、部署成熟度、三年成本、能效与上线周期放入同一评分模型。近期生产需求优先采用成熟平台，Rubin 作为下一代容量规划与验证路线。"],
+        "bullets": ["训练与推理分池，避免昂贵训练资源被低利用率服务占用", "机器人与边缘场景独立评估实时性和功耗", "成本及性能指数均为模拟，采购前必须以报价和 PoC 替换"],
+        "refIds": [],
+        "citations": [
+          {"id": "device-cite-1", "resourceId": "", "version": 1, "sourceName": "NVIDIA Products", "text": "NVIDIA 产品组合覆盖数据中心、专业可视化、汽车、嵌入式与消费级计算。", "location": {"type": "url", "url": "https://www.nvidia.com/en-us/products/", "section": "Products"}, "contentHash": "demo-device-products"},
+          {"id": "device-cite-2", "resourceId": "", "version": 1, "sourceName": "NVIDIA Vera Rubin", "text": "Rubin 平台面向下一代 AI 基础设施，需结合交付时点与系统准备度评估。", "location": {"type": "url", "url": "https://www.nvidia.com/en-us/data-center/technologies/rubin/", "section": "Platform overview"}, "contentHash": "demo-device-rubin"}
+        ]
+      }]
+    },
+    {
+      "title": "NVIDIA 设备组合决策汇报",
+      "subtitle": "场景适配、TCO 与部署路线",
+      "format": "pptx",
+      "pptSkill": "guizang-huawei-style-c",
+      "includeCitations": true,
+      "citationStyle": "APA_7",
+      "sections": [
+        {"heading": "设备组合应围绕工作负载分层", "paragraphs": ["训练、在线推理、边缘实时和本地开发对平台的要求不同。"], "bullets": ["训练侧重扩展和互联", "推理侧重吞吐、延迟与利用率", "边缘侧重实时性、功耗和数据边界"], "refIds": [], "citations": [{"id": "device-ppt-1", "resourceId": "", "version": 1, "sourceName": "NVIDIA Data Center Products", "text": "官方产品页按数据中心系统、GPU、网络和企业平台组织产品组合。", "location": {"type": "url", "url": "https://www.nvidia.com/en-us/data-center/products/"}, "contentHash": "demo-device-dc"}]},
+        {"heading": "近期落地与下一代验证并行", "paragraphs": ["使用成熟平台承接近期生产负载，同时建立 Rubin 验证窗口。"], "bullets": ["先验证软件与数据链路", "再锁定机房、电力和冷却", "以三年单位工作负载成本复核采购"], "refIds": [], "citations": [{"id": "device-ppt-2", "resourceId": "", "version": 1, "sourceName": "NVIDIA DGX Rubin NVL8", "text": "DGX Rubin NVL8 是面向企业 AI 工厂的集成系统。", "location": {"type": "url", "url": "https://www.nvidia.com/en-us/data-center/dgx-rubin-nvl8/"}, "contentHash": "demo-device-dgx"}]}
+      ]
+    }
+  ]
+}
