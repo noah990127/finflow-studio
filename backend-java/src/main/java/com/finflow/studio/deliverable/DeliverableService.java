@@ -1,6 +1,7 @@
 package com.finflow.studio.deliverable;
 
 import com.finflow.studio.deliverable.DeliverableModels.CreateRequest;
+import com.finflow.studio.deliverable.DeliverableModels.CitationRequest;
 import com.finflow.studio.deliverable.DeliverableModels.Response;
 import com.finflow.studio.project.ProjectService;
 import com.finflow.studio.storage.BlobStore;
@@ -151,7 +152,7 @@ public class DeliverableService {
     }
 
     public List<Map<String, Object>> citations(String id, Integer version) {
-        get(id);
+        var deliverable = get(id);
         var sql = version == null
                 ? "select v.source_spec_json from deliverable_resource r join deliverable_version v on v.resource_id = r.id and v.version_number = r.current_version where r.id = :id"
                 : "select source_spec_json from deliverable_version where resource_id = :id and version_number = :version";
@@ -179,6 +180,10 @@ public class DeliverableService {
                 result.putIfAbsent(citationId, citation);
             }
         }
+        if (result.isEmpty() && Boolean.TRUE.equals(specification.get("include_citations"))) {
+            legacyWorkflowCitations(deliverable.projectId(), id, specification).forEach(citation ->
+                    result.putIfAbsent(Objects.toString(citation.get("id")), citation));
+        }
         return List.copyOf(result.values());
     }
 
@@ -202,6 +207,19 @@ public class DeliverableService {
                                 "location", readMap(rs.getString("location_json")),
                                 "content_hash", rs.getString("content_hash"))).optional()
                         .orElseThrow(() -> new IllegalArgumentException("Ref 不存在、已过期或不属于当前项目：" + refId));
+                refs.add(ref);
+            }
+            for (var citation : section.citations() == null ? List.<CitationRequest>of() : section.citations()) {
+                if (citation == null || citation.id() == null || citation.id().isBlank()) continue;
+                if (refs.stream().anyMatch(ref -> citation.id().equals(ref.get("ref_id")))) continue;
+                var ref = new LinkedHashMap<String, Object>();
+                ref.put("ref_id", citation.id());
+                ref.put("resource_id", Objects.toString(citation.resourceId(), ""));
+                ref.put("version", citation.version());
+                ref.put("source_name", Objects.toString(citation.sourceName(), "未命名资料"));
+                ref.put("text", Objects.toString(citation.text(), ""));
+                ref.put("location", citation.location() == null ? Map.of() : citation.location());
+                ref.put("content_hash", Objects.toString(citation.contentHash(), ""));
                 refs.add(ref);
             }
             sections.add(Map.of("heading", section.heading(),
@@ -275,4 +293,44 @@ public class DeliverableService {
     }
 
     private List<?> list(Object value) { return value instanceof List<?> items ? items : List.of(); }
+
+    private List<Map<String, Object>> legacyWorkflowCitations(String projectId, String deliverableId,
+                                                               Map<String, Object> specification) {
+        var style = Objects.toString(specification.get("citation_style"), "IEEE");
+        var definitions = jdbc.sql("""
+                        select v.definition_json from workflow_run r
+                        join workflow_version v on v.workflow_id = r.workflow_id and v.version_number = r.workflow_version
+                        where r.project_id = :projectId and r.output_json like :deliverable
+                        order by r.created_at desc limit 1
+                        """).param("projectId", projectId).param("deliverable", "%" + deliverableId + "%")
+                .query(String.class).list();
+        if (definitions.isEmpty()) {
+            definitions = jdbc.sql("""
+                            select v.definition_json from workflow_definition d
+                            join workflow_version v on v.workflow_id = d.id and v.version_number = d.current_version
+                            where d.project_id = :projectId order by d.updated_at desc limit 1
+                            """).param("projectId", projectId).query(String.class).list();
+        }
+        var result = new LinkedHashMap<String, Map<String, Object>>();
+        for (var definitionJson : definitions) {
+            for (var nodeValue : list(readMap(definitionJson).get("nodes"))) {
+                if (!(nodeValue instanceof Map<?, ?> node) || !"LINK_INPUT".equals(Objects.toString(node.get("type")))) continue;
+                var config = node.get("config") instanceof Map<?, ?> value ? value : Map.of();
+                var url = Objects.toString(config.get("url"), "").trim();
+                if (url.isBlank()) continue;
+                var sourceName = Objects.toString(config.get("title"), Objects.toString(node.get("name"), url));
+                var id = "link:" + UUID.nameUUIDFromBytes(url.getBytes(StandardCharsets.UTF_8));
+                var index = result.size() + 1;
+                var formatted = "APA_7".equals(style)
+                        ? sourceName + ". (n.d.). " + url
+                        : "[" + index + "] " + sourceName + ". " + url;
+                result.putIfAbsent(id, new LinkedHashMap<>(Map.of(
+                        "id", id, "resource_id", "", "version", 0, "source_name", sourceName,
+                        "text", "网页资料：" + sourceName, "location", Map.of("url", url),
+                        "content_hash", UUID.nameUUIDFromBytes(url.getBytes(StandardCharsets.UTF_8)).toString(),
+                        "formatted", formatted)));
+            }
+        }
+        return List.copyOf(result.values());
+    }
 }

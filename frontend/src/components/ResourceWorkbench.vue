@@ -12,7 +12,7 @@ const props = defineProps<{ resource: WorkspaceResource }>()
 defineEmits<{ addToWorkflow: [resource: WorkspaceResource]; manageData: []; deleteResource: [resource: WorkspaceResource]; openSource: [citation: CitationSource] }>()
 const loading = ref(false), error = ref(''), editing = ref(false), officeFallback = ref(false), csv = ref<CsvPreview | null>(null), document = ref<DocumentPreview | null>(null)
 const connection = ref<DataConnection | null>(null), connectionPreview = ref<ConnectionPreview | null>(null)
-const citations = ref<CitationSource[]>([])
+const citations = ref<CitationSource[]>([]), citationError = ref('')
 const previewQuery = ref(''), previewLoading = ref(false), testLoading = ref(false), connectionMessage = ref('')
 const connectionEditing = ref(false), connectionSaving = ref(false), catalogLoading = ref(false), catalog = ref<DatabaseCatalog | null>(null)
 const catalogSearch = ref(''), expandedSchemas = ref<string[]>([]), selectedTable = ref<DatabaseTable | null>(null)
@@ -59,10 +59,10 @@ async function load() {
   finally { loading.value = false }
 }
 async function loadCitations() {
-  citations.value = []
+  citations.value = []; citationError.value = ''
   if (props.resource.resourceType !== 'DELIVERABLE') return
   try { citations.value = await api.getDeliverableCitations(props.resource.id, props.resource.currentVersion) }
-  catch { citations.value = [] }
+  catch (reason) { citationError.value = reason instanceof Error ? reason.message : '引用信息没有加载成功' }
 }
 async function loadCatalog() {
   if (!connection.value || connection.value.sourceType === 'HTTP_API') return
@@ -155,7 +155,7 @@ async function previewData() {
         <button class="icon-button" type="button" title="刷新内容" @click="load"><RefreshCw :size="17"/></button>
       </nav>
     </header>
-    <aside v-if="citations.length && !isFinancialReport" class="deliverable-citation-strip"><span>引用来源</span><CitationAnchor v-for="(citation, index) in citations" :key="citation.id" compact :citation="citation" :label="`[${index + 1}]`" @open-source="$emit('openSource', $event)"/></aside>
+    <aside v-if="(citations.length || citationError) && !isFinancialReport" class="deliverable-citation-strip" :class="{ error: citationError }"><span>{{ citationError || '引用来源 · 悬停查看原文' }}</span><CitationAnchor v-for="(citation, index) in citations" :key="citation.id" compact :citation="citation" :label="`[${index + 1}]`" @open-source="$emit('openSource', $event)"/></aside>
 
     <div v-if="loading" class="resource-state"><LoaderCircle class="spin" :size="22"/>正在打开内容</div>
     <div v-else-if="error" class="resource-state error"><FileText :size="24"/><strong>暂时无法显示</strong><p>{{ error }}</p></div>

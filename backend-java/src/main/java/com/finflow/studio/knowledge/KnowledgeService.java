@@ -213,6 +213,19 @@ public class KnowledgeService {
                 .limit(Math.max(1, Math.min(limit, 20))).toList();
     }
 
+    public List<RefResponse> currentRefs(String resourceId, int limit) {
+        get(resourceId);
+        return jdbc.sql("""
+                        select k.* from knowledge_ref k
+                        join file_resource r on r.id = k.resource_id and r.current_version = k.version_number
+                        where k.resource_id = :resourceId order by k.chunk_index limit :limit
+                        """).param("resourceId", resourceId).param("limit", Math.max(1, Math.min(limit, 50)))
+                .query((rs, rowNum) -> new RefResponse(rs.getString("id"), rs.getString("project_id"),
+                        rs.getString("resource_id"), rs.getInt("version_number"), rs.getString("source_name"),
+                        rs.getString("text_content"), readMap(rs.getString("location_json")),
+                        rs.getString("content_hash"), 1.0)).list();
+    }
+
     private void parse(String versionId) {
         var version = jdbc.sql("""
                         select v.*, r.project_id from file_version v join file_resource r on r.id = v.resource_id

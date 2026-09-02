@@ -4,6 +4,7 @@ import com.finflow.studio.data.DataModels.CreateExtractRequest;
 import com.finflow.studio.data.ExtractJobService;
 import com.finflow.studio.data.DataTransformService;
 import com.finflow.studio.deliverable.DeliverableModels.CreateRequest;
+import com.finflow.studio.deliverable.DeliverableModels.CitationRequest;
 import com.finflow.studio.deliverable.DeliverableModels.SectionRequest;
 import com.finflow.studio.deliverable.DeliverableService;
 import com.finflow.studio.knowledge.KnowledgeService;
@@ -242,10 +243,13 @@ public class WorkflowRunService {
         return switch (node.type()) {
             case FILE_INPUT -> {
                 var file = knowledge.get(text(config, "resourceId"));
+                var refs = knowledge.currentRefs(file.id(), 24);
                 yield Map.of("fileId", file.id(), "name", file.name(), "version", file.currentVersion(),
-                        "downloadUrl", "/api/files/" + file.id() + "/download");
+                        "downloadUrl", "/api/files/" + file.id() + "/download",
+                        "refs", refs.stream().map(this::refMap).toList(),
+                        "refIds", refs.stream().map(ref -> ref.id()).toList());
             }
-            case LINK_INPUT -> Map.of("url", text(config, "url"), "title", optional(config, "title", node.name()));
+            case LINK_INPUT -> linkInput(node, config);
             case DATASET_INPUT -> {
                 var job = extracts.get(text(config, "extractJobId"));
                 if (!job.projectId().equals(run.projectId())) throw new IllegalArgumentException("数据文件不属于当前项目");
@@ -567,7 +571,8 @@ public class WorkflowRunService {
         var generatedBody = Objects.toString(generation.get("content"), body);
         var refIds = includeCitations ? collectRefIds(context) : List.<String>of();
         var section = new SectionRequest(optional(config, "heading", "分析结果"), List.of(generatedBody),
-                stringList(findValue(upstream, "points")), refIds);
+                stringList(findValue(upstream, "points")), refIds,
+                includeCitations ? collectCitations(context) : List.of());
         events.publish(runId, "STEP_PROGRESS", node.id(), node.name(), "RUNNING", Math.max(startProgress, endProgress - 1),
                 "正在写入 " + format + " 文件", "");
         var item = deliverables.create(new CreateRequest(projectId, optional(config, "outputResourceId", null), text(config, "title"),
@@ -714,6 +719,42 @@ public class WorkflowRunService {
         var ids = new LinkedHashSet<String>();
         context.values().forEach(output -> stringList(output.get("refIds")).forEach(ids::add));
         return List.copyOf(ids);
+    }
+
+    private Map<String, Object> linkInput(NodeDefinition node, Map<String, Object> config) {
+        var url = text(config, "url");
+        var title = optional(config, "title", node.name());
+        var id = "link:" + UUID.nameUUIDFromBytes(url.getBytes(StandardCharsets.UTF_8));
+        var ref = Map.<String, Object>of("id", id, "resourceId", "", "version", 0,
+                "sourceName", title, "text", "网页资料：" + title,
+                "location", Map.of("url", url), "contentHash", UUID.nameUUIDFromBytes(url.getBytes(StandardCharsets.UTF_8)).toString());
+        return Map.of("url", url, "title", title, "refs", List.of(ref), "refIds", List.of(id));
+    }
+
+    private Map<String, Object> refMap(com.finflow.studio.knowledge.KnowledgeModels.RefResponse ref) {
+        return Map.of("id", ref.id(), "resourceId", ref.resourceId(), "version", ref.version(),
+                "sourceName", ref.sourceName(), "text", ref.text(), "location", ref.location(),
+                "contentHash", ref.contentHash());
+    }
+
+    private List<CitationRequest> collectCitations(Map<String, Map<String, Object>> context) {
+        var result = new LinkedHashMap<String, CitationRequest>();
+        for (var output : context.values()) {
+            for (var item : list(output.get("refs"))) {
+                if (!(item instanceof Map<?, ?> ref)) continue;
+                var id = Objects.toString(ref.get("id"), "");
+                if (id.isBlank()) continue;
+                var location = new LinkedHashMap<String, Object>();
+                if (ref.get("location") instanceof Map<?, ?> rawLocation) {
+                    rawLocation.forEach((key, value) -> location.put(Objects.toString(key), value));
+                }
+                result.putIfAbsent(id, new CitationRequest(id, Objects.toString(ref.get("resourceId"), ""),
+                        ref.get("version") instanceof Number number ? number.intValue() : 0,
+                        Objects.toString(ref.get("sourceName"), "未命名资料"), Objects.toString(ref.get("text"), ""),
+                        location, Objects.toString(ref.get("contentHash"), "")));
+            }
+        }
+        return List.copyOf(result.values());
     }
 
     private String citationRequirement(boolean include, String style) {

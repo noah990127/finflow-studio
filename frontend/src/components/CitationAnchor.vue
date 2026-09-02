@@ -11,6 +11,7 @@ let cleanup: (() => void) | undefined
 let closeTimer: number | undefined
 
 const displayLabel = computed(() => props.label || props.citation.formatted || props.citation.source_name)
+const sourceUrl = computed(() => typeof props.citation.location?.url === 'string' ? props.citation.location.url : '')
 const excerpt = computed(() => {
   const value = props.citation.text?.replace(/\s+/g, ' ').trim() || '当前来源没有可展示的原文摘要。'
   return value.length > 220 ? `${value.slice(0, 220)}…` : value
@@ -48,7 +49,7 @@ onBeforeUnmount(() => { cleanup?.(); if (closeTimer) window.clearTimeout(closeTi
       <header><span><FileText :size="15"/></span><div><small>参考来源</small><strong>{{ citation.source_name }}</strong></div></header>
       <dl><div><dt>位置</dt><dd>{{ location }}</dd></div><div v-if="citation.version"><dt>版本</dt><dd>第 {{ citation.version }} 版</dd></div></dl>
       <blockquote>{{ excerpt }}</blockquote>
-      <footer><span v-if="citation.content_hash">来源内容已固化</span><button v-if="citation.resource_id" type="button" @click="openSource">在工作区查看<ExternalLink :size="13"/></button></footer>
+      <footer><span v-if="citation.content_hash">来源信息已记录</span><button v-if="citation.resource_id" type="button" @click="openSource">在工作区查看<ExternalLink :size="13"/></button><a v-else-if="sourceUrl" :href="sourceUrl" target="_blank" rel="noopener noreferrer">打开原网页<ExternalLink :size="13"/></a></footer>
     </article>
   </Teleport>
 </template>
