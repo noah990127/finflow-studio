@@ -69,15 +69,20 @@ public class DeliverableController {
     public void content(@PathVariable String id, @RequestParam(required = false) Integer version,
                         HttpServletResponse response) throws IOException {
         var item = deliverables.get(id);
-        if (!"html_slides".equals(item.format())) throw new IllegalArgumentException("当前输出件不支持内嵌网页预览");
+        if (!List.of("html_slides", "pdf").contains(item.format())) {
+            throw new IllegalArgumentException("当前输出件不支持内嵌预览");
+        }
         var path = deliverables.path(id, version);
-        response.setContentType("text/html; charset=UTF-8");
+        response.setContentType("pdf".equals(item.format()) ? "application/pdf" : "text/html; charset=UTF-8");
         response.setHeader("Cache-Control", "no-store");
         response.setHeader("X-Content-Type-Options", "nosniff");
         response.setHeader("X-Frame-Options", "SAMEORIGIN");
-        var policy = "default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; font-src data:; frame-ancestors 'self'; base-uri 'none'; form-action 'none'; object-src 'none'";
+        var policy = "pdf".equals(item.format())
+                ? "default-src 'none'; frame-ancestors 'self'; object-src 'self' blob:"
+                : "default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; font-src data:; frame-ancestors 'self'; base-uri 'none'; form-action 'none'; object-src 'none'";
         response.setHeader("Content-Security-Policy", policy);
-        response.setHeader("Content-Disposition", "inline; filename=web-presentation.html");
+        response.setHeader("Content-Disposition", "inline; filename=" + ("pdf".equals(item.format()) ? "preview.pdf" : "web-presentation.html"));
+        response.setHeader("Content-Length", Long.toString(Files.size(path)));
         try (var input = Files.newInputStream(path); var output = response.getOutputStream()) { input.transferTo(output); }
     }
 

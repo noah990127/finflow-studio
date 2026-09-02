@@ -38,7 +38,8 @@ public class WebConfiguration {
                 response.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
                 var uri = request.getRequestURI();
                 var embeddablePreview = uri.endsWith("/rendered-preview")
-                        || (uri.startsWith("/api/deliverables/") && uri.endsWith("/content"));
+                        || (uri.endsWith("/content") && (uri.startsWith("/api/files/")
+                        || uri.startsWith("/api/deliverables/")));
                 if (embeddablePreview) {
                     response.setHeader("X-Frame-Options", "SAMEORIGIN");
                     response.setHeader("Content-Security-Policy",

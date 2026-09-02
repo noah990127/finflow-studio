@@ -24,7 +24,7 @@ const extension = computed(() => props.resource.name.includes('.') ? props.resou
 const isConnection = computed(() => ['DATABASE_CONNECTION', 'API_CONNECTION'].includes(props.resource.resourceType))
 const isWebUrl = computed(() => props.resource.resourceType === 'WEB_URL')
 const isCsv = computed(() => props.resource.resourceType === 'DATASET' || ['csv', 'tsv'].includes(extension.value))
-const isPdf = computed(() => extension.value === 'pdf' && props.resource.resourceType !== 'DELIVERABLE')
+const isPdf = computed(() => extension.value === 'pdf')
 const deliverableFormat = computed(() => props.resource.mediaType.toLowerCase())
 const isFinancialReport = computed(() => props.resource.resourceType === 'DELIVERABLE' && deliverableFormat.value === 'financial_report')
 const isHtmlSlides = computed(() => props.resource.resourceType === 'DELIVERABLE' && deliverableFormat.value === 'html_slides')
@@ -249,7 +249,7 @@ async function previewData() {
     <iframe v-else-if="isOfficeDocument && !editing && officeFallback" class="inline-pdf" :src="renderedOfficePreviewUrl(officeKind === 'deliverables' ? 'deliverables' : 'files', resource.id, resource.currentVersion)" :title="resource.name"></iframe>
     <OfficeEditor v-else-if="isOfficeDocument" :key="`${resource.id}-${resource.currentVersion}-${editing ? 'edit' : 'view'}`" :resource-id="resource.id" :kind="officeKind" :mode="editing ? 'edit' : 'view'" @unavailable="officeUnavailable" />
     <OfficeEditor v-else-if="editing && isEditable" :key="`${resource.id}-${resource.currentVersion}-edit`" :resource-id="resource.id" :kind="officeKind" mode="edit" />
-    <iframe v-else-if="isPdf" class="inline-pdf" :src="inlineContentUrl(resource.id)" :title="resource.name"></iframe>
+    <iframe v-else-if="isPdf" class="inline-pdf" :src="resource.resourceType === 'DELIVERABLE' ? deliverableContentUrl(resource.id) : inlineContentUrl(resource.id)" :title="resource.name"></iframe>
     <InteractiveFinancialReport v-else-if="isFinancialReport" :project-id="resource.projectId" :deliverable-id="resource.id" :report-name="resource.name" @open-source="$emit('openSource', $event)"/>
     <section v-else-if="isHtmlSlides" class="html-slides-workbench"><div class="html-slides-badge">网页演示 · HTML + JS · 非 PowerPoint 文件</div><iframe :src="deliverableContentUrl(resource.id)" :title="resource.name" sandbox="allow-scripts" allow="fullscreen"></iframe></section>
     <div v-else-if="csv" class="inline-csv"><table><thead><tr><th class="row-number">#</th><th v-for="(column, index) in csv.columns" :key="`${column}-${index}`">{{ column || `第 ${index + 1} 列` }}</th></tr></thead><tbody><tr v-for="(row, rowIndex) in csv.rows" :key="rowIndex"><td class="row-number">{{ csv.rowOffset + rowIndex + 1 }}</td><td v-for="(_, columnIndex) in csv.columns" :key="columnIndex" :title="row[columnIndex]">{{ row[columnIndex] }}</td></tr></tbody></table><footer>在线显示前 {{ csv.rows.length }} 行<span v-if="csv.hasMore">，文件还有更多数据</span></footer></div>
