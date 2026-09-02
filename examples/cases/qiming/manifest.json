@@ -19,7 +19,8 @@
       "jdbcUrlDefault": "jdbc:postgresql://postgres:5432/finflow",
       "usernameEnv": "FINFLOW_DEMO_DATABASE_USERNAME",
       "usernameDefault": "finflow",
-      "secretRef": "env:DATABASE_PASSWORD",
+      "secretRefEnv": "FINFLOW_DEMO_DATABASE_SECRET_REF",
+      "secretRefDefault": "env:FINFLOW_DEMO_DATABASE_PASSWORD",
       "options": {"ApplicationName": "FinFlowQimingDemo"}
     },
     {

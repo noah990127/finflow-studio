@@ -144,20 +144,20 @@ def ensure_connections(api: Api, project_id: str, manifest: dict[str, Any]) -> d
     result: dict[str, str] = {}
     for item in manifest["connections"]:
         connection = existing.get(item["name"])
+        body = {
+            "name": item["name"],
+            "sourceType": item["sourceType"],
+            "jdbcUrl": resolve_value(item, "jdbcUrl"),
+            "username": resolve_value(item, "username"),
+            "secretRef": resolve_value(item, "secretRef"),
+            "options": item.get("options", {}),
+        }
         if connection is None:
-            body = {
-                "projectId": project_id,
-                "name": item["name"],
-                "sourceType": item["sourceType"],
-                "jdbcUrl": resolve_value(item, "jdbcUrl"),
-                "username": resolve_value(item, "username"),
-                "secretRef": item.get("secretRef", ""),
-                "options": item.get("options", {}),
-            }
-            connection = api.json("POST", "/api/data-connections", body)
+            connection = api.json("POST", "/api/data-connections", {"projectId": project_id, **body})
             print(f"  connection created: {connection['name']}")
         else:
-            print(f"  connection exists: {connection['name']}")
+            connection = api.json("PUT", f"/api/data-connections/{connection['id']}", body)
+            print(f"  connection updated: {connection['name']}")
         result[item["key"]] = connection["id"]
     return result
 

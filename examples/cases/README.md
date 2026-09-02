@@ -41,6 +41,8 @@ python3 examples/cases/import_cases.py --case nvidia-devices --case global-tax-2
 
 The importer is idempotent for projects, source files, connections and starter deliverables. Re-running it updates each project's workflow to the bundled definition.
 
+For direct local development, `scripts/start-local.sh` also starts the demo data API on port `8011`. Load `.env` before importing so the four API connections use `127.0.0.1`; Docker Compose keeps the default `demo-api:8011` service address.
+
 ## Offline deployment
 
 The offline image bundle must contain `finflow-demo-api:1.0.0` in addition to the main FinFlow images. On the restricted server, load the images and start with `--no-build`:
@@ -62,7 +64,7 @@ export FINFLOW_DEMO_DATABASE_URL=jdbc:postgresql://postgres:5432/finflow
 export FINFLOW_DEMO_DATABASE_USERNAME=finflow
 ```
 
-Database manifests store only `env:DATABASE_PASSWORD`; the real password stays in the server-side `.env` file.
+Database manifests store only `env:FINFLOW_DEMO_DATABASE_PASSWORD`; the real password stays in the server-side `.env` file. Re-importing a case refreshes existing connection settings, so environment changes take effect without recreating the project.
 
 ## Validate without importing
 

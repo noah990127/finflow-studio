@@ -16,6 +16,9 @@ services:
       DATABASE_URL: jdbc:postgresql://postgres:5432/finflow
       DATABASE_USERNAME: finflow
       DATABASE_PASSWORD: ${DATABASE_PASSWORD:-finflow}
+      FINFLOW_DEMO_DATABASE_URL: ${FINFLOW_DEMO_DATABASE_URL:-jdbc:postgresql://postgres:5432/finflow}
+      FINFLOW_DEMO_DATABASE_USERNAME: ${FINFLOW_DEMO_DATABASE_USERNAME:-finflow}
+      FINFLOW_DEMO_DATABASE_PASSWORD: ${FINFLOW_DEMO_DATABASE_PASSWORD:-finflow}
       DATABASE_DRIVER: org.postgresql.Driver
       WORKER_BASE_URL: http://python-worker:8001
       FINFLOW_STORAGE_PROVIDER: s3
