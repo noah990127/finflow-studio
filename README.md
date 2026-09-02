@@ -9,13 +9,19 @@
 
 ## 本地启动
 
+推荐使用统一启动脚本。它会启动或复用 ONLYOFFICE Document Server，等待健康检查通过，再依次启动 Python、Java 和 Vue：
+
 ```bash
-cd worker-python && .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8001
-cd backend-java && mvn spring-boot:run
-cd frontend && npm run dev -- --port 5174
+./scripts/start-local.sh
 ```
 
-打开 `http://127.0.0.1:5174/`。不配置模型 API Key 时，资料解析、数据抽取、表格加工和文件输出仍可用，智能分析使用本地提取式降级。
+打开 `http://127.0.0.1:5174/`。ONLYOFFICE 使用 `http://127.0.0.1:8082/`，服务日志和进程号保存在 `.run/`。停止整套本地服务：
+
+```bash
+./scripts/stop-local.sh
+```
+
+首次启动需要下载 ONLYOFFICE 镜像，所以会比后续启动慢。不配置模型 API Key 时，资料解析、数据抽取、表格加工和文件输出仍可用，智能分析使用本地提取式降级。
 
 ## 生产部署
 

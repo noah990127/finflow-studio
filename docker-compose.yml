@@ -37,7 +37,7 @@ services:
       minio-init:
         condition: service_completed_successfully
       onlyoffice-documentserver:
-        condition: service_started
+        condition: service_healthy
     volumes:
       - finflow-files:/app/data/storage
     healthcheck:
@@ -132,6 +132,12 @@ services:
     volumes:
       - finflow-onlyoffice-data:/var/www/onlyoffice/Data
       - finflow-onlyoffice-logs:/var/log/onlyoffice
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost/healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
     restart: unless-stopped
 
 volumes:
