@@ -89,7 +89,7 @@ def _generation_prompt(request: GenerateContentRequest) -> tuple[str, str]:
             "你是 FinFlow Studio 的业务图表生成助手。只返回可执行的 Mermaid flowchart 源码，"
             "不要使用 Markdown 代码块，不要附加解释。只使用输入中的事实。"
         )
-    elif output_format in {"PPTX", "HTML_SLIDES", "DOCX", "PDF"}:
+    elif output_format in {"PPTX", "HTML_SLIDES", "DOCX", "PDF", "FINANCIAL_REPORT"}:
         is_slides = output_format in {"PPTX", "HTML_SLIDES"}
         container = "slides" if is_slides else "sections"
         item_title = "title" if is_slides else "heading"
@@ -109,7 +109,8 @@ def _generation_prompt(request: GenerateContentRequest) -> tuple[str, str]:
             "不要把同一种三段式内容机械复制到每一页。可确认的数值达到3个以上时优先使用chart承载证据，"
             "正文只解释图表结论，不重复罗列全部数值。"
             + ("slides 只包含正文页，不包含封面；生成 4 至 8 页。" if is_slides else
-               "sections 应形成完整报告结构，包括执行摘要、数据表现、原因与风险、建议。")
+               "sections 应形成 6 至 10 个完整报告章节，包括执行摘要、核心指标、趋势与结构、"
+               "原因与风险、情景或对比、行动建议；至少 3 个章节应在有可靠数值时配置 chart。")
         )
     else:
         system = (

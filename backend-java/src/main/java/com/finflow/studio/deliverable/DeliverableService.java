@@ -191,7 +191,18 @@ public class DeliverableService {
         var sections = new ArrayList<Map<String, Object>>();
         for (var section : request.sections()) {
             var refs = new ArrayList<Map<String, Object>>();
+            var suppliedCitations = new LinkedHashMap<String, CitationRequest>();
+            for (var citation : section.citations() == null ? List.<CitationRequest>of() : section.citations()) {
+                if (citation != null && citation.id() != null && !citation.id().isBlank()) {
+                    suppliedCitations.putIfAbsent(citation.id(), citation);
+                }
+            }
             for (var refId : section.refIds() == null ? List.<String>of() : section.refIds()) {
+                var supplied = suppliedCitations.remove(refId);
+                if (supplied != null) {
+                    refs.add(citationPayload(supplied));
+                    continue;
+                }
                 var ref = jdbc.sql("""
                                 select k.id, k.resource_id, k.version_number, k.source_name, k.text_content,
                                     k.location_json, k.content_hash from knowledge_ref k
@@ -209,19 +220,7 @@ public class DeliverableService {
                         .orElseThrow(() -> new IllegalArgumentException("Ref 不存在、已过期或不属于当前项目：" + refId));
                 refs.add(ref);
             }
-            for (var citation : section.citations() == null ? List.<CitationRequest>of() : section.citations()) {
-                if (citation == null || citation.id() == null || citation.id().isBlank()) continue;
-                if (refs.stream().anyMatch(ref -> citation.id().equals(ref.get("ref_id")))) continue;
-                var ref = new LinkedHashMap<String, Object>();
-                ref.put("ref_id", citation.id());
-                ref.put("resource_id", Objects.toString(citation.resourceId(), ""));
-                ref.put("version", citation.version());
-                ref.put("source_name", Objects.toString(citation.sourceName(), "未命名资料"));
-                ref.put("text", Objects.toString(citation.text(), ""));
-                ref.put("location", citation.location() == null ? Map.of() : citation.location());
-                ref.put("content_hash", Objects.toString(citation.contentHash(), ""));
-                refs.add(ref);
-            }
+            suppliedCitations.values().forEach(citation -> refs.add(citationPayload(citation)));
             sections.add(Map.of("heading", section.heading(),
                     "paragraphs", section.paragraphs() == null ? List.of() : section.paragraphs(),
                     "bullets", section.bullets() == null ? List.of() : section.bullets(), "refs", refs));
@@ -240,6 +239,18 @@ public class DeliverableService {
             payload.put("ppt_skill", request.pptSkill());
         }
         return payload;
+    }
+
+    private Map<String, Object> citationPayload(CitationRequest citation) {
+        var ref = new LinkedHashMap<String, Object>();
+        ref.put("ref_id", citation.id());
+        ref.put("resource_id", Objects.toString(citation.resourceId(), ""));
+        ref.put("version", citation.version());
+        ref.put("source_name", Objects.toString(citation.sourceName(), "未命名资料"));
+        ref.put("text", Objects.toString(citation.text(), ""));
+        ref.put("location", citation.location() == null ? Map.of() : citation.location());
+        ref.put("content_hash", Objects.toString(citation.contentHash(), ""));
+        return ref;
     }
 
     private String normalizeCitationStyle(String value) {

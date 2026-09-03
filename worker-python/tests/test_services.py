@@ -2,6 +2,8 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.llm import extract_response_text
+from app.models import GenerateContentRequest
+from app.services import _generation_prompt
 
 
 client = TestClient(app)
@@ -69,3 +71,13 @@ def test_generate_content_fails_clearly_without_model(monkeypatch) -> None:
 
     assert response.status_code == 503
     assert "大模型尚未配置" in response.json()["detail"]
+
+
+def test_financial_report_requests_structured_sections_and_charts() -> None:
+    system, _ = _generation_prompt(GenerateContentRequest(
+        format="FINANCIAL_REPORT", requirements="生成交互经营报告", source_text="FY2026 收入 100 万元"
+    ))
+
+    assert "JSON 顶层字段必须为 sections" in system
+    assert "6 至 10 个完整报告章节" in system
+    assert "至少 3 个章节" in system

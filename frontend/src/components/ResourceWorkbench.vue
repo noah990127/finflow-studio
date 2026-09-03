@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, ref, watch } from 'vue'
 import { Braces, CheckCircle2, ChevronDown, ChevronRight, Database, Download, ExternalLink, Eye, FilePenLine, FileText, Globe2, LoaderCircle, Pencil, Play, Plus, RefreshCw, Save, Search, Server, Trash2, X } from 'lucide-vue-next'
-import { api, deliverableContentUrl, downloadFile, inlineContentUrl, renderedOfficePreviewUrl, type CitationSource, type ConnectionPreview, type CsvPreview, type DataConnection, type DatabaseCatalog, type DatabaseTable, type DocumentPreview, type WorkspaceResource } from '../api/client'
+import { api, deliverableContentUrl, downloadFile, inlineContentUrl, renderedOfficePreviewUrl, type CitationSource, type ConnectionPreview, type CsvPreview, type DataConnection, type DatabaseCatalog, type DatabaseTable, type DocumentPreview, type WebPreview, type WorkspaceResource } from '../api/client'
 import DiagramPreview from './DiagramPreview.vue'
 import OfficeEditor from './OfficeEditor.vue'
 import CitationAnchor from './CitationAnchor.vue'
@@ -12,8 +12,7 @@ const props = defineProps<{ resource: WorkspaceResource }>()
 defineEmits<{ addToWorkflow: [resource: WorkspaceResource]; manageData: []; deleteResource: [resource: WorkspaceResource]; openSource: [citation: CitationSource] }>()
 const loading = ref(false), error = ref(''), editing = ref(false), officeFallback = ref(false), csv = ref<CsvPreview | null>(null), document = ref<DocumentPreview | null>(null)
 const downloadLoading = ref(false), downloadMessage = ref('')
-const webLoading = ref(false), webSlow = ref(false), webFrameKey = ref(0)
-let webLoadTimer: number | undefined
+const webLoading = ref(false), webPreview = ref<WebPreview | null>(null), webOriginalMode = ref(false)
 const connection = ref<DataConnection | null>(null), connectionPreview = ref<ConnectionPreview | null>(null)
 const citations = ref<CitationSource[]>([]), citationError = ref('')
 const previewQuery = ref(''), previewLoading = ref(false), testLoading = ref(false), connectionMessage = ref('')
@@ -53,7 +52,8 @@ async function load() {
     finally { loading.value = false }
     return
   }
-  if (isWebUrl.value || isPdf.value || isOfficeDocument.value || isFinancialReport.value || isHtmlSlides.value || editing.value) return
+  if (isWebUrl.value) { await loadWebPreview(); return }
+  if (isPdf.value || isOfficeDocument.value || isFinancialReport.value || isHtmlSlides.value || editing.value) return
   loading.value = true
   try {
     if (isCsv.value) csv.value = props.resource.resourceType === 'DATASET' ? await api.previewExtract(props.resource.id) : await api.previewFileCsv(props.resource.id)
@@ -61,21 +61,12 @@ async function load() {
   } catch (reason) { error.value = reason instanceof Error ? reason.message : '内容没有打开' }
   finally { loading.value = false }
 }
-function startWebLoad() {
+async function loadWebPreview(refresh = false) {
   if (!isWebUrl.value) return
-  window.clearTimeout(webLoadTimer)
-  webLoading.value = true
-  webSlow.value = false
-  webLoadTimer = window.setTimeout(() => { if (webLoading.value) webSlow.value = true }, 12_000)
-}
-function finishWebLoad() {
-  window.clearTimeout(webLoadTimer)
-  webLoading.value = false
-  webSlow.value = false
-}
-function reloadWebPage() {
-  webFrameKey.value += 1
-  startWebLoad()
+  webLoading.value = true; error.value = ''
+  try { webPreview.value = await api.getWebPreview(props.resource.projectId, props.resource.id, refresh) }
+  catch (reason) { error.value = reason instanceof Error ? reason.message : '网站内容没有打开' }
+  finally { webLoading.value = false }
 }
 async function loadCitations() {
   citations.value = []; citationError.value = ''
@@ -132,9 +123,7 @@ watch(() => props.resource.id, () => {
   officeFallback.value = false
   load()
   loadCitations()
-  startWebLoad()
 }, { immediate: true })
-onBeforeUnmount(() => window.clearTimeout(webLoadTimer))
 watch(editing, value => { if (!value) load() })
 function officeUnavailable(mode: 'view' | 'edit') { if (mode === 'view') officeFallback.value = true }
 function defaultPreviewQuery(item: DataConnection) {
@@ -245,7 +234,20 @@ async function previewData() {
         <div v-else-if="!previewLoading" class="connection-preview-empty"><Eye :size="23"/><span>点击“预览数据”查看实际取数结果</span></div>
       </section>
     </section>
-    <section v-else-if="isWebUrl" class="web-url-work-area"><header><Globe2 :size="18"/><span>{{ resource.url }}</span><a :href="resource.url" target="_blank" rel="noopener noreferrer"><ExternalLink :size="14"/>新窗口打开</a></header><div class="web-url-frame"><iframe :key="webFrameKey" :src="resource.url" :title="resource.name" referrerpolicy="strict-origin-when-cross-origin" @load="finishWebLoad"></iframe><div v-if="webLoading" class="web-url-loading"><LoaderCircle class="spin" :size="21"/><strong>{{ webSlow ? '外部网站响应较慢' : '正在打开网页' }}</strong><p>{{ webSlow ? '可以继续等待，或在新窗口打开。' : '首次打开后会保留页面，切换回来无需重新加载。' }}</p><button v-if="webSlow" class="secondary-button" type="button" @click="reloadWebPage"><RefreshCw :size="15"/>重新加载</button></div></div></section>
+    <section v-else-if="isWebUrl" class="web-url-work-area">
+      <header><Globe2 :size="18"/><span>{{ resource.url }}</span><div class="web-preview-modes"><button type="button" :class="{ active: !webOriginalMode }" @click="webOriginalMode = false">快速阅读</button><button type="button" :class="{ active: webOriginalMode }" @click="webOriginalMode = true">原网页</button><a :href="resource.url" target="_blank" rel="noopener noreferrer"><ExternalLink :size="14"/>新窗口</a></div></header>
+      <div v-if="webLoading" class="web-url-loading"><LoaderCircle class="spin" :size="21"/><strong>正在整理网页内容</strong><p>首次读取后会缓存，之后打开会更快。</p></div>
+      <div v-else-if="error" class="resource-state error"><Globe2 :size="24"/><strong>网站内容暂时无法读取</strong><p>{{ error }}</p><a class="secondary-button" :href="resource.url" target="_blank" rel="noopener noreferrer"><ExternalLink :size="14"/>新窗口打开</a></div>
+      <div v-else-if="webOriginalMode" class="web-url-frame"><iframe :src="resource.url" :title="resource.name" referrerpolicy="strict-origin-when-cross-origin"></iframe><aside class="web-embed-note">部分网站出于安全策略不允许嵌入，可使用“快速阅读”或新窗口打开。</aside></div>
+      <article v-else-if="webPreview" class="web-reader">
+        <header><span>{{ webPreview.siteName }}</span><em>{{ webPreview.previewMode === 'CURATED' ? `已核验${webPreview.verifiedAt ? ` · ${webPreview.verifiedAt}` : ''}` : '实时正文' }}</em></header>
+        <h1>{{ webPreview.title }}</h1>
+        <p v-for="paragraph in webPreview.summary.split('\n').filter(Boolean)" :key="paragraph" class="web-reader-summary">{{ paragraph }}</p>
+        <section v-if="webPreview.highlights.length" class="web-reader-highlights"><h2>关键内容</h2><ul><li v-for="item in webPreview.highlights" :key="item">{{ item }}</li></ul></section>
+        <section v-for="section in webPreview.sections" :key="section.heading" class="web-reader-section"><h2>{{ section.heading }}</h2><p v-for="paragraph in section.paragraphs" :key="paragraph">{{ paragraph }}</p></section>
+        <footer><button class="secondary-button" type="button" @click="loadWebPreview(true)"><RefreshCw :size="14"/>读取最新正文</button><a :href="resource.url" target="_blank" rel="noopener noreferrer">查看官方原文<ExternalLink :size="13"/></a></footer>
+      </article>
+    </section>
     <iframe v-else-if="isOfficeDocument && !editing && officeFallback" class="inline-pdf" :src="renderedOfficePreviewUrl(officeKind === 'deliverables' ? 'deliverables' : 'files', resource.id, resource.currentVersion)" :title="resource.name"></iframe>
     <OfficeEditor v-else-if="isOfficeDocument" :key="`${resource.id}-${resource.currentVersion}-${editing ? 'edit' : 'view'}`" :resource-id="resource.id" :kind="officeKind" :mode="editing ? 'edit' : 'view'" @unavailable="officeUnavailable" />
     <OfficeEditor v-else-if="editing && isEditable" :key="`${resource.id}-${resource.currentVersion}-edit`" :resource-id="resource.id" :kind="officeKind" mode="edit" />

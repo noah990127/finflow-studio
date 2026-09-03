@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -17,10 +18,13 @@ import org.springframework.web.bind.annotation.RestController;
 public class WorkspaceController {
     private final WorkspaceResourceService workspace;
     private final WorkspaceFolderService folders;
+    private final WebPreviewService webPreviews;
 
-    public WorkspaceController(WorkspaceResourceService workspace, WorkspaceFolderService folders) {
+    public WorkspaceController(WorkspaceResourceService workspace, WorkspaceFolderService folders,
+                               WebPreviewService webPreviews) {
         this.workspace = workspace;
         this.folders = folders;
+        this.webPreviews = webPreviews;
     }
 
     @GetMapping
@@ -31,6 +35,12 @@ public class WorkspaceController {
     @GetMapping("/resources")
     public Response resources(@PathVariable String projectId) {
         return workspace.get(projectId);
+    }
+
+    @GetMapping("/web-preview/{resourceId}")
+    public WorkspaceModels.WebPreview webPreview(@PathVariable String projectId, @PathVariable String resourceId,
+                                                  @RequestParam(defaultValue = "false") boolean refresh) {
+        return webPreviews.get(projectId, resourceId, refresh);
     }
 
     @PostMapping("/folders")

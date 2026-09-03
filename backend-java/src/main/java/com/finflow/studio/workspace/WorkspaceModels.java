@@ -17,6 +17,12 @@ public final class WorkspaceModels {
 
     public record MoveResourceRequest(String folderId) { }
 
+    public record WebPreview(String title, String url, String siteName, String summary,
+                             List<String> highlights, List<WebPreviewSection> sections,
+                             String previewMode, String verifiedAt, String fetchedAt) { }
+
+    public record WebPreviewSection(String heading, List<String> paragraphs) { }
+
     public record Resource(
             String id,
             String projectId,

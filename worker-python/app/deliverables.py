@@ -171,6 +171,11 @@ def _html_rich_text(value: str) -> str:
     )
 
 
+def _first_metric(value: str) -> str:
+    match = re.search(r"[-+]?\d[\d,.]*(?:%|万?亿?美元|亿元|万元|万|天|个|项)", value)
+    return match.group(0) if match else ""
+
+
 def _html_slides_document(title: str, slides: str, chart_data: str) -> str:
     return f"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
