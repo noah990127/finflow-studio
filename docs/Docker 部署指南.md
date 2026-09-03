@@ -101,7 +101,8 @@ MINIO_ROOT_PASSWORD=替换为第二个强密码
 
 # Office 服务；Java 与 ONLYOFFICE 必须使用同一个值
 ONLYOFFICE_JWT_SECRET=替换为第三个强密码
-FINFLOW_OFFICE_DOCUMENT_SERVER_URL=http://服务器IP:8082
+# 默认通过 Studio 的 /office 同源代理访问，无需填写服务器 IP
+FINFLOW_OFFICE_DOCUMENT_SERVER_URL=/office
 ONLYOFFICE_PLATFORM=linux/amd64
 
 # 容器内案例 API 地址
@@ -117,7 +118,7 @@ OPENAI_REASONING_EFFORT=medium
 OPENAI_MAX_OUTPUT_TOKENS=4000
 ```
 
-`FINFLOW_OFFICE_DOCUMENT_SERVER_URL` 是浏览器要访问的地址。远程服务器上不能写 `localhost`，必须填用户浏览器可访问的服务器 IP 或 HTTPS 域名。
+`FINFLOW_OFFICE_DOCUMENT_SERVER_URL` 默认保持 `/office`。前端会把该路径转发给 ONLYOFFICE，因此本机、远程 IP 和 HTTPS 域名都无需改动，也不会出现浏览器误连自身 `localhost:8082` 的问题。只有把 ONLYOFFICE 独立部署在另一网关或域名时，才改为浏览器可访问的绝对 HTTPS 地址。
 
 若服务器使用 OpenAI 兼容的内部模型网关，只需替换：
 
@@ -228,7 +229,7 @@ docker compose exec demo-api python -c "import urllib.request; print(urllib.requ
 Office 编辑依赖三条路径：
 
 ```text
-浏览器 -> FINFLOW_OFFICE_DOCUMENT_SERVER_URL
+浏览器 -> Studio /office -> onlyoffice-documentserver
 Java API -> http://onlyoffice-documentserver
 ONLYOFFICE -> http://java-api:8080
 ```
@@ -237,7 +238,7 @@ ONLYOFFICE -> http://java-api:8080
 
 ```bash
 curl -fsS http://127.0.0.1:8082/healthcheck
-curl -I http://服务器IP:8082/web-apps/apps/api/documents/api.js
+curl -I http://服务器IP:5173/office/web-apps/apps/api/documents/api.js
 docker compose exec java-api env | grep FINFLOW_OFFICE
 docker compose exec onlyoffice-documentserver curl -fsS http://java-api:8080/actuator/health
 ```
@@ -245,7 +246,7 @@ docker compose exec onlyoffice-documentserver curl -fsS http://java-api:8080/act
 若页面显示“ONLYOFFICE Document Server 尚未启动”：
 
 1. 确认 `onlyoffice-documentserver` 为 healthy；
-2. 确认 `.env` 中 `FINFLOW_OFFICE_DOCUMENT_SERVER_URL` 可被浏览器访问；
+2. 确认 `.env` 中 `FINFLOW_OFFICE_DOCUMENT_SERVER_URL=/office`，并能通过 Studio 地址访问 `/office/web-apps/apps/api/documents/api.js`；
 3. 确认 Java 与 ONLYOFFICE 使用相同的 `ONLYOFFICE_JWT_SECRET`；
 4. 修改 `.env` 后重建 Java 和 Office 容器；
 5. HTTPS 工作台必须搭配 HTTPS Office 地址，浏览器会阻止混合内容。

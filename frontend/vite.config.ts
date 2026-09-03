@@ -13,6 +13,11 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': 'http://localhost:8080',
+      '/office': {
+        target: 'http://localhost:8082',
+        changeOrigin: true,
+        rewrite: path => path.replace(/^\/office/, ''),
+      },
     },
   },
 })
