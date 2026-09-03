@@ -28,6 +28,24 @@ MAX_GENERATION_SOURCE_CHARS = 24_000
 MAX_GENERATION_REQUIREMENTS_CHARS = 6_000
 
 
+def _slide_count_instruction(requirements: str) -> str:
+    range_match = re.search(
+        r"(\d{1,2})\s*(?:-|~|〜|–|—|至|到)\s*(\d{1,2})\s*(?:页|屏|slides?)",
+        requirements,
+        flags=re.IGNORECASE,
+    )
+    if range_match:
+        minimum, maximum = sorted((int(range_match.group(1)), int(range_match.group(2))))
+        minimum = max(6, min(minimum, 16))
+        maximum = max(minimum, min(maximum, 16))
+        return f"生成 {minimum} 至 {maximum} 页正文，不包含封面和参考文献页。"
+    exact_match = re.search(r"(?<!\d)(\d{1,2})\s*(?:页|屏|slides?)", requirements, flags=re.IGNORECASE)
+    if exact_match:
+        count = max(6, min(int(exact_match.group(1)), 16))
+        return f"生成 {count} 页正文，不包含封面和参考文献页。"
+    return "生成 8 至 10 页正文，不包含封面和参考文献页。"
+
+
 def _tokens(text: str) -> List[str]:
     tokens: List[str] = []
     for token in TOKEN_PATTERN.findall(text):
@@ -93,6 +111,7 @@ def _generation_prompt(request: GenerateContentRequest) -> tuple[str, str]:
         is_slides = output_format in {"PPTX", "HTML_SLIDES"}
         container = "slides" if is_slides else "sections"
         item_title = "title" if is_slides else "heading"
+        slide_count = _slide_count_instruction(request.requirements) if is_slides else ""
         system = (
             "你是 FinFlow Studio 的通用业务成果设计助手。只返回一个合法 JSON 对象，不要使用 Markdown 代码块或附加解释。"
             f"JSON 顶层字段必须为 {container}，每项包含 {item_title}、summary、bullets、chart。"
@@ -103,12 +122,16 @@ def _generation_prompt(request: GenerateContentRequest) -> tuple[str, str]:
             "图表数值只能逐项复制自原始内容，不得估算、补齐、换算或编造；无法确认口径时 chart 必须为 null。"
             + citation_rules +
             "标题必须直接表达业务结论，禁止出现“第一页”“第4页”“Slide 2”“本页”等编排文字。"
-            "标题必须是一行、最多22个汉字，不使用手工换行；summary 最多48个汉字，表达本页唯一核心判断；"
-            "每项提供2至3个可独立阅读的 bullets，每条最多42个汉字，不重复summary，不写大段正文，"
-            "保留金额、比例、期间和分类名称。相邻页面要承担不同叙事任务，按背景、关键发现、原因或风险、行动建议推进，"
+            "标题中不得出现引用编号或作者年份，引用只放在summary、bullets和chart.source_ref。"
+            "标题必须是一行、最多22个汉字，不使用手工换行；summary 最多64个汉字，表达本页唯一核心判断；"
+            "每项提供3个可独立阅读的 bullets，每条最多56个汉字，分别承担量化依据、业务影响和决策或动作，"
+            "不重复summary，不写大段正文，并保留金额、比例、期间、分类名称和数据口径。"
+            "相邻页面要承担不同叙事任务，按管理摘要、核心数据、结构与驱动、政策或业务专题、风险、方案、行动与决策推进，"
             "不要把同一种三段式内容机械复制到每一页。可确认的数值达到3个以上时优先使用chart承载证据，"
-            "正文只解释图表结论，不重复罗列全部数值。"
-            + ("slides 只包含正文页，不包含封面；生成 4 至 8 页。" if is_slides else
+            "正文只解释图表结论，不重复罗列全部数值。演示文稿中至少40%的正文页应在有可靠数值时配置chart，"
+            "政策或时间类内容要说清生效日、适用范围和准备度；经营类内容要说清口径、增速、结构、现金转化和风险；"
+            "选型类内容要说清工作负载、性能、成本、交付条件和决策门槛。"
+            + (slide_count if is_slides else
                "sections 应形成 6 至 10 个完整报告章节，包括执行摘要、核心指标、趋势与结构、"
                "原因与风险、情景或对比、行动建议；至少 3 个章节应在有可靠数值时配置 chart。")
         )

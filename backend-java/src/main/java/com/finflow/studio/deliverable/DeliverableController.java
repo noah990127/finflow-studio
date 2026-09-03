@@ -38,6 +38,9 @@ public class DeliverableController {
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void delete(@PathVariable String id) { deliverables.delete(id); }
 
+    @PostMapping("/deliverables/{id}/rerender")
+    public Response rerender(@PathVariable String id) { return deliverables.rerender(id); }
+
     @GetMapping("/deliverables/{id}/preview")
     public Map<String, Object> preview(@PathVariable String id, @RequestParam(required = false) Integer version) {
         var item = deliverables.get(id);

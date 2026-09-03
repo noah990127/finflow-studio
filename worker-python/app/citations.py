@@ -65,7 +65,7 @@ def inline_sources(request: DeliverableRequest, refs: Iterable[DeliverableRef]) 
     if not indexes:
         return ""
     if style(request) == "APA_7":
-        names = [catalog[index - 1].source_name for index in indexes]
+        names = [_short_source_name(catalog[index - 1].source_name) for index in indexes]
         return "(" + "; ".join(f"{name}, n.d." for name in names) + ")"
     return "".join(f"[{index}]" for index in indexes)
 
@@ -85,6 +85,44 @@ def normalize_markers(value: str, request: DeliverableRequest) -> str:
     if not request.include_citations:
         normalized = re.sub(r"\s+(?=[，,。；;])", "", normalized)
     return normalized
+
+
+def compact_inline_citations(value: str, request: DeliverableRequest) -> str:
+    if style(request) != "APA_7":
+        return value
+    result = value
+    for ref in unique_refs(request):
+        source = ref.source_name.strip()
+        if not source:
+            continue
+        short = _short_source_name(source)
+        result = re.sub(
+            r"[（(]" + re.escape(source) + r"\s*,?\s*(n\.d\.|\d{4})[）)]",
+            lambda match: f"({short}, {match.group(1)})",
+            result,
+            flags=re.IGNORECASE,
+        )
+    result = re.sub(
+        r"[（(]([^()（）]{1,80}?\.(?:csv|tsv|xlsx?|docx?|pdf|pptx?|md|txt))\s*,?\s*(n\.d\.|\d{4})[）)]",
+        lambda match: f"({_short_source_name(match.group(1))}, {match.group(2)})",
+        result,
+        flags=re.IGNORECASE,
+    )
+    return result
+
+
+def _short_source_name(source: str) -> str:
+    clean = re.sub(r"\.(?:csv|tsv|xlsx?|docx?|pdf|pptx?|md|txt)$", "", source.strip(), flags=re.IGNORECASE)
+    clean = re.sub(r"[_\-]+", " ", clean)
+    clean = re.sub(r"\s+", " ", clean).strip()
+    if len(clean) <= 18:
+        return clean
+    words = clean.split()
+    if len(words) > 1:
+        concise = " ".join(words[:2])
+        if len(concise) <= 18:
+            return concise
+    return clean[:18].rstrip()
 
 
 def _location(ref: DeliverableRef) -> str:

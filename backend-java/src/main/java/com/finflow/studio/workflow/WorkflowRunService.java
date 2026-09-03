@@ -532,9 +532,10 @@ public class WorkflowRunService {
         var citationStyle = optional(config, "citationStyle", "IEEE").toUpperCase(Locale.ROOT);
         var skillRequirement = "guizang-huawei-style-c".equals(pptSkill)
                 ? "\nPPT 技能：华为企业汇报 Style C。采用结论先行的管理层叙事，避免模板化堆框。"
-                  + "每页只表达一个判断；标题必须单行且不超过22个汉字，摘要不超过48个汉字，"
-                  + "每页2至3条要点、每条不超过42个汉字；禁止手工换行、长段落和重复措辞。"
-                  + "有可靠连续数据、分类比较或构成数据时生成原生图表，并用一句话解释其业务含义。"
+                  + "每页只表达一个判断；标题必须单行且不超过22个汉字，摘要不超过64个汉字，"
+                  + "每页3条要点、每条不超过56个汉字，分别说清量化依据、业务影响和决策或动作；"
+                  + "禁止手工换行、长段落和重复措辞。有可靠连续数据、分类比较或构成数据时生成原生图表，"
+                  + "正文中至少40%的页面应在有可靠数值时配置图表，并用一句话解释其业务含义。"
                 : "frontend-slides".equals(pptSkill)
                 ? "\n演示技能：Frontend Slides 网页演示。产物是 HTML + JavaScript，不是 PowerPoint 文件。"
                   + "内容应适合浏览器全屏演示，强调视觉层级、页面节奏、图表证据与版式变化；"

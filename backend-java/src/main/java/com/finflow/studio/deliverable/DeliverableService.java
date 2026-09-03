@@ -141,6 +141,19 @@ public class DeliverableService {
         return get(id);
     }
 
+    @Transactional
+    public Response rerender(String id) {
+        var current = get(id);
+        var sourceSpec = jdbc.sql("""
+                        select source_spec_json from deliverable_version
+                        where resource_id = :id and version_number = :version
+                        """).param("id", id).param("version", current.currentVersion())
+                .query(String.class).optional()
+                .orElseThrow(() -> new IllegalArgumentException("输出版本不存在"));
+        var bytes = worker.generateDeliverable(current.format(), readMap(sourceSpec));
+        return createEditedVersion(id, current.currentVersion(), bytes);
+    }
+
     public Path path(String id, Integer version) {
         var sql = version == null
                 ? "select v.storage_path from deliverable_resource r join deliverable_version v on v.resource_id = r.id and v.version_number = r.current_version where r.id = :id"

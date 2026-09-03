@@ -81,3 +81,14 @@ def test_financial_report_requests_structured_sections_and_charts() -> None:
     assert "JSON 顶层字段必须为 sections" in system
     assert "6 至 10 个完整报告章节" in system
     assert "至少 3 个章节" in system
+
+
+def test_slide_prompt_honors_requested_page_range_and_richer_evidence() -> None:
+    system, _ = _generation_prompt(GenerateContentRequest(
+        format="PPTX", requirements="期望篇幅：12-14 页", source_text="这里是可核对的财务与政策数据"
+    ))
+
+    assert "生成 12 至 14 页正文" in system
+    assert "生成 4 至 8 页" not in system
+    assert "量化依据、业务影响和决策或动作" in system
+    assert "至少40%" in system

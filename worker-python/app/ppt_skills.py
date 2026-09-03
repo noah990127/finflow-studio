@@ -127,6 +127,12 @@ def _render_content(slide, heading: str, points: List[str], section_index: int) 
         _summary_layout(slide, points)
     elif any(keyword in normalized for keyword in ("行动", "责任", "闭环", "计划", "要求")):
         _action_layout(slide, points)
+    elif any(keyword in normalized for keyword in ("时间", "时点", "阶段", "路线", "里程碑", "演进")):
+        _timeline_layout(slide, points)
+    elif any(keyword in normalized for keyword in ("风险", "准备度", "优先级", "矩阵", "暴露")):
+        _priority_layout(slide, points)
+    elif any(keyword in normalized for keyword in ("对比", "结构", "组合", "场景", "区域", "平台")):
+        _comparison_layout(slide, points)
     elif any(keyword in normalized for keyword in ("top", "物料", "清单", "事项")):
         _ranked_layout(slide, points)
     elif any(keyword in normalized for keyword in ("仓", "品类", "成因", "原因")):
@@ -134,7 +140,43 @@ def _render_content(slide, heading: str, points: List[str], section_index: int) 
     elif any(keyword in normalized for keyword in ("差异", "库龄", "减值", "金额", "占比")):
         _metric_layout(slide, points)
     else:
-        _split_layout(slide, points)
+        (_metric_layout if section_index % 3 == 0 else _split_layout)(slide, points)
+
+
+def _timeline_layout(slide, points: List[str]) -> None:
+    items = points[:4] or ["完成当前阶段评估"]
+    _rect(slide, 1.42, 3.05, 10.0, 0.04, LINE)
+    width = 10.45 / len(items)
+    for index, point in enumerate(items):
+        left = 1.0 + index * width
+        _text(slide, f"0{index + 1}", left + 0.12, 2.72, 0.62, 0.62, 16, WHITE, bold=True,
+              align=PP_ALIGN.CENTER, fill=RED if index == 0 else RED_DARK, vertical=MSO_ANCHOR.MIDDLE)
+        _text(slide, "关键节点", left + 0.12, 3.65, width - 0.28, 0.28, 11, RED, bold=True)
+        _text(slide, point, left + 0.12, 4.08, width - 0.3, 1.68, 15, INK, bold=index == 0,
+              min_size=13)
+
+
+def _priority_layout(slide, points: List[str]) -> None:
+    items = points[:4] or ["建立风险跟踪与处置机制"]
+    positions = [(0.95, 1.77), (6.72, 1.77), (0.95, 4.18), (6.72, 4.18)]
+    labels = ["立即处理", "重点跟踪", "计划改善", "持续监测"]
+    for index, point in enumerate(items):
+        left, top = positions[index]
+        _rect(slide, left, top, 5.25, 1.98, CARD if index != 0 else RED_SOFT, line=LINE)
+        _text(slide, labels[index], left + 0.28, top + 0.22, 1.45, 0.3, 11, RED_DARK, bold=True)
+        _text(slide, point, left + 0.28, top + 0.75, 4.65, 0.92, 16, INK, bold=index == 0,
+              min_size=14)
+
+
+def _comparison_layout(slide, points: List[str]) -> None:
+    items = points[:4] or ["暂无可对比内容"]
+    for index, point in enumerate(items):
+        top = 1.72 + index * 1.18
+        _text(slide, f"0{index + 1}", 1.02, top + 0.17, 0.58, 0.58, 17, WHITE, bold=True,
+              align=PP_ALIGN.CENTER, fill=RED if index == 0 else INK, vertical=MSO_ANCHOR.MIDDLE)
+        _rect(slide, 1.84, top + 0.43, 0.9 + index * 0.35, 0.08, RED if index == 0 else RED_DARK)
+        _text(slide, point, 4.15, top + 0.08, 7.8, 0.86, 16, INK, bold=index == 0,
+              min_size=14, vertical=MSO_ANCHOR.MIDDLE)
 
 
 def _summary_layout(slide, points: List[str]) -> None:
@@ -325,7 +367,10 @@ def _reference_slides(deck: Presentation, request: DeliverableRequest, page_numb
 def _content_points(section: DeliverableSection) -> List[str]:
     raw: List[str] = []
     for paragraph in section.paragraphs:
-        raw.extend(re.split(r"\n+|(?<=[。！？；])", paragraph))
+        if section.bullets and len(section.paragraphs) == 1 and len(paragraph) <= 72:
+            raw.append(paragraph)
+        else:
+            raw.extend(re.split(r"\n+|(?<=[。！？；])", paragraph))
     raw.extend(section.bullets)
     result: List[str] = []
     for value in raw:

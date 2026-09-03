@@ -61,10 +61,53 @@ def test_apa_7_formats_reference_entries_without_ref_labels() -> None:
     }, deep=True)
     deck = Presentation(BytesIO(create_pptx(item)))
     text = "\n".join(shape.text for slide in deck.slides for shape in slide.shapes if hasattr(shape, "text"))
+    slide_text = "\n".join(shape.text for shape in deck.slides[1].shapes if hasattr(shape, "text"))
 
-    assert "(经营报告.pdf, n.d.)" in text
+    assert "(经营报告, n.d.)" in slide_text
+    assert "(经营报告.pdf, n.d.)" not in slide_text
     assert "经营报告.pdf. (n.d.)." in text
     assert "[Ref" not in text
+
+
+def test_apa_citation_compaction_tolerates_missing_comma() -> None:
+    refs = [
+        request().sections[0].refs[0].model_copy(
+            update={"ref_id": "cost", "source_name": "device_cost_scenarios.csv"}
+        ),
+        request().sections[0].refs[0].model_copy(
+            update={"ref_id": "rule", "source_name": "device_selection_rules.md"}
+        ),
+    ]
+    plan = """{"slides":[{"title":"采购判断","summary":"成本占比超过八成（device_cost_scenarios.csvn.d.）","bullets":["完成验证（device_selection_rules.md, n.d.）"],"chart":null}]}"""
+    item = request().model_copy(update={
+        "citation_style": "APA_7",
+        "sections": [DeliverableSection(heading="分析结果", paragraphs=[plan], refs=refs)],
+    }, deep=True)
+
+    deck = Presentation(BytesIO(create_pptx(item)))
+    text = "\n".join(shape.text for slide in list(deck.slides)[1:-1] for shape in slide.shapes if hasattr(shape, "text"))
+
+    assert "device_cost_scenarios.csvn.d." not in text
+    assert "device_selection_rules.md" not in text
+    assert "(device cost, n.d.)" in text
+    assert "(device selection, n.d.)" in text
+
+
+def test_structured_ppt_reference_pages_only_include_used_sources() -> None:
+    refs = [
+        request().sections[0].refs[0],
+        request().sections[0].refs[0].model_copy(update={"ref_id": "second", "source_name": "未使用的资料.pdf"}),
+    ]
+    plan = """{"slides":[{"title":"经营表现改善","summary":"收入保持增长 [Ref 1]","bullets":["数据已经核对 [Ref 1]"],"chart":null}]}"""
+    item = request().model_copy(update={
+        "sections": [DeliverableSection(heading="分析结果", paragraphs=[plan], refs=refs)],
+    }, deep=True)
+
+    deck = Presentation(BytesIO(create_pptx(item)))
+    text = "\n".join(shape.text for slide in deck.slides for shape in slide.shapes if hasattr(shape, "text"))
+
+    assert "经营报告.pdf" in text
+    assert "未使用的资料.pdf" not in text
 
 
 def test_generates_financial_report_workspace() -> None:
@@ -231,6 +274,65 @@ def test_pptx_turns_structured_slide_plan_into_readable_slides() -> None:
     assert "模拟减值需要关注" in text
     assert "（续）" not in text
     assert "第1页" not in text
+
+
+def test_pptx_keeps_fourteen_structured_content_slides() -> None:
+    slides = [{
+        "title": f"第 {index} 个经营判断",
+        "summary": f"第 {index} 个判断具有明确的业务影响",
+        "bullets": ["量化依据已核对", "影响范围已识别", "下一步动作已明确"],
+        "chart": None,
+    } for index in range(1, 15)]
+    item = request().model_copy(update={
+        "ppt_skill": "guizang-huawei-style-c", "include_citations": False,
+        "sections": [DeliverableSection(
+            heading="分析结果", paragraphs=[json.dumps({"slides": slides}, ensure_ascii=False)], bullets=[], refs=[]
+        )],
+    }, deep=True)
+
+    deck = Presentation(BytesIO(create_pptx(item)))
+
+    assert len(deck.slides) == 15
+
+
+def test_structured_ppt_keeps_summary_together_and_removes_title_citations() -> None:
+    plan = json.dumps({"slides": [{
+        "title": "现金转化需重点跟踪 [1]",
+        "summary": "经营现金流继续增长；但现金转化率出现回落 [1]",
+        "bullets": ["量化依据已核对 [1]", "营运资金压力上升 [1]", "建议按季度跟踪 [1]"],
+        "chart": None,
+    }]}, ensure_ascii=False)
+    item = request().model_copy(update={
+        "ppt_skill": "guizang-huawei-style-c", "include_citations": False,
+        "sections": [DeliverableSection(heading="分析结果", paragraphs=[plan], bullets=[], refs=[])],
+    }, deep=True)
+
+    deck = Presentation(BytesIO(create_pptx(item)))
+    slide_text = "\n".join(shape.text for shape in deck.slides[1].shapes if hasattr(shape, "text"))
+
+    assert len(deck.slides) == 2
+    assert "现金转化需重点跟踪" in slide_text
+    assert "现金转化需重点跟踪 [1]" not in slide_text
+    assert "（续）" not in slide_text
+
+
+def test_huawei_skill_adds_timeline_priority_and_comparison_layouts() -> None:
+    sections = [
+        DeliverableSection(heading="执行摘要", paragraphs=["经营优先级已明确"], bullets=["数据已核对", "影响已识别", "动作已安排"]),
+        DeliverableSection(heading="年度时间线与里程碑", paragraphs=["一季度完成盘点"], bullets=["二季度完成修复", "三季度进入验收", "四季度完成闭环"]),
+        DeliverableSection(heading="区域风险与准备度", paragraphs=["欧盟区域需立即处理"], bullets=["亚太需重点跟踪", "美国需计划改善", "其他区域持续监测"]),
+        DeliverableSection(heading="业务结构对比", paragraphs=["数据中心占比领先"], bullets=["游戏业务保持稳定", "汽车业务仍在培育", "专业可视化规模较小"]),
+    ]
+    item = request().model_copy(update={
+        "ppt_skill": "guizang-huawei-style-c", "include_citations": False, "sections": sections,
+    }, deep=True)
+    deck = Presentation(BytesIO(create_pptx(item)))
+    slide_texts = ["\n".join(shape.text for shape in slide.shapes if hasattr(shape, "text"))
+                   for slide in list(deck.slides)[1:]]
+
+    assert "关键节点" in slide_texts[1]
+    assert "立即处理" in slide_texts[2] and "持续监测" in slide_texts[2]
+    assert "数据中心占比领先" in slide_texts[3]
 
 
 def test_pptx_recovers_legacy_page_outline_without_showing_page_labels() -> None:

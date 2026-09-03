@@ -12,7 +12,7 @@ const props = defineProps<{ resource: WorkspaceResource }>()
 defineEmits<{ addToWorkflow: [resource: WorkspaceResource]; manageData: []; deleteResource: [resource: WorkspaceResource]; openSource: [citation: CitationSource] }>()
 const loading = ref(false), error = ref(''), editing = ref(false), officeFallback = ref(false), csv = ref<CsvPreview | null>(null), document = ref<DocumentPreview | null>(null)
 const downloadLoading = ref(false), downloadMessage = ref('')
-const webLoading = ref(false), webPreview = ref<WebPreview | null>(null), webOriginalMode = ref(false)
+const webLoading = ref(false), webPreview = ref<WebPreview | null>(null), webOriginalMode = ref(true)
 const connection = ref<DataConnection | null>(null), connectionPreview = ref<ConnectionPreview | null>(null)
 const citations = ref<CitationSource[]>([]), citationError = ref('')
 const previewQuery = ref(''), previewLoading = ref(false), testLoading = ref(false), connectionMessage = ref('')
@@ -52,7 +52,10 @@ async function load() {
     finally { loading.value = false }
     return
   }
-  if (isWebUrl.value) { await loadWebPreview(); return }
+  if (isWebUrl.value) {
+    if (!webOriginalMode.value) await loadWebPreview()
+    return
+  }
   if (isPdf.value || isOfficeDocument.value || isFinancialReport.value || isHtmlSlides.value || editing.value) return
   loading.value = true
   try {
@@ -67,6 +70,10 @@ async function loadWebPreview(refresh = false) {
   try { webPreview.value = await api.getWebPreview(props.resource.projectId, props.resource.id, refresh) }
   catch (reason) { error.value = reason instanceof Error ? reason.message : '网站内容没有打开' }
   finally { webLoading.value = false }
+}
+async function openWebReader() {
+  webOriginalMode.value = false
+  if (!webPreview.value) await loadWebPreview()
 }
 async function loadCitations() {
   citations.value = []; citationError.value = ''
@@ -121,6 +128,8 @@ async function saveConnection() {
 watch(() => props.resource.id, () => {
   editing.value = false
   officeFallback.value = false
+  webOriginalMode.value = true
+  webPreview.value = null
   load()
   loadCitations()
 }, { immediate: true })
@@ -235,10 +244,10 @@ async function previewData() {
       </section>
     </section>
     <section v-else-if="isWebUrl" class="web-url-work-area">
-      <header><Globe2 :size="18"/><span>{{ resource.url }}</span><div class="web-preview-modes"><button type="button" :class="{ active: !webOriginalMode }" @click="webOriginalMode = false">快速阅读</button><button type="button" :class="{ active: webOriginalMode }" @click="webOriginalMode = true">原网页</button><a :href="resource.url" target="_blank" rel="noopener noreferrer"><ExternalLink :size="14"/>新窗口</a></div></header>
-      <div v-if="webLoading" class="web-url-loading"><LoaderCircle class="spin" :size="21"/><strong>正在整理网页内容</strong><p>首次读取后会缓存，之后打开会更快。</p></div>
+      <header><Globe2 :size="18"/><span>{{ resource.url }}</span><div class="web-preview-modes"><button type="button" :class="{ active: webOriginalMode }" @click="webOriginalMode = true">原网页</button><button type="button" :class="{ active: !webOriginalMode }" @click="openWebReader">快速阅读</button><a :href="resource.url" target="_blank" rel="noopener noreferrer"><ExternalLink :size="14"/>新窗口</a></div></header>
+      <div v-if="webOriginalMode" class="web-url-frame"><iframe :src="resource.url" :title="resource.name" referrerpolicy="strict-origin-when-cross-origin"></iframe><aside class="web-embed-note">部分网站出于安全策略不允许嵌入，可使用“快速阅读”或新窗口打开。</aside></div>
+      <div v-else-if="webLoading" class="web-url-loading"><LoaderCircle class="spin" :size="21"/><strong>正在整理网页内容</strong><p>首次读取后会缓存，之后打开会更快。</p></div>
       <div v-else-if="error" class="resource-state error"><Globe2 :size="24"/><strong>网站内容暂时无法读取</strong><p>{{ error }}</p><a class="secondary-button" :href="resource.url" target="_blank" rel="noopener noreferrer"><ExternalLink :size="14"/>新窗口打开</a></div>
-      <div v-else-if="webOriginalMode" class="web-url-frame"><iframe :src="resource.url" :title="resource.name" referrerpolicy="strict-origin-when-cross-origin"></iframe><aside class="web-embed-note">部分网站出于安全策略不允许嵌入，可使用“快速阅读”或新窗口打开。</aside></div>
       <article v-else-if="webPreview" class="web-reader">
         <header><span>{{ webPreview.siteName }}</span><em>{{ webPreview.previewMode === 'CURATED' ? `已核验${webPreview.verifiedAt ? ` · ${webPreview.verifiedAt}` : ''}` : '实时正文' }}</em></header>
         <h1>{{ webPreview.title }}</h1>

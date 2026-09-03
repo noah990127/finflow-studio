@@ -26,8 +26,8 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import Image as ReportLabImage, ListFlowable, ListItem, PageBreak, Paragraph, SimpleDocTemplate, Spacer
 
 from .charting import add_native_ppt_chart, chart_png, normalize_ppt_chart_ids, valid_chart
-from .citations import inline_sources, normalize_markers, reference_entries, reference_records
-from .models import DeliverableChart, DeliverableRequest, DeliverableSection
+from .citations import compact_inline_citations, inline_sources, normalize_markers, reference_entries, reference_records
+from .models import DeliverableChart, DeliverableRef, DeliverableRequest, DeliverableSection
 from .ppt_skills import HUAWEI_STYLE_C, render as render_ppt_skill
 
 
@@ -565,7 +565,10 @@ def _add_compact_points(slide, points: List[str], left: float, top: float, width
 def _content_points(section: DeliverableSection) -> List[str]:
     raw: List[str] = []
     for paragraph in section.paragraphs:
-        raw.extend(re.split(r"\n+|(?<=[。！？；])", paragraph))
+        if section.bullets and len(section.paragraphs) == 1 and len(paragraph) <= 72:
+            raw.append(paragraph)
+        else:
+            raw.extend(re.split(r"\n+|(?<=[。！？；])", paragraph))
     raw.extend(section.bullets)
     points: List[str] = []
     seen = set()
@@ -587,7 +590,7 @@ def _normalize_ppt_request(request: DeliverableRequest) -> DeliverableRequest:
     normalized: List[DeliverableSection] = []
     for section in request.sections:
         generated = normalize_markers("\n".join(section.paragraphs).strip(), request)
-        slides = _json_ppt_sections(generated, section) or _labeled_ppt_sections(generated, section)
+        slides = _json_ppt_sections(generated, section, request) or _labeled_ppt_sections(generated, section)
         normalized.extend(slides or [section])
     return request.model_copy(update={"sections": normalized}, deep=True)
 
@@ -600,7 +603,8 @@ def _normalize_document_request(request: DeliverableRequest) -> DeliverableReque
     return request.model_copy(update={"sections": normalized}, deep=True)
 
 
-def _json_ppt_sections(value: str, source: DeliverableSection) -> List[DeliverableSection]:
+def _json_ppt_sections(value: str, source: DeliverableSection,
+                       request: DeliverableRequest) -> List[DeliverableSection]:
     candidate = re.sub(r"^```(?:json)?\s*", "", value.strip(), flags=re.IGNORECASE)
     candidate = re.sub(r"\s*```$", "", candidate)
     try:
@@ -611,24 +615,38 @@ def _json_ppt_sections(value: str, source: DeliverableSection) -> List[Deliverab
     if not isinstance(slides, list):
         return []
     result: List[DeliverableSection] = []
-    for slide in slides[:12]:
+    for slide in slides[:16]:
         if not isinstance(slide, dict):
             continue
-        heading = _clean_slide_heading(str(slide.get("title") or ""))
-        summary = _compact_ppt_copy(str(slide.get("summary") or ""), 48)
+        slide_refs = _ppt_slide_refs(slide, source.refs)
+        heading = _clean_slide_heading(compact_inline_citations(str(slide.get("title") or ""), request))
+        summary = _compact_ppt_copy(compact_inline_citations(str(slide.get("summary") or ""), request), 64)
         bullets = slide.get("bullets")
-        clean_bullets = [_compact_ppt_copy(str(item), 42) for item in bullets] if isinstance(bullets, list) else []
+        clean_bullets = [
+            _compact_ppt_copy(compact_inline_citations(str(item), request), 56)
+            for item in bullets
+        ] if isinstance(bullets, list) else []
         bullet_limit = 3 if summary else 4
         clean_bullets = [item for item in clean_bullets if len(item) >= 4][:bullet_limit]
         if heading and (summary or clean_bullets):
+            chart = _parse_chart(slide.get("chart"))
+            if chart:
+                chart = chart.model_copy(update={
+                    "source_ref": compact_inline_citations(chart.source_ref, request)
+                })
             result.append(DeliverableSection(
                 heading=heading,
                 paragraphs=[summary] if summary else [],
                 bullets=clean_bullets,
-                refs=source.refs,
-                chart=_parse_chart(slide.get("chart")),
+                refs=slide_refs,
+                chart=chart,
             ))
     return result
+def _ppt_slide_refs(slide: dict, refs: List[DeliverableRef]) -> List[DeliverableRef]:
+    raw = json.dumps(slide, ensure_ascii=False)
+    indexes = {int(value) for value in re.findall(r"\[(?:Ref\s*)?(\d+)\]", raw, flags=re.IGNORECASE)}
+    selected = [ref for index, ref in enumerate(refs, start=1) if index in indexes or ref.source_name in raw]
+    return selected
 
 
 def _json_report_sections(value: str, source: DeliverableSection) -> List[DeliverableSection]:
@@ -706,6 +724,8 @@ def _labeled_ppt_sections(value: str, source: DeliverableSection) -> List[Delive
 def _clean_slide_heading(value: str) -> str:
     clean = _clean_ppt_text(value)
     clean = re.sub(r"^(?:第\s*[一二三四五六七八九十百零〇\d]+\s*页|slide\s*\d+)\s*[｜|:：\-—]?\s*", "", clean, flags=re.IGNORECASE)
+    clean = re.sub(r"\s*\[\d+(?:[-,]\d+)*\]", "", clean)
+    clean = re.sub(r"\s*[\(（][^\)）]*(?:n\.d\.|\d{4})[^\)）]*[\)）]\s*$", "", clean, flags=re.IGNORECASE)
     replacements = {
         "管理层需要关注的": "",
         "仍需同步关注": "需关注",
