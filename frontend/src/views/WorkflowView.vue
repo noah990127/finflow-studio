@@ -4,7 +4,7 @@ import { addEdge, MarkerType, useVueFlow, VueFlow, type Connection, type Edge, t
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
 import { MiniMap } from '@vue-flow/minimap'
-import { Activity, BarChart3, BookOpen, Braces, CalendarClock, CheckCircle2, ChevronRight, CircleStop, CircleUserRound, Clock3, Code2, Combine, Database, File, FileOutput, FileSpreadsheet, FileText, FileUp, History, Network, Play, Plus, RotateCcw, Save, Search, Sheet, Sparkles, Trash2, X } from 'lucide-vue-next'
+import { Activity, BarChart3, BookOpen, Braces, CalendarClock, CheckCircle2, ChevronRight, CircleStop, CircleUserRound, Clock3, Code2, Combine, Database, File, FileOutput, FileSpreadsheet, FileText, FileUp, History, Network, Play, Plus, RotateCcw, Save, Search, Sparkles, Trash2, X } from 'lucide-vue-next'
 import WorkflowNode from '../components/WorkflowNode.vue'
 import { api, type DataConnection, type DataTransformSource, type FileResource, type PptSkill, type Project, type Workflow, type WorkflowNodeType, type WorkflowProgressEvent, type WorkflowRun, type WorkflowSave, type WorkspaceResource } from '../api/client'
 
@@ -26,12 +26,11 @@ let eventSource: EventSource | undefined
 const catalog: Array<{ type: WorkflowNodeType; label: string; detail: string; icon: typeof FileUp }> = [
   { type: 'DATA_EXTRACT', label: '提取数据', detail: '从数据库或接口取得数据', icon: Database },
   { type: 'DATA_TRANSFORM', label: '加工数据', detail: '关联、清洗、计算结构化数据', icon: Combine },
-  { type: 'SPREADSHEET_TRANSFORM', label: '加工表格', detail: '清洗、公式与表格处理', icon: Sheet },
   { type: 'REF_SEARCH', label: '查找参考', detail: '从项目资料中查找内容', icon: BookOpen },
   { type: 'AI_ANALYSIS', label: '智能分析', detail: '归纳变化、原因和风险', icon: Sparkles },
-  { type: 'REVIEW', label: '人工确认', detail: '暂停并复核中间结果', icon: CircleUserRound },
   { type: 'DELIVERABLE', label: '生成成果', detail: '生成演示、文档或图表', icon: FileOutput },
 ]
+const removedNodeTypes = new Set<WorkflowNodeType>(['SPREADSHEET_TRANSFORM', 'REVIEW'])
 const deliverableFormats = [
   { value: 'PPTX', label: 'PPT', detail: '演示文稿' },
   { value: 'HTML_SLIDES', label: '网页演示', detail: 'HTML + JS（非 PPT）' },
@@ -79,10 +78,8 @@ function initialConfig(type: WorkflowNodeType): Record<string, unknown> {
   if (type === 'DATASET_INPUT') return { extractJobId: '' }
   if (type === 'DATA_EXTRACT') return { connectionId: '', sql: 'select * from your_table', outputName: 'data.csv', fetchSize: 5000 }
   if (type === 'DATA_TRANSFORM') return { requirements: '根据已连接的数据完成清洗、关联和计算，保留可核对的关键字段。', script: '', outputName: '数据加工结果.csv', inputAliases: {}, sheetNames: {}, scriptSummary: '', scriptMode: '', assumptions: [], qualityRules: [], sampleReport: null }
-  if (type === 'SPREADSHEET_TRANSFORM') return { fileId: '', sheetName: '', renameHeaders: {}, fillBlanks: {}, formulaColumns: [], removeDuplicates: false }
   if (type === 'REF_SEARCH') return { query: '', limit: 10 }
   if (type === 'AI_ANALYSIS') return { prompt: '结合已有数据和参考资料，归纳关键变化、原因与风险。', maxPoints: 6 }
-  if (type === 'REVIEW') return { reviewTitle: '复核中间结果', instructions: '请核对数据口径、关键数字和分析结论，确认无误后再继续。', editable: true, requireComment: false }
   if (type === 'DELIVERABLE') return { title: '分析结果', subtitle: '由工作流自动生成', format: 'PPTX', pptSkill: 'guizang-huawei-style-c', heading: '核心发现', targetAudience: '业务负责人', lengthHint: '5-8 页', includeCitations: true, citationStyle: 'IEEE', generationPrompt: '先给出核心结论，再说明变化原因、风险和下一步行动。语言简洁，所有结论仅基于工作流中的数据和参考资料。' }
   return { resourceId: '' }
 }
@@ -100,7 +97,9 @@ function resourceNode(resource: WorkspaceResource, x: number, y: number): Node {
 function openWorkflow(item: Workflow) {
   activeId.value = item.id; currentVersion.value = item.currentVersion; name.value = item.name; description.value = item.description; validation.value = null; currentRun.value = null
   executionMode.value = item.executionMode ?? 'MANUAL'; frequency.value = item.schedule?.frequency ?? 'DAILY'; scheduleTime.value = item.schedule?.time ?? '09:00'; dayOfWeek.value = item.schedule?.dayOfWeek ?? 1; dayOfMonth.value = item.schedule?.dayOfMonth ?? 1; timezone.value = item.schedule?.timezone ?? 'Asia/Shanghai'; nextRunAt.value = item.nextRunAt ?? ''
-  nodes.value = item.nodes.map(node => {
+  const visibleNodes = item.nodes.filter(node => !removedNodeTypes.has(node.type))
+  const visibleNodeIds = new Set(visibleNodes.map(node => node.id))
+  nodes.value = visibleNodes.map(node => {
     const config = structuredClone(node.config ?? {})
     if (node.type === 'DELIVERABLE') {
       if (!Object.prototype.hasOwnProperty.call(config, 'includeCitations')) config.includeCitations = true
@@ -108,7 +107,7 @@ function openWorkflow(item: Workflow) {
     }
     return { id: node.id, type: 'business', position: { x: node.x, y: node.y }, data: { label: node.name, nodeType: node.type, config } }
   })
-  edges.value = item.edges.map(decorateEdge); selectedNodeId.value = ''; loadRuns(item.id)
+  edges.value = item.edges.filter(edge => visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target)).map(decorateEdge); selectedNodeId.value = ''; loadRuns(item.id)
 }
 function payload(): WorkflowSave {
   const schedule = executionMode.value === 'SCHEDULED' ? { frequency: frequency.value, time: scheduleTime.value, dayOfWeek: dayOfWeek.value, dayOfMonth: dayOfMonth.value, timezone: timezone.value } : undefined
@@ -352,10 +351,8 @@ watch(() => props.project?.id, () => { activeId.value = ''; eventSource?.close()
           <section v-if="selectedNode.data.config.sampleReport" class="sample-report"><div><CheckCircle2 :size="15"/><strong>样本试跑通过</strong><small>{{ (selectedNode.data.config.sampleReport as any).sampleRowCount }} 行 · {{ (selectedNode.data.config.sampleReport as any).columns?.length ?? 0 }} 列</small></div><p v-for="item in ((selectedNode.data.config.sampleReport as any).checks ?? [])" :key="item">{{ item }}</p></section>
           <label><span>输出文件名</span><input v-model="selectedNode.data.config.outputName" placeholder="数据加工结果.csv"></label>
         </template>
-        <template v-else-if="selectedNode.data.nodeType === 'SPREADSHEET_TRANSFORM'"><label><span>直接选择表格（也可连接上一步）</span><select v-model="selectedNode.data.config.fileId"><option value="">使用上一步的文件</option><option v-for="file in files.filter(item => /sheet|excel|csv|spreadsheet/i.test(item.mediaType + item.name))" :key="file.id" :value="file.id">{{ file.name }}</option></select></label><label><span>工作表名称（可不填）</span><input v-model="selectedNode.data.config.sheetName"></label><label class="toggle-field"><input v-model="selectedNode.data.config.removeDuplicates" type="checkbox"><span>删除重复行</span></label></template>
         <template v-else-if="selectedNode.data.nodeType === 'REF_SEARCH'"><label><span>查找内容</span><textarea v-model="selectedNode.data.config.query" rows="4"></textarea></label><label><span>最多使用</span><input v-model.number="selectedNode.data.config.limit" type="number" min="1" max="50"></label></template>
         <template v-else-if="selectedNode.data.nodeType === 'AI_ANALYSIS'"><label><span>分析要求</span><textarea v-model="selectedNode.data.config.prompt" rows="7"></textarea></label><label><span>最多归纳要点</span><input v-model.number="selectedNode.data.config.maxPoints" type="number" min="1" max="20"></label></template>
-        <template v-else-if="selectedNode.data.nodeType === 'REVIEW'"><section class="review-node-note"><CircleUserRound :size="20"/><div><strong>运行到这里会自动暂停</strong><p>中间数据和分析结果将保留，等待你复核后再继续。</p></div></section><label><span>复核标题</span><input v-model="selectedNode.data.config.reviewTitle" placeholder="例如：复核经营数据口径"></label><label><span>复核要求</span><textarea v-model="selectedNode.data.config.instructions" rows="6" placeholder="说明需要核对的数字、口径和判断"></textarea></label><label class="toggle-field"><input v-model="selectedNode.data.config.editable" type="checkbox"><span>允许直接修改分析文字</span></label><label class="toggle-field"><input v-model="selectedNode.data.config.requireComment" type="checkbox"><span>确认时必须填写复核说明</span></label></template>
         <template v-else-if="selectedNode.data.nodeType === 'DELIVERABLE'">
           <fieldset class="deliverable-format"><legend>成果形式</legend><button v-for="item in deliverableFormats" :key="item.value" type="button" :class="{ active: selectedNode.data.config.format === item.value }" @click="selectDeliverableFormat(item.value)"><strong>{{ item.label }}</strong><small>{{ item.detail }}</small></button></fieldset>
           <section v-if="selectedNode.data.config.format === 'FINANCIAL_REPORT'" class="financial-report-card"><BarChart3 :size="21"/><div><strong>内置财务报告</strong><p>运行后直接在当前工作区查看完整报告，无需打开其他页面；仍可从查看工具栏下载文件。</p></div></section>
