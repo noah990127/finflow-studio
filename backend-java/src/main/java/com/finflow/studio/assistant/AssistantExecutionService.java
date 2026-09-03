@@ -102,10 +102,11 @@ public class AssistantExecutionService {
     private void execute(String runId) {
         var run = get(runId);
         var startedAt = Instant.now();
-        jdbc.sql("update assistant_run set status = 'RUNNING', started_at = :startedAt where id = :id")
+        var started = jdbc.sql("update assistant_run set status = 'RUNNING', started_at = :startedAt where id = :id and status = 'QUEUED'")
                 .param("startedAt", startedAt)
                 .param("id", runId)
                 .update();
+        if (started == 0) return;
         var steps = loadSteps(run.planId());
         events.publish(run.sessionId(), runId, "assistant.run.started", Map.of(
                 "runId", runId, "progress", 25, "message", "开始执行，共 " + steps.size() + " 个步骤",
@@ -113,6 +114,7 @@ public class AssistantExecutionService {
         var effects = new LinkedHashMap<String, Object>();
         try {
             for (var step : steps) {
+                if (isCanceled(runId)) return;
                 jdbc.sql("update assistant_run set current_step = :step where id = :id")
                         .param("step", step.order())
                         .param("id", runId)
@@ -124,18 +126,45 @@ public class AssistantExecutionService {
                 events.publish(run.sessionId(), runId, "assistant.step.started", Map.of(
                         "step", step.order(), "totalSteps", steps.size(), "title", step.title(),
                         "message", step.description(), "progress", startedProgress, "tool", step.tool()));
+                events.publish(run.sessionId(), runId, "agent.tool_call", Map.of(
+                        "status", "running", "step", step.order(), "totalSteps", steps.size(),
+                        "toolName", step.tool(), "argumentSummary", summarizeArguments(step.arguments()),
+                        "message", step.title(), "progress", startedProgress));
+                events.publish(run.sessionId(), runId, "agent.executing", Map.of(
+                        "status", "running", "step", step.order(), "toolName", step.tool(),
+                        "message", step.description(), "progress", startedProgress));
 
                 var result = executeStep(step, effects);
+                if (isCanceled(runId)) {
+                    jdbc.sql("update assistant_plan_step set status = 'CANCELED' where id = :id")
+                            .param("id", step.id()).update();
+                    return;
+                }
                 jdbc.sql("update assistant_run set effects_json = :effects where id = :id")
                         .param("effects", writeJson(effects)).param("id", runId).update();
                 jdbc.sql("update assistant_plan_step set status = 'SUCCEEDED' where id = :id")
                         .param("id", step.id())
                         .update();
                 var completedProgress = 25 + step.order() * 70 / Math.max(1, steps.size());
-                events.publish(run.sessionId(), runId, "assistant.step.completed", Map.of(
-                        "step", step.order(), "totalSteps", steps.size(), "title", step.title(),
-                        "message", result, "progress", completedProgress, "result", result));
+                var completedPayload = new LinkedHashMap<String, Object>();
+                completedPayload.put("step", step.order());
+                completedPayload.put("totalSteps", steps.size());
+                completedPayload.put("title", step.title());
+                completedPayload.put("message", result);
+                completedPayload.put("progress", completedProgress);
+                completedPayload.put("result", result);
+                completedPayload.put("tool", step.tool());
+                completedPayload.put("provenance", provenance(step, effects));
+                if (effects.get("uiAction") instanceof Map<?, ?> action) {
+                    completedPayload.put("uiAction", action);
+                }
+                events.publish(run.sessionId(), runId, "assistant.step.completed", completedPayload);
+                events.publish(run.sessionId(), runId, "agent.observation", Map.of(
+                        "status", "completed", "step", step.order(), "toolName", step.tool(),
+                        "resultSummary", result, "message", result, "progress", completedProgress,
+                        "provenance", provenance(step, effects)));
             }
+            if (isCanceled(runId)) return;
             var summary = finalSummary(steps, effects);
             var finishedAt = Instant.now();
             jdbc.sql("""
@@ -150,6 +179,11 @@ public class AssistantExecutionService {
             events.publish(run.sessionId(), runId, "assistant.run.completed", Map.of(
                     "runId", runId, "summary", summary, "message", summary, "progress", 100,
                     "canRollback", effects.containsKey("createdProjectId")));
+            events.publish(run.sessionId(), runId, "agent.generating", Map.of(
+                    "status", "completed", "message", "正在整理最终结果和执行轨迹", "progress", 98));
+            events.publish(run.sessionId(), runId, "agent.completed", Map.of(
+                    "status", "completed", "summary", summary, "message", summary, "progress", 100,
+                    "provenance", Map.of("traceId", runId, "toolCount", steps.size())));
         } catch (RuntimeException ex) {
             jdbc.sql("update assistant_run set status = 'FAILED', result_summary = :message, finished_at = :finishedAt where id = :id")
                     .param("message", ex.getMessage() == null ? "执行失败" : ex.getMessage())
@@ -158,8 +192,18 @@ public class AssistantExecutionService {
                     .update();
             events.publish(run.sessionId(), runId, "assistant.run.failed", Map.of(
                     "runId", runId, "progress", 100,
-                    "message", "当前步骤没有完成，可以从这里重试"));
+                    "message", "当前步骤没有完成，可以从这里重试",
+                    "error", ex.getMessage() == null ? "" : ex.getMessage()));
+            events.publish(run.sessionId(), runId, "agent.failed", Map.of(
+                    "status", "failed", "progress", 100,
+                    "message", "当前步骤没有完成，可以展开查看错误",
+                    "error", ex.getMessage() == null ? "" : ex.getMessage()));
         }
+    }
+
+    private boolean isCanceled(String runId) {
+        return "CANCELED".equals(jdbc.sql("select status from assistant_run where id = :id")
+                .param("id", runId).query(String.class).single());
     }
 
     public RunResponse get(String id) {
@@ -180,6 +224,8 @@ public class AssistantExecutionService {
                 .param("id", id)
                 .update();
         events.publish(run.sessionId(), id, "assistant.run.canceled", Map.of("runId", id));
+        events.publish(run.sessionId(), id, "agent.cancelled", Map.of(
+                "status", "cancelled", "runId", id, "message", "任务已停止"));
         return get(id);
     }
 
@@ -236,6 +282,28 @@ public class AssistantExecutionService {
         };
     }
 
+    private Map<String, Object> provenance(PlanStep step, Map<String, Object> effects) {
+        var value = new LinkedHashMap<String, Object>();
+        value.put("toolName", step.tool());
+        value.put("mode", step.mode());
+        value.put("risk", step.risk().name());
+        value.put("requiresConfirmation", step.requiresConfirmation());
+        if (effects.containsKey("sourceProjectId")) value.put("sourceProjectId", effects.get("sourceProjectId"));
+        if (effects.containsKey("workflowId")) value.put("workflowId", effects.get("workflowId"));
+        if (effects.containsKey("createdProjectId")) value.put("createdProjectId", effects.get("createdProjectId"));
+        return value;
+    }
+
+    private String summarizeArguments(Map<String, Object> arguments) {
+        if (arguments == null || arguments.isEmpty()) return "无参数";
+        return arguments.entrySet().stream()
+                .filter(entry -> !List.of("content", "text", "patch", "credentials_ref").contains(entry.getKey()))
+                .limit(5)
+                .map(entry -> entry.getKey() + "=" + Objects.toString(entry.getValue(), ""))
+                .toList()
+                .toString();
+    }
+
     private String inspectWorkspace(PlanStep step, Map<String, Object> effects) {
         var projectId = argument(step, "project_id", "");
         if (projectId.isBlank()) return "已读取当前工作环境";
@@ -252,8 +320,27 @@ public class AssistantExecutionService {
         var target = argument(step, "target", "HOME");
         var action = new LinkedHashMap<String, Object>();
         action.put("type", "OPEN_" + target);
+        var projectId = argument(step, "project_id", "");
+        if (!projectId.isBlank()) action.put("projectId", projectId);
         var resourceId = argument(step, "resource_id", "");
         if (!resourceId.isBlank()) action.put("resourceId", resourceId);
+        var navigationGoal = argument(step, "goal", "");
+        if (!navigationGoal.isBlank()) action.put("goal", navigationGoal);
+        if ("WORKFLOW".equals(target) && !projectId.isBlank()) {
+            var workflowId = argument(step, "workflow_id", "");
+            var requestedName = argument(step, "workflow_name", "");
+            var goal = argument(step, "goal", "");
+            if (workflowId.isBlank()) {
+                var available = workflows.list(projectId);
+                var selected = available.stream()
+                        .filter(item -> (!requestedName.isBlank() && (item.name().equalsIgnoreCase(requestedName) || item.name().contains(requestedName)))
+                                || (!goal.isBlank() && goal.contains(item.name())))
+                        .findFirst()
+                        .orElseGet(() -> available.stream().findFirst().orElse(null));
+                if (selected != null) workflowId = selected.id();
+            }
+            if (!workflowId.isBlank()) action.put("workflowId", workflowId);
+        }
         effects.put("uiAction", action);
         return switch (target) {
             case "WORKFLOW" -> "已打开工作流";
@@ -322,6 +409,7 @@ public class AssistantExecutionService {
         effects.put("createdProjectId", project.id());
         effects.put("createdProjectName", project.name());
         effects.put("topic", argument(step, "topic", name));
+        effects.put("uiAction", Map.of("type", "OPEN_PROJECT", "projectId", project.id(), "refreshWorkspace", true));
         return "已创建项目“" + project.name() + "”";
     }
 
@@ -386,7 +474,8 @@ public class AssistantExecutionService {
                 nodes, edges, ExecutionMode.MANUAL, null, null));
         effects.put("workflowId", created.id());
         effects.put("sourceCount", nodes.stream().filter(node -> node.type() == NodeType.LINK_INPUT).count());
-        effects.put("uiAction", Map.of("type", "OPEN_WORKFLOW"));
+        effects.put("uiAction", Map.of("type", "OPEN_WORKFLOW", "projectId", projectId,
+                "workflowId", created.id(), "refreshWorkspace", true));
         return formats.isEmpty() ? "已建立工作流，未添加用户没有要求的输出件"
                 : "已建立工作流，并加入 " + String.join("、", formats) + " 输出";
     }
@@ -395,16 +484,55 @@ public class AssistantExecutionService {
         var projectId = argument(step, "project_id", "");
         if (projectId.isBlank()) throw new IllegalStateException("当前项目不可用");
         var nodes = new ArrayList<NodeDefinition>();
+        var edges = new ArrayList<EdgeDefinition>();
         var input = selectedInputNode(step, 80, 180);
         if (input != null) nodes.add(input);
-        var edges = new ArrayList<EdgeDefinition>();
+        if (input == null) {
+            var available = workspace.get(projectId).resources().stream()
+                    .filter(resource -> !"OUTPUT".equals(resource.group()))
+                    .limit(8)
+                    .toList();
+            for (var index = 0; index < available.size(); index++) {
+                var resourceInput = workspaceInputNode(available.get(index), 70, 70 + index * 105);
+                if (resourceInput != null) nodes.add(resourceInput);
+            }
+        }
+        var goal = argument(step, "goal", "整理并分析当前项目内容");
+        var analysisId = "analysis_" + shortId();
+        if (nodes.isEmpty()) {
+            var researchId = "refs_" + shortId();
+            nodes.add(new NodeDefinition(researchId, NodeType.REF_SEARCH, "查找相关资料", 80, 170,
+                    Map.of("query", goal, "maxSources", 12)));
+        }
+        nodes.add(new NodeDefinition(analysisId, NodeType.AI_ANALYSIS, "分析与整理", 430, 180,
+                Map.of("prompt", goal, "externalResearch", "ON", "transparent", true)));
+        nodes.stream().filter(node -> !analysisId.equals(node.id())).forEach(node ->
+                edges.add(new EdgeDefinition("edge_" + shortId(), node.id(), analysisId)));
         var formats = stringList(step.arguments().get("output_formats"));
-        addOutputNodes(nodes, edges, formats, input == null ? null : input.id(), "工作成果", argument(step, "goal", ""));
+        addOutputNodes(nodes, edges, formats, analysisId, "工作成果", goal);
         var created = workflows.create(projectId, new SaveRequest(workflowName(step), "由 AI 助手按当前目标创建，可继续在画布中编排",
                 nodes, edges, ExecutionMode.MANUAL, null, null));
+        if (created.nodes().isEmpty()) throw new IllegalStateException("工作流没有生成可执行步骤，请重新描述目标");
         effects.put("workflowId", created.id());
-        effects.put("uiAction", Map.of("type", "OPEN_WORKFLOW", "workflowId", created.id()));
-        return "已创建工作流“" + created.name() + "”";
+        effects.put("uiAction", Map.of("type", "OPEN_WORKFLOW", "projectId", projectId,
+                "workflowId", created.id(), "refreshWorkspace", true));
+        return "已创建工作流“" + created.name() + "”，包含 " + created.nodes().size() + " 个可见步骤";
+    }
+
+    private NodeDefinition workspaceInputNode(com.finflow.studio.workspace.WorkspaceModels.Resource resource, double x, double y) {
+        var id = "input_" + shortId();
+        return switch (resource.resourceType()) {
+            case "DATABASE_CONNECTION", "API_CONNECTION" -> new NodeDefinition(id, NodeType.DATA_EXTRACT, resource.name(), x, y,
+                    Map.of("connectionId", resource.id(), "sql", "API_CONNECTION".equals(resource.resourceType()) ? "GET /" : "select * from your_table",
+                            "outputName", resource.name() + ".csv", "fetchSize", 5000));
+            case "DATASET" -> new NodeDefinition(id, NodeType.DATASET_INPUT, resource.name(), x, y,
+                    Map.of("extractJobId", resource.id()));
+            case "WEB_URL" -> new NodeDefinition(id, NodeType.LINK_INPUT, resource.name(), x, y,
+                    Map.of("title", resource.name(), "url", Objects.toString(resource.url(), "")));
+            case "DATA_FILE", "OFFICE_FILE", "KNOWLEDGE_FILE" -> new NodeDefinition(id, NodeType.FILE_INPUT, resource.name(), x, y,
+                    Map.of("resourceId", resource.id()));
+            default -> null;
+        };
     }
 
     private String addSelectedResource(PlanStep step, Map<String, Object> effects) {
@@ -412,7 +540,8 @@ public class AssistantExecutionService {
         var current = workflows.getProjectWorkflow(projectId);
         var resourceId = argument(step, "resource_id", "");
         if (current.nodes().stream().anyMatch(node -> node.config() != null && node.config().containsValue(resourceId))) {
-            effects.put("uiAction", Map.of("type", "OPEN_WORKFLOW"));
+            effects.put("uiAction", Map.of("type", "OPEN_WORKFLOW", "projectId", projectId,
+                    "workflowId", current.id(), "refreshWorkspace", true));
             return "当前内容已经在工作流中";
         }
         var input = selectedInputNode(step, 80 + (current.nodes().size() % 3) * 260, 100 + (current.nodes().size() / 3) * 150);
@@ -420,7 +549,8 @@ public class AssistantExecutionService {
         workflows.update(current.id(), new SaveRequest(current.name(), current.description(), append(current.nodes(), input), current.edges(),
                 current.executionMode(), current.schedule(), current.currentVersion()));
         effects.put("workflowId", current.id());
-        effects.put("uiAction", Map.of("type", "OPEN_WORKFLOW"));
+        effects.put("uiAction", Map.of("type", "OPEN_WORKFLOW", "projectId", projectId,
+                "workflowId", current.id(), "refreshWorkspace", true));
         return "已把“" + input.name() + "”加入工作流";
     }
 
@@ -435,7 +565,8 @@ public class AssistantExecutionService {
         workflows.update(current.id(), new SaveRequest(current.name(), current.description(), nodes, edges,
                 current.executionMode(), current.schedule(), current.currentVersion()));
         effects.put("workflowId", current.id());
-        effects.put("uiAction", Map.of("type", "OPEN_WORKFLOW"));
+        effects.put("uiAction", Map.of("type", "OPEN_WORKFLOW", "projectId", projectId,
+                "workflowId", current.id(), "refreshWorkspace", true));
         return "已加入 " + String.join("、", formats) + " 输出节点，可在画布中继续调整要求";
     }
 
@@ -462,7 +593,8 @@ public class AssistantExecutionService {
         workflows.update(current.id(), new SaveRequest(current.name(), current.description(), nodes, edges,
                 current.executionMode(), current.schedule(), current.currentVersion()));
         effects.put("workflowId", current.id());
-        effects.put("uiAction", Map.of("type", "OPEN_WORKFLOW"));
+        effects.put("uiAction", Map.of("type", "OPEN_WORKFLOW", "projectId", projectId,
+                "workflowId", current.id(), "refreshWorkspace", true));
         return "已在工作流中创建数据加工草稿，要求和脚本均可查看、修改和复核";
     }
 

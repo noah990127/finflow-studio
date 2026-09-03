@@ -23,7 +23,8 @@ dependencies = [
   "duckdb>=1.4,<2.0",
   "sqlglot>=27,<29",
   "faster-whisper>=1.2,<2.0",
-  "pydantic-ai-slim[openai,mcp]>=1.0,<2.0",
+  "deepagents>=0.7.13,<0.8",
+  "langchain-openai>=1.1,<2.0",
 ]
 
 [project.optional-dependencies]
@@ -34,3 +35,7 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+exclude = ["skills*"]

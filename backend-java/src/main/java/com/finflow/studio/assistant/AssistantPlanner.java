@@ -26,6 +26,8 @@ public class AssistantPlanner {
     }
 
     public PlannedWork plan(String goal, String page, Selection selection, WorkspaceContext context) {
+        var normalized = goal == null ? "" : goal.trim().toLowerCase(Locale.ROOT);
+        if (isDirectNavigation(normalized, context)) return fallbackPlan(goal, page, selection, context);
         var agentPlan = planWithAgent(goal, page, selection, context);
         if (agentPlan != null) return agentPlan;
         return fallbackPlan(goal, page, selection, context);
@@ -45,7 +47,8 @@ public class AssistantPlanner {
         if (navigationTarget != null) {
             steps.add(step(steps.size() + 1, "workspace.navigate", "READ", "打开工作区域",
                     navigationDescription(navigationTarget, context), RiskLevel.READ_ONLY,
-                    mapOf("target", navigationTarget, "resource_id", resourceId)));
+                    mapOf("target", navigationTarget, "project_id", context.projectId(), "resource_id", resourceId,
+                            "goal", text)));
         }
 
         if (isCreateProjectIntent(normalized)) {
@@ -243,6 +246,11 @@ public class AssistantPlanner {
     private boolean asksForDataWork(String text) { return containsAny(text, "数据", "字段", "清理", "整理", "异常", "表格", "excel", "csv", "关联", "合并", "计算"); }
     private boolean asksToModifyData(String text) { return containsAny(text, "清理", "整理", "加工", "关联", "合并", "计算", "转换", "去重", "补全"); }
     private boolean asksForSources(String text) { return containsAny(text, "找资料", "查资料", "搜集资料", "收集资料", "搜索资料", "联网", "公开资料", "参考资料", "信息来源"); }
+
+    private boolean isDirectNavigation(String text, WorkspaceContext context) {
+        return navigationTarget(text, context) != null
+                && !containsAny(text, "新建", "新增", "创建", "删除", "修改", "编排", "分析", "生成", "运行", "执行");
+    }
 
     private boolean isStructuredSelection(WorkspaceContext context, Selection selection) {
         return selection != null && (isStructuredType(context.selectedResourceType()) || isStructuredType(selection.type()));

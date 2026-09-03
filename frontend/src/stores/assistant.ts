@@ -7,6 +7,12 @@ type TimelineItem = {
   title: string
   detail: string
   tone: 'info' | 'success' | 'warning'
+  time: string
+  toolName?: string
+  argumentSummary?: string
+  resultSummary?: string
+  error?: string
+  status?: string
 }
 
 const eventTypes = [
@@ -15,6 +21,10 @@ const eventTypes = [
   'assistant.run.started', 'assistant.step.started', 'assistant.step.completed',
   'assistant.run.completed', 'assistant.run.failed', 'assistant.run.canceled',
   'assistant.rollback.completed',
+  'agent.thinking_summary', 'agent.planning', 'agent.skill_loading', 'agent.tool_search',
+  'agent.tool_call', 'agent.executing', 'agent.observation', 'agent.plan_updated',
+  'agent.waiting_confirmation', 'agent.generating', 'agent.retrying', 'agent.completed',
+  'agent.failed', 'agent.cancelled',
 ]
 let eventSource: EventSource | null = null
 let eventSessionId = ''
@@ -28,6 +38,7 @@ export const useAssistantStore = defineStore('assistant', {
     busy: false,
     error: '',
     assistantMessage: '',
+    currentRequest: '',
     plan: null as Plan | null,
     context: null as ContextSnapshot | null,
     run: null as Run | null,
@@ -40,6 +51,8 @@ export const useAssistantStore = defineStore('assistant', {
     streaming: false,
     streamLines: [] as string[],
     lastEventSequence: 0,
+    workbenchAction: null as Record<string, unknown> | null,
+    workbenchActionSequence: 0,
   }),
   getters: {
     needsConfirmation: (state) =>
@@ -77,6 +90,11 @@ export const useAssistantStore = defineStore('assistant', {
       }
       eventSource.onerror = () => { this.streaming = Boolean(this.run && ['QUEUED', 'RUNNING'].includes(this.run.status)) }
     },
+    publishWorkbenchAction(action: Record<string, unknown>) {
+      this.workbenchAction = action
+      this.workbenchActionSequence += 1
+      window.dispatchEvent(new CustomEvent('finflow:assistant-action', { detail: action }))
+    },
     handleEvent(event: AssistantEvent) {
       if (event.sessionId !== this.sessionId || event.eventSeq <= this.lastEventSequence) return
       this.lastEventSequence = event.eventSeq
@@ -97,10 +115,36 @@ export const useAssistantStore = defineStore('assistant', {
         this.progress = 100
       }
       if (event.type === 'assistant.run.failed' || event.type === 'assistant.run.canceled') this.streaming = false
+      const uiAction = payload.uiAction
+      if (event.type === 'assistant.step.completed' && uiAction && typeof uiAction === 'object') {
+        this.pushTimeline(`action-${event.eventSeq}`, '同步工作台', '正在把这一步的结果呈现在左侧工作区', 'info', event.createdAt)
+        this.publishWorkbenchAction(uiAction as Record<string, unknown>)
+      }
       if (title && message) this.pushTimeline(`event-${event.eventSeq}`, title, message,
-        event.type.endsWith('completed') ? 'success' : event.type.includes('failed') ? 'warning' : 'info')
+        event.type.endsWith('completed') || event.type === 'agent.observation' || event.type === 'agent.completed' ? 'success' : event.type.includes('failed') || event.type.includes('confirmation') ? 'warning' : 'info',
+        event.createdAt, {
+          toolName: typeof payload.toolName === 'string' ? payload.toolName : typeof payload.tool === 'string' ? payload.tool : undefined,
+          argumentSummary: typeof payload.argumentSummary === 'string' ? payload.argumentSummary : undefined,
+          resultSummary: typeof payload.resultSummary === 'string' ? payload.resultSummary : typeof payload.result === 'string' ? payload.result : undefined,
+          error: typeof payload.error === 'string' ? payload.error : undefined,
+          status: typeof payload.status === 'string' ? payload.status : undefined,
+        })
     },
     eventTitle(type: string) {
+      if (type === 'agent.thinking_summary') return '正在思考'
+      if (type === 'agent.planning') return '制定计划'
+      if (type === 'agent.skill_loading') return '加载 Skill'
+      if (type === 'agent.tool_search') return '搜索工具'
+      if (type === 'agent.tool_call') return '调用工具'
+      if (type === 'agent.executing') return '执行中'
+      if (type === 'agent.observation') return '读取结果'
+      if (type === 'agent.plan_updated') return '计划已调整'
+      if (type === 'agent.waiting_confirmation') return '等待确认'
+      if (type === 'agent.generating') return '整理结果'
+      if (type === 'agent.retrying') return '重试'
+      if (type === 'agent.completed') return '已完成'
+      if (type === 'agent.failed') return '失败'
+      if (type === 'agent.cancelled') return '已停止'
       if (type === 'assistant.request.received') return '理解需求'
       if (type === 'assistant.context.started') return '读取当前工作'
       if (type === 'assistant.planning.started') return '理解意图与选择能力'
@@ -114,14 +158,17 @@ export const useAssistantStore = defineStore('assistant', {
       if (type === 'assistant.rollback.completed') return '已撤销'
       return '当前步骤'
     },
-    pushTimeline(id: string, title: string, detail: string, tone: TimelineItem['tone']) {
+    pushTimeline(id: string, title: string, detail: string, tone: TimelineItem['tone'], time = new Date().toISOString(), extra: Partial<TimelineItem> = {}) {
       if (this.timeline.some(item => item.id === id)) return
-      this.timeline.push({ id, title, detail, tone })
+      const latest = this.timeline.at(-1)
+      if (latest?.title === title && latest.detail === detail) return
+      this.timeline.push({ id, title, detail, tone, time, ...extra })
     },
     async send(projectId: string) {
       const text = this.input.trim()
       if (!text || this.busy) return
       this.busy = true
+      this.currentRequest = text
       this.error = ''
       this.plan = null
       this.run = null
@@ -149,6 +196,8 @@ export const useAssistantStore = defineStore('assistant', {
         if (this.run) await this.watchRun()
       } catch (error) {
         this.error = error instanceof Error ? error.message : '助手暂时没有完成请求'
+        this.progressLabel = '本次任务未完成'
+        this.progress = 100
         this.streaming = false
       } finally {
         this.busy = false
@@ -188,10 +237,24 @@ export const useAssistantStore = defineStore('assistant', {
         const createdProjectId = typeof this.run.result?.createdProjectId === 'string' ? this.run.result.createdProjectId : ''
         if (createdProjectId) await useProjectsStore().refresh(createdProjectId)
         const uiAction = this.run.result?.uiAction
-        if (uiAction && typeof uiAction === 'object') window.dispatchEvent(new CustomEvent('finflow:assistant-action', { detail: uiAction }))
+        if (uiAction && typeof uiAction === 'object') {
+          this.pushTimeline(`action-final-${this.run.id}`, '同步工作台', '已将最终结果呈现在工作区', 'success')
+          this.publishWorkbenchAction(uiAction as Record<string, unknown>)
+        }
       } else if (['FAILED', 'CANCELED'].includes(this.run.status)) {
         this.streaming = false
         this.pushTimeline(`ended-${this.run.id}`, '处理未完成', this.run.resultSummary || '可以检查后重新执行', 'warning')
+      }
+    },
+    async cancel() {
+      if (!this.run || !['QUEUED', 'RUNNING'].includes(this.run.status)) return
+      try {
+        this.run = await api.cancelAssistantRun(this.run.id)
+        this.streaming = false
+        this.progressLabel = '任务已停止'
+        this.pushTimeline(`canceled-${this.run.id}`, '任务已停止', '没有继续执行后续步骤', 'warning')
+      } catch (error) {
+        this.error = error instanceof Error ? error.message : '任务暂时无法停止'
       }
     },
     async rollback() {

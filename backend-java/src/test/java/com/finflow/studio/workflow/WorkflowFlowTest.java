@@ -21,6 +21,7 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -34,6 +35,8 @@ class WorkflowFlowTest {
     @Autowired ProjectService projects;
     @Autowired WorkflowDefinitionService definitions;
     @Autowired WorkflowRunService runs;
+    @Autowired WorkflowPatchService patches;
+    @Autowired WorkflowTemplateService templates;
     @Autowired MockMvc mockMvc;
 
     @Test
@@ -108,6 +111,43 @@ class WorkflowFlowTest {
         assertThat(second.id()).isNotEqualTo(first.id());
         assertThat(definitions.list(project.id())).extracting(WorkflowModels.WorkflowResponse::name)
                 .containsExactlyInAnyOrder("主工作流", "另一个工作流");
+    }
+
+    @Test
+    void exposesNodeProtocolAppliesPatchAndCapturesExecutionFacts() throws Exception {
+        var registry = mockMvc.perform(get("/api/workflow-node-types"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        assertThat(registry).contains("AGENT_TASK", "SUB_WORKFLOW", "studio-mcp");
+
+        var project = projects.create("阶段ABC测试", "协议、补丁和事实链");
+        var workflow = definitions.create(project.id(), new SaveRequest("研究链路", "",
+                List.of(new NodeDefinition("source", NodeType.REF_SEARCH, "读取资料", 100, 100,
+                        Map.of("query", "经营情况", "limit", 3))), List.of()));
+        var patch = new WorkflowModels.WorkflowPatch(workflow.currentVersion(), "增加分析步骤",
+                List.of(new WorkflowModels.PatchOperation("add_node", null, null,
+                                new NodeDefinition("agent", NodeType.REF_SEARCH, "补充资料", 380, 100,
+                                        Map.of("query", "风险提示", "limit", 3)), null, null),
+                        new WorkflowModels.PatchOperation("add_edge", null, null, null,
+                                new EdgeDefinition("source-agent", "source", "agent"), null)),
+                List.of(), List.of(), List.of());
+        var preview = patches.preview(workflow.id(), patch);
+        assertThat(preview.validation().valid()).isTrue();
+        var updated = patches.apply(workflow.id(), patch);
+        assertThat(updated.currentVersion()).isEqualTo(2);
+
+        var run = runs.start(updated.id());
+        var deadline = Instant.now().plus(Duration.ofSeconds(10));
+        while (Instant.now().isBefore(deadline)) {
+            run = runs.get(run.id());
+            if (List.of("SUCCEEDED", "FAILED", "CANCELED").contains(run.status())) break;
+            Thread.sleep(50);
+        }
+        assertThat(run.status()).as(run.errorMessage()).isEqualTo("SUCCEEDED");
+        assertThat(run.nodes()).allSatisfy(node -> assertThat(node.activities()).isNotEmpty());
+        assertThat(templates.list()).anySatisfy(template -> {
+            assertThat(template.builtIn()).isTrue();
+            assertThat(template.definition().nodes()).extracting(NodeDefinition::type).contains(NodeType.AGENT_TASK);
+        });
     }
 
     @Test

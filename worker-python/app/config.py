@@ -33,6 +33,11 @@ class Settings(BaseSettings):
     agent_mcp_config: str = ""
     agent_mcp_allowed_tools: str = ""
     agent_max_steps: int = 10
+    agent_max_tool_calls: int = 80
+    agent_task_timeout_seconds: int = 900
+    research_searxng_url: str = ""
+    research_allowed_domains: str = ""
+    research_max_download_bytes: int = 10 * 1024 * 1024
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

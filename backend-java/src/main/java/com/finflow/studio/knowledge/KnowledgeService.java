@@ -126,6 +126,32 @@ public class KnowledgeService {
         return importFile(projectId, name, mediaType, source, maxDataOutputBytes);
     }
 
+    @Transactional
+    public FileResourceResponse importBytes(String projectId, String name, String mediaType, byte[] content) {
+        projects.get(projectId);
+        if (content == null || content.length == 0) throw new IllegalArgumentException("资料内容为空");
+        if (content.length > maxFileBytes) throw new IllegalArgumentException("资料超过允许的大小");
+        var resourceId = UUID.randomUUID().toString();
+        var originalName = safeName(name);
+        var now = Instant.now();
+        jdbc.sql("""
+                insert into file_resource(id, project_id, name, media_type, status, current_version, created_at, updated_at)
+                values (:id, :projectId, :name, :mediaType, 'PROCESSING', 1, :now, :now)
+                """).param("id", resourceId).param("projectId", projectId).param("name", originalName)
+                .param("mediaType", mediaType).param("now", now).update();
+        var stored = storeBytes(projectId, resourceId, 1, originalName, content);
+        var versionId = UUID.randomUUID().toString();
+        jdbc.sql("""
+                insert into file_version(id, resource_id, version_number, original_name, media_type, storage_path,
+                    size_bytes, checksum, parse_status, created_at)
+                values (:id, :resourceId, 1, :name, :mediaType, :path, :size, :checksum, 'QUEUED', :now)
+                """).param("id", versionId).param("resourceId", resourceId).param("name", originalName)
+                .param("mediaType", mediaType).param("path", stored.location()).param("size", stored.size())
+                .param("checksum", stored.checksum()).param("now", now).update();
+        scheduleParse(versionId);
+        return get(resourceId);
+    }
+
     private FileResourceResponse importFile(String projectId, String name, String mediaType, Path source,
                                             long sizeLimit) {
         projects.get(projectId);

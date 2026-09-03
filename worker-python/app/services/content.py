@@ -6,8 +6,8 @@ import time
 from collections import Counter
 from typing import AsyncIterator, Dict, Iterable, List
 
-from .llm import llm
-from .models import (
+from ..llm import llm
+from ..models import (
     ColumnProfile,
     DatasetProfileRequest,
     DatasetProfileResponse,

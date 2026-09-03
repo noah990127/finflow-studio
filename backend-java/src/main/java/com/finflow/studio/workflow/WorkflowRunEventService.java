@@ -1,7 +1,9 @@
 package com.finflow.studio.workflow;
 
 import org.springframework.stereotype.Service;
+import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import tools.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
 import java.time.Instant;
@@ -14,27 +16,33 @@ import java.util.concurrent.atomic.AtomicLong;
 
 @Service
 public class WorkflowRunEventService {
-    private static final int MAX_REPLAY_EVENTS = 600;
-
     public record RunProgressEvent(long sequence, String runId, String type, String nodeId,
                                    String nodeName, String status, int progress, String message,
                                    String content, Instant createdAt) { }
 
     private final Map<String, AtomicLong> sequences = new ConcurrentHashMap<>();
-    private final Map<String, List<RunProgressEvent>> replay = new ConcurrentHashMap<>();
     private final Map<String, CopyOnWriteArrayList<SseEmitter>> emitters = new ConcurrentHashMap<>();
+    private final JdbcClient jdbc;
+
+    public WorkflowRunEventService(JdbcClient jdbc) {
+        this.jdbc = jdbc;
+    }
 
     public RunProgressEvent publish(String runId, String type, String nodeId, String nodeName,
                                     String status, int progress, String message, String content) {
-        var sequence = sequences.computeIfAbsent(runId, ignored -> new AtomicLong()).incrementAndGet();
+        var sequence = sequences.computeIfAbsent(runId, this::loadSequence).incrementAndGet();
         var event = new RunProgressEvent(sequence, runId, type, nodeId, nodeName, status,
                 Math.max(0, Math.min(100, progress)), message == null ? "" : message,
                 content == null ? "" : content, Instant.now());
-        var events = replay.computeIfAbsent(runId, ignored -> java.util.Collections.synchronizedList(new ArrayList<>()));
-        synchronized (events) {
-            events.add(event);
-            if (events.size() > MAX_REPLAY_EVENTS) events.subList(0, events.size() - MAX_REPLAY_EVENTS).clear();
-        }
+        jdbc.sql("""
+                insert into workflow_run_event(id, run_id, event_seq, event_type, node_id, node_name,
+                    status, progress, message, content, created_at)
+                values (:id, :runId, :sequence, :type, :nodeId, :nodeName, :status,
+                    :progress, :message, :content, :createdAt)
+                """).param("id", java.util.UUID.randomUUID().toString()).param("runId", runId)
+                .param("sequence", event.sequence()).param("type", event.type()).param("nodeId", event.nodeId())
+                .param("nodeName", event.nodeName()).param("status", event.status()).param("progress", event.progress())
+                .param("message", event.message()).param("content", event.content()).param("createdAt", event.createdAt()).update();
         emitters.getOrDefault(runId, new CopyOnWriteArrayList<>()).removeIf(emitter -> !send(emitter, event));
         return event;
     }
@@ -50,11 +58,20 @@ public class WorkflowRunEventService {
     }
 
     public List<RunProgressEvent> list(String runId, long afterSequence) {
-        var events = replay.get(runId);
-        if (events == null) return List.of();
-        synchronized (events) {
-            return events.stream().filter(event -> event.sequence() > afterSequence).toList();
-        }
+        return jdbc.sql("""
+                select * from workflow_run_event where run_id = :runId and event_seq > :after
+                order by event_seq
+                """).param("runId", runId).param("after", afterSequence)
+                .query((rs, rowNum) -> new RunProgressEvent(rs.getLong("event_seq"), rs.getString("run_id"),
+                        rs.getString("event_type"), rs.getString("node_id"), rs.getString("node_name"),
+                        rs.getString("status"), rs.getInt("progress"), rs.getString("message"),
+                        rs.getString("content"), rs.getTimestamp("created_at").toInstant())).list();
+    }
+
+    private AtomicLong loadSequence(String runId) {
+        var current = jdbc.sql("select coalesce(max(event_seq), 0) from workflow_run_event where run_id = :runId")
+                .param("runId", runId).query(Long.class).single();
+        return new AtomicLong(current);
     }
 
     private boolean send(SseEmitter emitter, RunProgressEvent event) {

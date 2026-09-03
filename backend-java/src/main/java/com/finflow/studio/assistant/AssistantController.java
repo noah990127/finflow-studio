@@ -7,6 +7,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api")
@@ -15,12 +16,14 @@ public class AssistantController {
     private final AssistantService assistant;
     private final AssistantExecutionService execution;
     private final AssistantEventService events;
+    private final AgentMemoryService memory;
 
     public AssistantController(AssistantService assistant, AssistantExecutionService execution,
-                               AssistantEventService events) {
+                               AssistantEventService events, AgentMemoryService memory) {
         this.assistant = assistant;
         this.execution = execution;
         this.events = events;
+        this.memory = memory;
     }
 
     @PostMapping("/projects/{projectId}/assistant/sessions")
@@ -55,6 +58,26 @@ public class AssistantController {
         return events.list(sessionId, after);
     }
 
+    @GetMapping("/assistant/tools")
+    List<Map<String, Object>> listTools() {
+        return AssistantCapabilityRegistry.catalog();
+    }
+
+    @PostMapping("/assistant/tools/search")
+    List<Map<String, Object>> searchTools(@RequestBody(required = false) ToolSearchRequest request) {
+        return AssistantCapabilityRegistry.search(request == null ? "" : request.query());
+    }
+
+    @GetMapping("/assistant/tools/{toolName:.+}")
+    Map<String, Object> describeTool(@PathVariable String toolName) {
+        return AssistantCapabilityRegistry.find(toolName)
+                .map(capability -> AssistantCapabilityRegistry.search(capability.id()).stream()
+                        .filter(item -> toolName.equals(item.get("id")))
+                        .findFirst()
+                        .orElseThrow())
+                .orElseThrow(() -> new IllegalArgumentException("工具不存在：" + toolName));
+    }
+
     @GetMapping("/assistant/plans/{planId}")
     PlanResponse getPlan(@PathVariable String planId) {
         return assistant.getPlan(planId);
@@ -80,5 +103,20 @@ public class AssistantController {
     RunResponse rollback(@PathVariable String runId) {
         return execution.rollback(runId);
     }
-}
 
+    @GetMapping("/assistant/memory")
+    List<MemoryResponse> listMemory(@RequestParam(required = false) String projectId) {
+        return memory.list(projectId);
+    }
+
+    @PutMapping("/assistant/memory")
+    MemoryResponse saveMemory(@Valid @RequestBody MemoryRequest request) {
+        return memory.save(request);
+    }
+
+    @DeleteMapping("/assistant/memory/{id}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    void deleteMemory(@PathVariable String id) {
+        memory.delete(id);
+    }
+}

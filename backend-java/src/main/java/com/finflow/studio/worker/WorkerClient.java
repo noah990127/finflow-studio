@@ -144,6 +144,28 @@ public class WorkerClient {
         return result;
     }
 
+    public Map<String, Object> runAgentTaskStreaming(Object request,
+                                                     Consumer<Map<String, Object>> eventConsumer) {
+        var finalResult = new AtomicReference<Map<String, Object>>();
+        client.post().uri("/v1/agent/tasks/stream")
+                .contentType(MediaType.APPLICATION_JSON)
+                .accept(MediaType.APPLICATION_NDJSON)
+                .bodyValue(request)
+                .retrieve()
+                .bodyToFlux(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {})
+                .doOnNext(event -> {
+                    eventConsumer.accept(event);
+                    if ("complete".equals(event.get("type")) || "completed".equals(event.get("type"))) finalResult.set(event);
+                    if ("error".equals(event.get("type"))) {
+                        throw new IllegalStateException(String.valueOf(event.getOrDefault("message", "Agent 任务失败")));
+                    }
+                })
+                .timeout(Duration.ofMinutes(20))
+                .blockLast();
+        if (finalResult.get() == null) throw new IllegalStateException("Agent 没有返回任务结果");
+        return finalResult.get();
+    }
+
     public Map<String, Object> generateContent(String format, String requirements, String sourceText) {
         var result = client.post().uri("/v1/knowledge/generate")
                 .contentType(MediaType.APPLICATION_JSON)

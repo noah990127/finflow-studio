@@ -134,4 +134,14 @@ public final class AssistantModels {
             Instant createdAt
     ) {
     }
+
+    public record ToolSearchRequest(String query) {
+    }
+
+    public record MemoryRequest(@NotBlank String scope, String projectId, @NotBlank String key,
+                                @NotNull Map<String, Object> value, String sourceRef) { }
+
+    public record MemoryResponse(String id, String actorId, String projectId, String scope, String key,
+                                 Map<String, Object> value, String sourceRef, String status,
+                                 Instant createdAt, Instant updatedAt) { }
 }

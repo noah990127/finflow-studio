@@ -1,0 +1,1 @@
+"""Fallback and compatibility adapters."""

@@ -24,10 +24,12 @@ public class AssistantService {
     private final AssistantExecutionService execution;
     private final AssistantEventService events;
     private final WorkspaceResourceService workspace;
+    private final AgentMemoryService memory;
 
     public AssistantService(JdbcClient jdbc, ObjectMapper objectMapper, ProjectService projects,
                             AssistantPlanner planner, AssistantExecutionService execution,
-                            AssistantEventService events, WorkspaceResourceService workspace) {
+                            AssistantEventService events, WorkspaceResourceService workspace,
+                            AgentMemoryService memory) {
         this.jdbc = jdbc;
         this.objectMapper = objectMapper;
         this.projects = projects;
@@ -35,6 +37,7 @@ public class AssistantService {
         this.execution = execution;
         this.events = events;
         this.workspace = workspace;
+        this.memory = memory;
     }
 
     public SessionResponse createSession(String projectId, String title) {
@@ -78,12 +81,19 @@ public class AssistantService {
         saveMessage(sessionId, "USER", request.text(), null, traceId);
         events.publish(sessionId, null, "assistant.request.received", Map.of(
                 "progress", 3, "message", "已收到需求，正在理解你想完成的工作"));
+        events.publish(sessionId, null, "agent.thinking_summary", Map.of(
+                "status", "running", "progress", 4, "message", "正在判断目标、上下文和可能需要的工作区能力"));
 
         events.publish(sessionId, null, "assistant.context.started", Map.of(
                 "progress", 7, "message", "正在读取当前项目和已选择的内容"));
+        events.publish(sessionId, null, "agent.tool_search", Map.of(
+                "status", "running", "toolName", "workspace.inspect", "progress", 8,
+                "message", "正在查看当前项目、选择内容和资源目录"));
         var context = createContext(session, request);
         events.publish(sessionId, null, "assistant.planning.started", Map.of(
                 "progress", 12, "message", "正在识别意图并匹配可用能力与技能"));
+        events.publish(sessionId, null, "agent.skill_loading", Map.of(
+                "status", "running", "progress", 13, "message", "正在按任务类型加载可复用 Skill"));
         var workspaceResponse = workspace.get(session.projectId());
         var selected = request.selection() == null ? null : workspaceResponse.resources().stream()
                 .filter(resource -> resource.id().equals(request.selection().resourceId()))
@@ -99,8 +109,10 @@ public class AssistantService {
                 workspaceResponse.resources().stream().limit(120).map(resource -> Map.<String, Object>of(
                         "id", resource.id(), "name", resource.name(), "type", resource.resourceType(),
                         "group", resource.group(), "status", resource.status())).toList(),
-                recentMessages(sessionId));
+                recentMessages(sessionId, session.projectId()));
         var plannedWork = planner.plan(request.text(), request.page(), request.selection(), workspaceContext);
+        events.publish(sessionId, null, "agent.planning", Map.of(
+                "status", "completed", "progress", 18, "message", plannedWork.summary()));
         var plan = savePlan(sessionId, context, request.text(), plannedWork);
         saveMessage(sessionId, "ASSISTANT", plannedWork.summary(), modelName(), traceId);
 
@@ -110,6 +122,9 @@ public class AssistantService {
                 "progress", 20,
                 "message", "处理计划已经准备好",
                 "requiresConfirmation", plan.steps().stream().anyMatch(PlanStep::requiresConfirmation)));
+        events.publish(sessionId, null, "agent.plan_updated", Map.of(
+                "status", "completed", "planId", plan.id(), "version", plan.version(),
+                "progress", 20, "message", "计划已更新，共 " + plan.steps().size() + " 个步骤"));
 
         RunResponse run = null;
         if (plan.steps().stream().anyMatch(PlanStep::requiresConfirmation)) {
@@ -119,14 +134,21 @@ public class AssistantService {
                     "progress", 20,
                     "message", "等待你确认后开始执行",
                     "affectedResources", plan.affectedResources()));
+            events.publish(sessionId, null, "agent.waiting_confirmation", Map.of(
+                    "status", "waiting", "planId", plan.id(), "planHash", plan.planHash(),
+                    "progress", 20, "message", "有写入、导出或高风险操作，需要确认后执行"));
         } else {
             run = execution.start(sessionId, plan.id(), "auto-" + plan.id());
         }
         return new MessageResponse(sessionId, plannedWork.summary(), context, plan, run);
     }
 
-    private List<Map<String, String>> recentMessages(String sessionId) {
-        var messages = jdbc.sql("""
+    private List<Map<String, String>> recentMessages(String sessionId, String projectId) {
+        var messages = new ArrayList<Map<String, String>>();
+        memory.list(projectId).stream().limit(20).forEach(item -> messages.add(Map.of(
+                "role", "system",
+                "content", "工作记忆[" + item.scope() + "/" + item.key() + "]：" + writeJson(item.value()))));
+        var history = jdbc.sql("""
                 select role, content from assistant_message where session_id = :sessionId
                 order by created_at desc limit 8
                 """)
@@ -134,7 +156,8 @@ public class AssistantService {
                 .query((rs, rowNum) -> Map.of("role", rs.getString("role").toLowerCase(Locale.ROOT),
                         "content", rs.getString("content")))
                 .list();
-        Collections.reverse(messages);
+        Collections.reverse(history);
+        messages.addAll(history);
         return messages;
     }
 
@@ -329,7 +352,9 @@ public class AssistantService {
     }
 
     private String modelName() {
-        return System.getenv("DEEPSEEK_CHAT_MODEL") == null ? "local-planner" : System.getenv("DEEPSEEK_CHAT_MODEL");
+        var configured = System.getenv("OPENAI_MODEL");
+        if (configured == null || configured.isBlank()) configured = System.getenv("DEEPSEEK_CHAT_MODEL");
+        return "deep-agents:" + (configured == null || configured.isBlank() ? "local" : configured);
     }
 
     private String writeJson(Object value) {

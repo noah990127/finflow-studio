@@ -47,13 +47,14 @@ public class WorkflowRunService {
     private final DeliverableService deliverables;
     private final TaskExecutor taskExecutor;
     private final WorkflowRunEventService events;
+    private final WorkflowFactService facts;
 
     public WorkflowRunService(JdbcClient jdbc, ObjectMapper objectMapper, ProjectService projects,
                               WorkflowDefinitionService definitions, ExtractJobService extracts,
                               DataTransformService dataTransforms, KnowledgeService knowledge, WorkerClient worker,
                               DeliverableService deliverables,
                               @Qualifier("applicationTaskExecutor") TaskExecutor taskExecutor,
-                              WorkflowRunEventService events) {
+                              WorkflowRunEventService events, WorkflowFactService facts) {
         this.jdbc = jdbc;
         this.objectMapper = objectMapper;
         this.projects = projects;
@@ -65,6 +66,7 @@ public class WorkflowRunService {
         this.deliverables = deliverables;
         this.taskExecutor = taskExecutor;
         this.events = events;
+        this.facts = facts;
     }
 
     @Transactional
@@ -143,6 +145,39 @@ public class WorkflowRunService {
                 .orElseThrow(() -> new IllegalArgumentException("工作流运行不存在"));
     }
 
+    public WorkflowPatch proposeSolidification(String id) {
+        var run = get(id);
+        if (!"SUCCEEDED".equals(run.status())) throw new IllegalStateException("只有完成的运行可以整理为工作流步骤");
+        var workflow = definitions.get(run.workflowId());
+        var existingResourceIds = workflow.nodes().stream().map(NodeDefinition::config)
+                .filter(Objects::nonNull).map(config -> Objects.toString(config.get("resourceId"), ""))
+                .filter(value -> !value.isBlank()).collect(java.util.stream.Collectors.toSet());
+        var operations = new ArrayList<PatchOperation>();
+        var changes = 0;
+        for (var nodeRun : run.nodes()) {
+            var snapshots = list(nodeRun.output().get("sourceSnapshots"));
+            for (var raw : snapshots) {
+                if (!(raw instanceof Map<?, ?> snapshot)) continue;
+                var resourceId = Objects.toString(snapshot.get("resourceId"), "");
+                if (resourceId.isBlank() || existingResourceIds.contains(resourceId)) continue;
+                var nodeId = "source_" + UUID.randomUUID().toString().replace("-", "").substring(0, 10);
+                var title = Objects.toString(snapshot.get("title"), "研究采用资料");
+                var sourceNode = new NodeDefinition(nodeId, NodeType.FILE_INPUT, title,
+                        Math.max(40, workflow.nodes().stream().mapToDouble(NodeDefinition::x).min().orElse(300) - 280),
+                        80 + changes * 120, Map.of("resourceId", resourceId, "capturedFromRun", id));
+                operations.add(new PatchOperation("add_node", null, null, sourceNode, null, null));
+                operations.add(new PatchOperation("add_edge", null, null, null,
+                        new EdgeDefinition("edge_" + UUID.randomUUID().toString().replace("-", "").substring(0, 10),
+                                nodeId, nodeRun.nodeId()), null));
+                existingResourceIds.add(resourceId);
+                changes++;
+            }
+        }
+        return new WorkflowPatch(workflow.currentVersion(),
+                changes == 0 ? "本次运行没有需要新增到画布的稳定步骤" : "把本次采用的 " + changes + " 份外部资料固化为工作流输入",
+                List.copyOf(operations), List.of(), List.of(), List.of());
+    }
+
     private RunResponse createRun(WorkflowResponse workflow, WorkflowDocument document, int workflowVersion,
                                   String retryOf, String triggerType,
                                   Map<String, Map<String, Object>> reusable) {
@@ -199,6 +234,8 @@ public class WorkflowRunService {
                 var endProgress = 5 + (int) Math.floor(88.0 * (completed + 1) / Math.max(1, order.size()));
                 events.publish(runId, "NODE_STARTED", node.id(), node.name(), "RUNNING", startProgress,
                         "开始：" + node.name(), "");
+                var activityId = facts.beginActivity(runId, node.id(), activityType(node.type()),
+                        capability(node), node.name(), Map.copyOf(upstream));
                 try {
                     if (node.type() == NodeType.REVIEW) {
                         waitForReview(runId, node, upstream, context, endProgress);
@@ -206,11 +243,15 @@ public class WorkflowRunService {
                     }
                     var output = executeNode(run, runId, node, upstream, context, startProgress, endProgress);
                     context.put(node.id(), output);
+                    facts.completeActivity(activityId, "SUCCEEDED", output, "");
+                    facts.recordNodeLineage(runId, node.id(), upstream, output);
                     finishNode(runId, node.id(), "SUCCEEDED", output, "");
                     completed++;
                     events.publish(runId, "NODE_COMPLETED", node.id(), node.name(), "SUCCEEDED", endProgress,
                             node.name() + "已完成，用时 " + elapsed(nodeStartedAt), "");
                 } catch (Exception exception) {
+                    facts.completeActivity(activityId, exception instanceof CancellationException ? "CANCELED" : "FAILED",
+                            Map.of(), sanitize(exception.getMessage()));
                     finishNode(runId, node.id(), exception instanceof CancellationException ? "CANCELED" : "FAILED",
                             Map.of(), sanitize(exception.getMessage()));
                     events.publish(runId, "NODE_FAILED", node.id(), node.name(),
@@ -259,14 +300,52 @@ public class WorkflowRunService {
             }
             case DATA_EXTRACT -> runExtract(run, runId, node, config, startProgress, endProgress);
             case DATA_TRANSFORM -> transformData(run, runId, node, config, upstream, startProgress, endProgress);
+            case PROCESS -> transformData(run, runId, node, config, upstream, startProgress, endProgress);
             case SPREADSHEET_TRANSFORM -> transformSpreadsheet(config, upstream);
             case REF_SEARCH -> searchRefs(run.projectId(), config);
             case AI_ANALYSIS -> analyze(run.projectId(), runId, node, config, upstream, context,
                     startProgress, endProgress);
+            case AGENT_TASK -> agentTask(run.projectId(), runId, node, config, upstream, context,
+                    startProgress, endProgress);
             case REVIEW -> throw new IllegalStateException("复核步骤应由运行器暂停处理");
             case DELIVERABLE -> createDeliverable(run.projectId(), runId, node, config, upstream, context,
                     startProgress, endProgress);
+            case OUTPUT -> createDeliverable(run.projectId(), runId, node, config, upstream, context,
+                    startProgress, endProgress);
+            case SUB_WORKFLOW -> runSubWorkflow(run, config, upstream);
+            case RESOURCE, ACQUIRE, TOOL, CONTROL -> passThrough(upstream);
         };
+    }
+
+    private Map<String, Object> runSubWorkflow(RunResponse parent, Map<String, Object> config,
+                                                Map<String, Map<String, Object>> upstream) throws InterruptedException {
+        var workflowId = text(config, "workflowId");
+        if (workflowId.equals(parent.workflowId())) throw new IllegalArgumentException("工作流不能调用自身");
+        var childWorkflow = definitions.get(workflowId);
+        if (!childWorkflow.projectId().equals(parent.projectId())) {
+            throw new IllegalArgumentException("只能复用当前项目中的工作流");
+        }
+        var child = start(workflowId);
+        var deadline = Instant.now().plus(Duration.ofSeconds(Math.max(30,
+                Math.min(3600, integer(config, "timeoutSeconds", 900)))));
+        while (Instant.now().isBefore(deadline)) {
+            ensureNotCanceled(parent.id());
+            child = get(child.id());
+            if ("SUCCEEDED".equals(child.status())) {
+                var output = passThrough(upstream);
+                output.put("subWorkflowId", workflowId);
+                output.put("subWorkflowRunId", child.id());
+                output.put("subWorkflowVersion", child.workflowVersion());
+                output.put("result", child.output());
+                return output;
+            }
+            if (List.of("FAILED", "CANCELED", "REJECTED").contains(child.status())) {
+                throw new IllegalStateException("复用的工作流执行失败：" + sanitize(child.errorMessage()));
+            }
+            Thread.sleep(500);
+        }
+        cancel(child.id());
+        throw new IllegalStateException("复用的工作流执行超时");
     }
 
     private void waitForReview(String runId, NodeDefinition node,
@@ -515,6 +594,89 @@ public class WorkflowRunService {
                 "analysisMode", Objects.toString(result.get("mode"), ""));
     }
 
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> agentTask(String projectId, String runId, NodeDefinition node,
+                                          Map<String, Object> config,
+                                          Map<String, Map<String, Object>> upstream,
+                                          Map<String, Map<String, Object>> context,
+                                          int startProgress, int endProgress) {
+        var instruction = text(config, "instruction");
+        var sourceContext = collectText(upstream);
+        var externalResearch = optional(config, "externalResearch", "OFF").toUpperCase(Locale.ROOT);
+        var policy = new LinkedHashMap<String, Object>();
+        policy.put("external_research", externalResearch);
+        policy.put("domain_allowlist", stringList(config.get("domainAllowlist")));
+        policy.put("max_tool_calls", integer(config, "maxToolCalls", 80));
+        policy.put("timeout_seconds", integer(config, "timeoutSeconds", 900));
+        var request = new LinkedHashMap<String, Object>();
+        request.put("task", instruction);
+        request.put("project_id", projectId);
+        request.put("source_context", sourceContext);
+        request.put("resources", List.of());
+        request.put("skills", stringList(config.get("skills")));
+        request.put("policy", policy);
+        var activityIds = new java.util.concurrent.ConcurrentHashMap<String, String>();
+        var span = Math.max(1, endProgress - startProgress);
+        var result = worker.runAgentTaskStreaming(request, event -> {
+            var type = Objects.toString(event.get("type"), "status");
+            var eventProgress = event.get("progress") instanceof Number number ? number.intValue() : 50;
+            var progress = startProgress + Math.max(1, (int) Math.floor(span * eventProgress / 100.0));
+            var message = Objects.toString(event.get("message"), "Agent 正在处理");
+            var externalId = Objects.toString(event.get("activity_id"), UUID.randomUUID().toString());
+            if ("tool_started".equals(type)) {
+                var activity = facts.beginActivity(runId, node.id(), "TOOL_CALL",
+                        Objects.toString(event.get("capability"), "agent.tool"), message, Map.of());
+                activityIds.put(externalId, activity);
+                events.publish(runId, "AGENT_TOOL_STARTED", node.id(), node.name(), "RUNNING", progress, message, "");
+            } else if ("tool_completed".equals(type)) {
+                var activity = activityIds.remove(externalId);
+                if (activity != null) facts.completeActivity(activity, "SUCCEEDED", map(event.get("output")), "");
+                events.publish(runId, "AGENT_TOOL_COMPLETED", node.id(), node.name(), "RUNNING", progress, message, "");
+            } else if ("content".equals(type)) {
+                events.publish(runId, "MODEL_OUTPUT", node.id(), node.name(), "RUNNING", progress,
+                        "Agent 正在整理结果", Objects.toString(event.get("content"), ""));
+            } else if (!"complete".equals(type)) {
+                events.publish(runId, "MODEL_STATUS", node.id(), node.name(), "RUNNING", progress, message, "");
+            }
+        });
+        var analysis = Objects.toString(result.get("content"), "").trim();
+        var snapshots = new ArrayList<Map<String, Object>>();
+        if (result.get("used_sources") instanceof List<?> usedSources) {
+            for (var raw : usedSources) {
+                if (!(raw instanceof Map<?, ?> source)) continue;
+                var title = safeFileName(Objects.toString(source.get("title"), "网页资料"));
+                var url = Objects.toString(source.get("final_url"), Objects.toString(source.get("url"), ""));
+                var sourceText = Objects.toString(source.get("text"), "");
+                if (sourceText.isBlank()) continue;
+                var markdown = "# " + title + "\n\n原始地址：" + url + "\n抓取时间：" + Instant.now()
+                        + "\n内容哈希：" + Objects.toString(source.get("content_hash"), "") + "\n\n" + sourceText;
+                var resource = knowledge.importBytes(projectId, title + ".md", "text/markdown",
+                        markdown.getBytes(StandardCharsets.UTF_8));
+                facts.recordExternalSource(runId, node.id(), resource.id(), resource.currentVersion(), url,
+                        Objects.toString(source.get("content_hash"), ""));
+                snapshots.add(Map.of("resourceId", resource.id(), "version", resource.currentVersion(),
+                        "title", title, "url", url, "downloadUrl", "/api/files/" + resource.id() + "/download"));
+            }
+        }
+        var points = Arrays.stream(analysis.split("\\R")).map(String::trim).filter(line -> !line.isBlank())
+                .limit(integer(config, "maxPoints", 10)).toList();
+        var output = new LinkedHashMap<String, Object>();
+        output.put("analysis", analysis);
+        output.put("points", points);
+        output.put("analysisMode", Objects.toString(result.get("mode"), "deep-agents"));
+        output.put("sourceSnapshots", snapshots);
+        output.put("externalResearch", externalResearch);
+        output.put("toolCalls", result.getOrDefault("tool_calls", 0));
+        output.put("refIds", collectRefIds(context));
+        return Map.copyOf(output);
+    }
+
+    private String safeFileName(String value) {
+        var result = value.replaceAll("[\\p{Cntrl}/\\\\:*?\"<>|]", "_").trim();
+        if (result.isBlank()) result = "网页资料";
+        return result.substring(0, Math.min(result.length(), 180));
+    }
+
     private Map<String, Object> createDeliverable(String projectId, String runId, NodeDefinition node,
                                                   Map<String, Object> config,
                                                   Map<String, Map<String, Object>> upstream,
@@ -631,14 +793,30 @@ public class WorkflowRunService {
         return new RunResponse(id, rs.getString("workflow_id"), rs.getString("project_id"),
                 rs.getInt("workflow_version"), rs.getString("retry_of_run_id"), rs.getString("trigger_type"), rs.getString("status"),
                 rs.getString("current_node_id"), readMap(rs.getString("output_json")), rs.getString("error_message"),
-                rs.getString("trace_id"), nodes, instant(rs, "created_at"), instant(rs, "started_at"), instant(rs, "finished_at"));
+                rs.getString("trace_id"), nodes, facts.lineageForRun(id), instant(rs, "created_at"), instant(rs, "started_at"), instant(rs, "finished_at"));
     }
 
     private NodeRunResponse mapNodeRun(ResultSet rs, int rowNum) throws SQLException {
         return new NodeRunResponse(rs.getString("id"), rs.getString("node_id"), rs.getString("node_name"),
                 NodeType.valueOf(rs.getString("node_type")), rs.getInt("step_order"), rs.getString("status"),
                 readMap(rs.getString("input_json")), readMap(rs.getString("output_json")), rs.getString("error_message"),
+                facts.activitiesForNode(rs.getString("id")),
                 instant(rs, "started_at"), instant(rs, "finished_at"));
+    }
+
+    private String activityType(NodeType type) {
+        return switch (type) {
+            case AGENT_TASK, AI_ANALYSIS -> "PLAN";
+            case DELIVERABLE, OUTPUT -> "ARTIFACT";
+            case DATA_TRANSFORM, PROCESS, SPREADSHEET_TRANSFORM -> "TOOL_CALL";
+            case REVIEW -> "MESSAGE";
+            default -> "TOOL_CALL";
+        };
+    }
+
+    private String capability(NodeDefinition node) {
+        var config = node.config() == null ? Map.<String, Object>of() : node.config();
+        return Objects.toString(config.getOrDefault("capability", node.type().name().toLowerCase(Locale.ROOT)), "");
     }
 
     private Instant instant(ResultSet rs, String column) throws SQLException {

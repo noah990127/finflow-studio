@@ -13,6 +13,14 @@ public final class WorkflowModels {
     private WorkflowModels() { }
 
     public enum NodeType {
+        RESOURCE,
+        ACQUIRE,
+        PROCESS,
+        AGENT_TASK,
+        TOOL,
+        CONTROL,
+        SUB_WORKFLOW,
+        OUTPUT,
         FILE_INPUT,
         LINK_INPUT,
         DATASET_INPUT,
@@ -96,8 +104,38 @@ public final class WorkflowModels {
             Map<String, Object> input,
             Map<String, Object> output,
             String errorMessage,
+            List<ActivityRunResponse> activities,
             Instant startedAt,
             Instant finishedAt) { }
+
+    public record ActivityRunResponse(
+            String id,
+            String runId,
+            String nodeRunId,
+            int order,
+            String type,
+            String capability,
+            String title,
+            String status,
+            Map<String, Object> input,
+            Map<String, Object> output,
+            String errorMessage,
+            Instant startedAt,
+            Instant finishedAt) { }
+
+    public record LineageEdgeResponse(
+            String id,
+            String runId,
+            String nodeRunId,
+            String sourceKind,
+            String sourceRef,
+            Integer sourceVersion,
+            String targetKind,
+            String targetRef,
+            Integer targetVersion,
+            String relation,
+            Map<String, Object> details,
+            Instant createdAt) { }
 
     public record RunResponse(
             String id,
@@ -112,6 +150,7 @@ public final class WorkflowModels {
             String errorMessage,
             String traceId,
             List<NodeRunResponse> nodes,
+            List<LineageEdgeResponse> lineage,
             Instant createdAt,
             Instant startedAt,
             Instant finishedAt) { }
@@ -128,4 +167,32 @@ public final class WorkflowModels {
             this(name, description, nodes, edges, ExecutionMode.MANUAL, null);
         }
     }
+
+    public record PatchOperation(
+            @NotBlank String op,
+            String nodeId,
+            String edgeId,
+            NodeDefinition node,
+            EdgeDefinition edge,
+            Map<String, Object> patch) { }
+
+    public record WorkflowPatch(
+            int baseRevision,
+            @NotBlank String summary,
+            @NotNull List<@Valid PatchOperation> operations,
+            List<String> missingInputs,
+            List<String> assumptions,
+            List<String> expectedOutputs) { }
+
+    public record PatchPreview(WorkflowDocument document, ValidationResponse validation,
+                               List<String> changes, int baseRevision) { }
+
+    public record TemplateRequest(@NotBlank @Size(max = 300) String name,
+                                  @Size(max = 2000) String description,
+                                  @Size(max = 100) String category,
+                                  @NotNull @Valid WorkflowDocument definition) { }
+
+    public record TemplateResponse(String id, String name, String description, String category,
+                                   WorkflowDocument definition, boolean builtIn,
+                                   Instant createdAt, Instant updatedAt) { }
 }

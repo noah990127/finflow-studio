@@ -1,0 +1,1 @@
+"""Agent-visible tool contracts."""

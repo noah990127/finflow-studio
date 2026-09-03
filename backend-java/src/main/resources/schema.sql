@@ -297,6 +297,89 @@ create index if not exists idx_workflow_next_run on workflow_definition(next_run
 create index if not exists idx_workflow_run_definition on workflow_run(workflow_id, created_at);
 create index if not exists idx_workflow_node_run_run on workflow_node_run(run_id, step_order);
 
+create table if not exists workflow_activity_run (
+    id varchar(64) primary key,
+    run_id varchar(64) not null,
+    node_run_id varchar(64) not null,
+    activity_order integer not null,
+    activity_type varchar(32) not null,
+    capability varchar(200) not null default '',
+    title varchar(300) not null,
+    status varchar(32) not null,
+    input_json text not null default '{}',
+    output_json text not null default '{}',
+    error_message varchar(2000) not null default '',
+    started_at timestamp with time zone,
+    finished_at timestamp with time zone,
+    constraint fk_activity_run foreign key (run_id) references workflow_run(id),
+    constraint fk_activity_node_run foreign key (node_run_id) references workflow_node_run(id),
+    constraint uq_activity_order unique (node_run_id, activity_order)
+);
+
+create table if not exists workflow_lineage_edge (
+    id varchar(64) primary key,
+    run_id varchar(64) not null,
+    node_run_id varchar(64),
+    source_kind varchar(40) not null,
+    source_ref varchar(200) not null,
+    source_version integer,
+    target_kind varchar(40) not null,
+    target_ref varchar(200) not null,
+    target_version integer,
+    relation varchar(64) not null,
+    details_json text not null default '{}',
+    created_at timestamp with time zone not null,
+    constraint fk_lineage_run foreign key (run_id) references workflow_run(id),
+    constraint fk_lineage_node_run foreign key (node_run_id) references workflow_node_run(id)
+);
+
+create table if not exists workflow_run_event (
+    id varchar(64) primary key,
+    run_id varchar(64) not null,
+    event_seq bigint not null,
+    event_type varchar(100) not null,
+    node_id varchar(100) not null default '',
+    node_name varchar(300) not null default '',
+    status varchar(32) not null default '',
+    progress integer not null default 0,
+    message varchar(2000) not null default '',
+    content text not null default '',
+    created_at timestamp with time zone not null,
+    constraint fk_workflow_event_run foreign key (run_id) references workflow_run(id),
+    constraint uq_workflow_event_seq unique (run_id, event_seq)
+);
+
+create table if not exists workflow_template (
+    id varchar(64) primary key,
+    name varchar(300) not null,
+    description varchar(2000) not null default '',
+    category varchar(100) not null default '通用',
+    definition_json text not null,
+    built_in boolean not null default false,
+    created_at timestamp with time zone not null,
+    updated_at timestamp with time zone not null
+);
+
+create table if not exists agent_memory (
+    id varchar(64) primary key,
+    actor_id varchar(64) not null default 'default_user',
+    project_id varchar(64),
+    memory_scope varchar(32) not null,
+    memory_key varchar(200) not null,
+    value_json text not null,
+    source_ref varchar(300) not null default '',
+    status varchar(32) not null default 'ACTIVE',
+    created_at timestamp with time zone not null,
+    updated_at timestamp with time zone not null,
+    constraint uq_agent_memory unique (actor_id, project_id, memory_scope, memory_key)
+);
+
+create index if not exists idx_activity_run_node on workflow_activity_run(run_id, node_run_id, activity_order);
+create index if not exists idx_lineage_run on workflow_lineage_edge(run_id, node_run_id);
+create index if not exists idx_lineage_target on workflow_lineage_edge(target_kind, target_ref);
+create index if not exists idx_workflow_event_run on workflow_run_event(run_id, event_seq);
+create index if not exists idx_agent_memory_scope on agent_memory(actor_id, project_id, memory_scope);
+
 create table if not exists office_working_copy (
     source_kind varchar(32) not null,
     source_id varchar(64) not null,

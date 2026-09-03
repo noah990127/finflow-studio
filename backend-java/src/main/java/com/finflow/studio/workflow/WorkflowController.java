@@ -30,12 +30,19 @@ public class WorkflowController {
     private final WorkflowDefinitionService definitions;
     private final WorkflowRunService runs;
     private final WorkflowRunEventService events;
+    private final WorkflowFactService facts;
+    private final WorkflowPatchService patches;
+    private final WorkflowTemplateService templates;
 
     public WorkflowController(WorkflowDefinitionService definitions, WorkflowRunService runs,
-                              WorkflowRunEventService events) {
+                              WorkflowRunEventService events, WorkflowFactService facts,
+                              WorkflowPatchService patches, WorkflowTemplateService templates) {
         this.definitions = definitions;
         this.runs = runs;
         this.events = events;
+        this.facts = facts;
+        this.patches = patches;
+        this.templates = templates;
     }
 
     @GetMapping("/projects/{projectId}/workflows")
@@ -118,6 +125,65 @@ public class WorkflowController {
             @PathVariable String id, @RequestParam(defaultValue = "0") long after) {
         runs.get(id);
         return events.list(id, after);
+    }
+
+    @GetMapping("/workflow-runs/{id}/activities")
+    public List<WorkflowModels.ActivityRunResponse> activities(@PathVariable String id) {
+        runs.get(id);
+        return facts.activitiesForRun(id);
+    }
+
+    @GetMapping("/workflow-runs/{id}/lineage")
+    public List<WorkflowModels.LineageEdgeResponse> lineage(@PathVariable String id) {
+        runs.get(id);
+        return facts.lineageForRun(id);
+    }
+
+    @GetMapping("/workflow-runs/{id}/solidification-patch")
+    public WorkflowModels.WorkflowPatch solidificationPatch(@PathVariable String id) {
+        return runs.proposeSolidification(id);
+    }
+
+    @GetMapping("/deliverables/{id}/provenance")
+    public List<WorkflowModels.LineageEdgeResponse> provenance(@PathVariable String id) {
+        return facts.provenance(id);
+    }
+
+    @PostMapping("/workflows/{id}/patches/preview")
+    public WorkflowModels.PatchPreview previewPatch(@PathVariable String id,
+                                                     @Valid @RequestBody WorkflowModels.WorkflowPatch patch) {
+        return patches.preview(id, patch);
+    }
+
+    @PostMapping("/workflows/{id}/patches/apply")
+    public WorkflowResponse applyPatch(@PathVariable String id,
+                                       @Valid @RequestBody WorkflowModels.WorkflowPatch patch) {
+        return patches.apply(id, patch);
+    }
+
+    @GetMapping("/workflow-templates")
+    public List<WorkflowModels.TemplateResponse> listTemplates() {
+        return templates.list();
+    }
+
+    @PostMapping("/workflow-templates")
+    @ResponseStatus(HttpStatus.CREATED)
+    public WorkflowModels.TemplateResponse createTemplate(@Valid @RequestBody WorkflowModels.TemplateRequest request) {
+        return templates.create(request);
+    }
+
+    @PostMapping("/workflow-templates/{templateId}/instantiate")
+    @ResponseStatus(HttpStatus.CREATED)
+    public WorkflowResponse instantiateTemplate(@PathVariable String templateId,
+                                                 @RequestParam String projectId,
+                                                 @RequestParam(required = false) String name) {
+        return templates.instantiate(templateId, projectId, name);
+    }
+
+    @DeleteMapping("/workflow-templates/{id}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deleteTemplate(@PathVariable String id) {
+        templates.delete(id);
     }
 
     @PostMapping("/workflow-runs/{id}/cancel")

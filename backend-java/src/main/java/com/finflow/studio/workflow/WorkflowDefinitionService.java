@@ -114,6 +114,12 @@ public class WorkflowDefinitionService {
                 and status in ('QUEUED', 'RUNNING', 'CANCEL_REQUESTED', 'WAITING_REVIEW')
                 """).param("id", id).query(Long.class).single();
         if (activeRuns > 0) throw new IllegalStateException("工作流正在执行，请停止或完成复核后再删除");
+        jdbc.sql("delete from workflow_activity_run where run_id in (select id from workflow_run where workflow_id = :id)")
+                .param("id", id).update();
+        jdbc.sql("delete from workflow_lineage_edge where run_id in (select id from workflow_run where workflow_id = :id)")
+                .param("id", id).update();
+        jdbc.sql("delete from workflow_run_event where run_id in (select id from workflow_run where workflow_id = :id)")
+                .param("id", id).update();
         jdbc.sql("delete from workflow_node_run where run_id in (select id from workflow_run where workflow_id = :id)")
                 .param("id", id).update();
         jdbc.sql("delete from workflow_run where workflow_id = :id").param("id", id).update();
@@ -251,9 +257,15 @@ public class WorkflowDefinitionService {
                     require(node, config, issues, "script", "请先生成或填写加工脚本");
                     require(node, config, issues, "outputName", "请填写输出文件名");
                 }
+                case PROCESS -> {
+                    require(node, config, issues, "requirements", "请填写处理要求");
+                    require(node, config, issues, "script", "请先生成或填写处理脚本");
+                    require(node, config, issues, "outputName", "请填写输出名称");
+                }
                 case SPREADSHEET_TRANSFORM -> { }
                 case REF_SEARCH -> require(node, config, issues, "query", "请填写需要查找的内容");
                 case AI_ANALYSIS -> require(node, config, issues, "prompt", "请填写分析要求");
+                case AGENT_TASK -> require(node, config, issues, "instruction", "请填写希望 Agent 完成的任务");
                 case REVIEW -> require(node, config, issues, "instructions", "请填写复核要求");
                 case DELIVERABLE -> {
                     require(node, config, issues, "title", "请填写输出标题");
@@ -264,6 +276,14 @@ public class WorkflowDefinitionService {
                         issues.add(new ValidationIssue(node.id(), "请选择有效的引用格式"));
                     }
                 }
+                case OUTPUT -> {
+                    require(node, config, issues, "title", "请填写输出标题");
+                    require(node, config, issues, "format", "请选择输出格式");
+                    require(node, config, issues, "generationPrompt", "请填写成果生成要求");
+                }
+                case TOOL -> require(node, config, issues, "capability", "请选择要使用的能力");
+                case SUB_WORKFLOW -> require(node, config, issues, "workflowId", "请选择子工作流");
+                case RESOURCE, ACQUIRE, CONTROL -> { }
             }
         } catch (IllegalArgumentException exception) {
             issues.add(new ValidationIssue(node.id(), exception.getMessage()));

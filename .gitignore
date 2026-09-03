@@ -12,6 +12,8 @@ frontend/*.tsbuildinfo
 frontend/vite.config.d.ts
 
 worker-python/.venv/
+worker-python/.venv*/
+worker-python/*.egg-info/
 worker-python/.pytest_cache/
 worker-python/**/__pycache__/
 worker-python/**/*.pyc

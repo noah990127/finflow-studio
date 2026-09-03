@@ -103,20 +103,24 @@ if [[ -z "${FINFLOW_OFFICE_API_BASE_URL:-}" ]]; then
 fi
 export FINFLOW_OFFICE_API_BASE_URL
 
-[[ -x "$ROOT/worker-python/.venv/bin/python" ]] || { echo "Python environment is missing: worker-python/.venv" >&2; exit 1; }
+PYTHON_BIN="$ROOT/worker-python/.venv312/bin/python"
+if [[ ! -x "$PYTHON_BIN" ]]; then
+  PYTHON_BIN="$ROOT/worker-python/.venv/bin/python"
+fi
+[[ -x "$PYTHON_BIN" ]] || { echo "Python environment is missing: worker-python/.venv312 or worker-python/.venv" >&2; exit 1; }
 [[ -d "$ROOT/frontend/node_modules" ]] || { echo "Frontend dependencies are missing: run npm install in frontend" >&2; exit 1; }
 
 start_service "Demo data API" "http://127.0.0.1:8011/health" \
   "$ROOT/examples/cases/demo-api" "$RUN_DIR/demo-api.pid" "$RUN_DIR/demo-api.log" \
-  "$ROOT/worker-python/.venv/bin/python" -m uvicorn app:app --host 127.0.0.1 --port 8011
+  "$PYTHON_BIN" -m uvicorn app:app --host 127.0.0.1 --port 8011
 
 start_service "Inventory demo API" "http://127.0.0.1:8010/health" \
   "$ROOT/demo-services" "$RUN_DIR/inventory-api.pid" "$RUN_DIR/inventory-api.log" \
-  "$ROOT/worker-python/.venv/bin/python" -m uvicorn inventory_api:app --host 127.0.0.1 --port 8010
+  "$PYTHON_BIN" -m uvicorn inventory_api:app --host 127.0.0.1 --port 8010
 
 start_service "Python worker" "http://127.0.0.1:8001/health" \
   "$ROOT/worker-python" "$RUN_DIR/python.pid" "$RUN_DIR/python.log" \
-  "$ROOT/worker-python/.venv/bin/python" -m uvicorn app.main:app --host 127.0.0.1 --port 8001
+  "$PYTHON_BIN" -m uvicorn app.main:app --host 127.0.0.1 --port 8001
 
 if ! curl -fsS --max-time 2 "http://127.0.0.1:8080/actuator/health" >/dev/null 2>&1; then
   echo "Building Java API..."
@@ -153,3 +157,10 @@ echo "Demo data API:          http://127.0.0.1:8011/health"
 echo "Inventory demo API:     http://127.0.0.1:8010/health"
 echo "ONLYOFFICE health:      http://127.0.0.1:8082/healthcheck"
 echo "ONLYOFFICE file bridge: $FINFLOW_OFFICE_API_BASE_URL"
+
+# Automation runners may clean up child processes when the launcher exits. Keeping the
+# launcher attached is optional and does not change normal terminal usage.
+if [[ "${1:-}" == "--keep-alive" ]]; then
+  echo "Launcher is attached. Press Ctrl+C to stop the attached session."
+  while true; do sleep 3600; done
+fi
