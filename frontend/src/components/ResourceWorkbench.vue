@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, ref, watch } from 'vue'
-import { Braces, CheckCircle2, ChevronDown, ChevronRight, Database, Download, ExternalLink, Eye, FilePenLine, FileText, Globe2, LoaderCircle, Pencil, Play, Plus, RefreshCw, Save, Search, Server, Trash2, X } from 'lucide-vue-next'
-import { api, deliverableContentUrl, downloadFile, inlineContentUrl, renderedOfficePreviewUrl, type CitationSource, type ConnectionPreview, type CsvPreview, type DataConnection, type DatabaseCatalog, type DatabaseTable, type DocumentPreview, type WebPreview, type WorkspaceResource } from '../api/client'
+import { Braces, CheckCircle2, ChevronDown, ChevronRight, Database, Download, ExternalLink, Eye, FilePenLine, FileText, Globe2, LoaderCircle, Pencil, Play, Plus, RefreshCw, Save, Search, Server, ShieldAlert, Trash2, X } from 'lucide-vue-next'
+import { api, deliverableContentUrl, downloadFile, inlineContentUrl, renderedOfficePreviewUrl, type CitationSource, type ConnectionPreview, type CsvPreview, type DataConnection, type DatabaseCatalog, type DatabaseTable, type DocumentPreview, type WebEmbedStatus, type WebPreview, type WorkspaceResource } from '../api/client'
 import DiagramPreview from './DiagramPreview.vue'
 import OfficeEditor from './OfficeEditor.vue'
 import CitationAnchor from './CitationAnchor.vue'
@@ -13,6 +13,7 @@ defineEmits<{ addToWorkflow: [resource: WorkspaceResource]; manageData: []; dele
 const loading = ref(false), error = ref(''), editing = ref(false), officeFallback = ref(false), csv = ref<CsvPreview | null>(null), document = ref<DocumentPreview | null>(null)
 const downloadLoading = ref(false), downloadMessage = ref('')
 const webLoading = ref(false), webPreview = ref<WebPreview | null>(null), webOriginalMode = ref(true)
+const webEmbedStatus = ref<WebEmbedStatus>({ status: 'CHECKING', reason: '' })
 const connection = ref<DataConnection | null>(null), connectionPreview = ref<ConnectionPreview | null>(null)
 const citations = ref<CitationSource[]>([]), citationError = ref('')
 const previewQuery = ref(''), previewLoading = ref(false), testLoading = ref(false), connectionMessage = ref('')
@@ -53,6 +54,7 @@ async function load() {
     return
   }
   if (isWebUrl.value) {
+    checkWebEmbedding()
     if (!webOriginalMode.value) await loadWebPreview()
     return
   }
@@ -74,6 +76,11 @@ async function loadWebPreview(refresh = false) {
 async function openWebReader() {
   webOriginalMode.value = false
   if (!webPreview.value) await loadWebPreview()
+}
+async function checkWebEmbedding() {
+  webEmbedStatus.value = { status: 'CHECKING', reason: '' }
+  try { webEmbedStatus.value = await api.getWebEmbedStatus(props.resource.projectId, props.resource.id) }
+  catch { webEmbedStatus.value = { status: 'UNKNOWN', reason: '暂时无法确认该网站是否允许在 Studio 内显示' } }
 }
 async function loadCitations() {
   citations.value = []; citationError.value = ''
@@ -245,7 +252,8 @@ async function previewData() {
     </section>
     <section v-else-if="isWebUrl" class="web-url-work-area">
       <header><Globe2 :size="18"/><span>{{ resource.url }}</span><div class="web-preview-modes"><button type="button" :class="{ active: webOriginalMode }" @click="webOriginalMode = true">原网页</button><button type="button" :class="{ active: !webOriginalMode }" @click="openWebReader">快速阅读</button><a :href="resource.url" target="_blank" rel="noopener noreferrer"><ExternalLink :size="14"/>新窗口</a></div></header>
-      <div v-if="webOriginalMode" class="web-url-frame"><iframe :src="resource.url" :title="resource.name" referrerpolicy="strict-origin-when-cross-origin"></iframe><aside class="web-embed-note">部分网站出于安全策略不允许嵌入，可使用“快速阅读”或新窗口打开。</aside></div>
+      <div v-if="webOriginalMode && webEmbedStatus.status === 'BLOCKED'" class="web-embed-blocked"><ShieldAlert :size="28"/><strong>该网页无法在 Studio 内打开</strong><p>{{ webEmbedStatus.reason }}。你仍可以快速阅读已提取的正文，或在浏览器中访问完整原文。</p><div><button class="secondary-button" type="button" @click="openWebReader">快速阅读</button><a class="primary-button" :href="resource.url" target="_blank" rel="noopener noreferrer"><ExternalLink :size="15"/>在浏览器中打开</a></div></div>
+      <div v-else-if="webOriginalMode" class="web-url-frame"><iframe :src="resource.url" :title="resource.name" referrerpolicy="strict-origin-when-cross-origin"></iframe></div>
       <div v-else-if="webLoading" class="web-url-loading"><LoaderCircle class="spin" :size="21"/><strong>正在整理网页内容</strong><p>首次读取后会缓存，之后打开会更快。</p></div>
       <div v-else-if="error" class="resource-state error"><Globe2 :size="24"/><strong>网站内容暂时无法读取</strong><p>{{ error }}</p><a class="secondary-button" :href="resource.url" target="_blank" rel="noopener noreferrer"><ExternalLink :size="14"/>新窗口打开</a></div>
       <article v-else-if="webPreview" class="web-reader">

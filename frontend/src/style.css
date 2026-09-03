@@ -89,7 +89,12 @@
 .web-preview-modes button.active { border-color: #bfd6ee; color: #155fae; background: #eaf4ff; font-weight: 700; }
 .web-url-frame { position: relative; min-height: 0; overflow: hidden; background: #fff; }
 .web-url-frame > iframe { width: 100%; height: 100%; border: 0; background: #fff; }
-.web-embed-note { position: absolute; right: 14px; bottom: 14px; max-width: 360px; padding: 8px 10px; border: 1px solid #d3e0ed; border-radius: 6px; color: #64788d; background: #ffffffed; font-size: 10px; box-shadow: 0 5px 18px rgb(42 67 92 / 12%); }
+.web-embed-blocked { display: grid; place-content: center; justify-items: center; gap: 10px; padding: 40px; color: #49647f; text-align: center; background: #f8fbff; }
+.web-embed-blocked > svg { color: #3176ba; }
+.web-embed-blocked strong { color: #203d5b; font-size: 16px; }
+.web-embed-blocked p { max-width: 520px; margin: 0; color: #667d94; font-size: 12px; line-height: 1.7; }
+.web-embed-blocked > div { display: flex; gap: 9px; margin-top: 7px; }
+.web-embed-blocked a { text-decoration: none; }
 .web-url-loading { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 8px; padding: 24px; background: #fff; color: #39536d; text-align: center; }
 .web-url-loading strong { font-size: 14px; }
 .web-url-loading p { margin: 0; color: #71869a; font-size: 12px; }

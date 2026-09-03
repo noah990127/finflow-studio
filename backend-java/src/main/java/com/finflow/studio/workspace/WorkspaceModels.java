@@ -21,6 +21,8 @@ public final class WorkspaceModels {
                              List<String> highlights, List<WebPreviewSection> sections,
                              String previewMode, String verifiedAt, String fetchedAt) { }
 
+    public record WebEmbedStatus(String status, String reason) { }
+
     public record WebPreviewSection(String heading, List<String> paragraphs) { }
 
     public record Resource(

@@ -35,6 +35,7 @@ export type WorkspaceRootKind = 'FILES' | 'DATABASES' | 'WEB_URLS' | 'APIS' | 'O
 export type WorkspaceFolder = { id: string; projectId: string; parentId?: string; rootKind: WorkspaceRootKind; name: string; sortOrder: number; createdAt: string; updatedAt: string }
 export type WorkspaceResource = { id: string; projectId: string; resourceType: 'DATABASE_CONNECTION' | 'API_CONNECTION' | 'WEB_URL' | 'DATASET' | 'DATA_FILE' | 'OFFICE_FILE' | 'KNOWLEDGE_FILE' | 'DELIVERABLE'; group: 'DATA' | 'KNOWLEDGE' | 'OUTPUT'; name: string; mediaType: string; status: string; currentVersion: number; sizeBytes: number; inProjectWorkflow: boolean; folderId?: string; rootKind: WorkspaceRootKind; updatedAt: string; url?: string }
 export type WebPreview = { title: string; url: string; siteName: string; summary: string; highlights: string[]; sections: Array<{ heading: string; paragraphs: string[] }>; previewMode: 'CURATED' | 'LIVE'; verifiedAt: string; fetchedAt: string }
+export type WebEmbedStatus = { status: 'CHECKING' | 'ALLOWED' | 'BLOCKED' | 'UNKNOWN'; reason: string }
 export type ProjectWorkspace = { project: Project; workflow: { id: string; name: string; status: string; currentVersion: number; updatedAt: string }; folders: WorkspaceFolder[]; resources: WorkspaceResource[] }
 export type OfficeSession = { enabled: boolean; documentServerUrl: string; workingResourceId: string; message: string; config: Record<string, unknown> }
 export type DataTransformSource = { sourceKind: 'FILE' | 'EXTRACT' | 'CONNECTION'; resourceId: string; alias: string; name: string; query?: string; sheetName?: string }
@@ -101,6 +102,7 @@ export const api = {
   rollback: (runId: string) => request<Run>(`/api/assistant/runs/${runId}/rollback`, { method: 'POST' }),
   getProjectWorkspace: (projectId: string) => request<ProjectWorkspace>(`/api/projects/${projectId}/workspace`),
   getWebPreview: (projectId: string, resourceId: string, refresh = false) => request<WebPreview>(`/api/projects/${projectId}/workspace/web-preview/${resourceId}${refresh ? '?refresh=true' : ''}`),
+  getWebEmbedStatus: (projectId: string, resourceId: string) => request<WebEmbedStatus>(`/api/projects/${projectId}/workspace/web-embed-status/${resourceId}?studioOrigin=${encodeURIComponent(window.location.origin)}`),
   createWorkspaceFolder: (projectId: string, body: { name: string; rootKind: WorkspaceRootKind; parentId?: string }) => request<WorkspaceFolder>(`/api/projects/${projectId}/workspace/folders`, { method: 'POST', body: JSON.stringify(body) }),
   updateWorkspaceFolder: (projectId: string, folderId: string, body: { name: string; rootKind: WorkspaceRootKind; parentId?: string }) => request<WorkspaceFolder>(`/api/projects/${projectId}/workspace/folders/${folderId}`, { method: 'PUT', body: JSON.stringify(body) }),
   deleteWorkspaceFolder: (projectId: string, folderId: string) => request<void>(`/api/projects/${projectId}/workspace/folders/${folderId}`, { method: 'DELETE' }),

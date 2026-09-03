@@ -43,6 +43,13 @@ public class WorkspaceController {
         return webPreviews.get(projectId, resourceId, refresh);
     }
 
+    @GetMapping("/web-embed-status/{resourceId}")
+    public WorkspaceModels.WebEmbedStatus webEmbedStatus(@PathVariable String projectId,
+                                                          @PathVariable String resourceId,
+                                                          @RequestParam(defaultValue = "") String studioOrigin) {
+        return webPreviews.embedStatus(projectId, resourceId, studioOrigin);
+    }
+
     @PostMapping("/folders")
     public WorkspaceModels.Folder createFolder(@PathVariable String projectId, @RequestBody WorkspaceModels.FolderRequest request) {
         return folders.create(projectId, request);
