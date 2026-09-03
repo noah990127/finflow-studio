@@ -45,6 +45,7 @@ public class WorkspaceResourceService {
     public Response get(String projectId) {
         var project = projects.get(projectId);
         var projectWorkflows = workflows.list(projectId);
+        if (projectWorkflows.isEmpty()) projectWorkflows = java.util.List.of(workflows.getProjectWorkflow(projectId));
         var usedIds = new HashSet<String>();
         projectWorkflows.forEach(workflow -> usedIds.addAll(referencedResourceIds(workflow.nodes())));
         var resources = new ArrayList<Resource>();

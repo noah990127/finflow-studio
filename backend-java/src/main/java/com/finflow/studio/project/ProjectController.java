@@ -12,9 +12,11 @@ import java.util.List;
 public class ProjectController {
 
     private final ProjectService projects;
+    private final ProjectCreationService creation;
 
-    public ProjectController(ProjectService projects) {
+    public ProjectController(ProjectService projects, ProjectCreationService creation) {
         this.projects = projects;
+        this.creation = creation;
     }
 
     @GetMapping
@@ -30,7 +32,7 @@ public class ProjectController {
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     Project create(@Valid @RequestBody CreateProjectRequest request) {
-        return projects.create(request.name(), request.description());
+        return creation.create(request.name(), request.description());
     }
 
     @PutMapping("/{id}")

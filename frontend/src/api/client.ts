@@ -36,7 +36,7 @@ export type WorkspaceFolder = { id: string; projectId: string; parentId?: string
 export type WorkspaceResource = { id: string; projectId: string; resourceType: 'DATABASE_CONNECTION' | 'API_CONNECTION' | 'WEB_URL' | 'DATASET' | 'DATA_FILE' | 'OFFICE_FILE' | 'KNOWLEDGE_FILE' | 'DELIVERABLE'; group: 'DATA' | 'KNOWLEDGE' | 'OUTPUT'; name: string; mediaType: string; status: string; currentVersion: number; sizeBytes: number; inProjectWorkflow: boolean; folderId?: string; rootKind: WorkspaceRootKind; updatedAt: string; url?: string }
 export type WebPreview = { title: string; url: string; siteName: string; summary: string; highlights: string[]; sections: Array<{ heading: string; paragraphs: string[] }>; previewMode: 'CURATED' | 'LIVE'; verifiedAt: string; fetchedAt: string }
 export type WebEmbedStatus = { status: 'CHECKING' | 'ALLOWED' | 'BLOCKED' | 'UNKNOWN'; reason: string }
-export type ProjectWorkspace = { project: Project; workflow: { id: string; name: string; status: string; currentVersion: number; updatedAt: string }; folders: WorkspaceFolder[]; resources: WorkspaceResource[] }
+export type ProjectWorkspace = { project: Project; workflow: { id: string; name: string; status: string; currentVersion: number; updatedAt: string } | null; folders: WorkspaceFolder[]; resources: WorkspaceResource[] }
 export type OfficeSession = { enabled: boolean; documentServerUrl: string; workingResourceId: string; message: string; config: Record<string, unknown> }
 export type DataTransformSource = { sourceKind: 'FILE' | 'EXTRACT' | 'CONNECTION'; resourceId: string; alias: string; name: string; query?: string; sheetName?: string }
 export type DataTransformScript = { script: string; summary: string; mode: string; assumptions: string[]; quality_rules: string[]; warnings: string[] }
@@ -48,24 +48,31 @@ export type FinancialReportSection = { heading: string; paragraphs: string[]; bu
 export type FinancialReportSpec = { schema_version: number; renderer: string; title: string; subtitle: string; theme: string; sections: FinancialReportSection[]; references: Array<CitationSource | string> }
 export type SystemStatus = { java: Record<string, unknown>; pythonWorker: Record<string, unknown>; llm: Record<string, unknown>; reportEngine: Record<string, unknown> }
 
-async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
+async function request<T>(url: string, options: RequestInit = {}, timeoutMs = 0): Promise<T> {
   const headers = new Headers(options.headers)
   if (!(options.body instanceof FormData) && options.body !== undefined) headers.set('Content-Type', 'application/json')
-  const response = await fetch(url, { ...options, headers })
-  if (!response.ok) {
-    const raw = await response.text()
-    const body = (() => { try { return JSON.parse(raw) as { message?: string; detail?: string } } catch { return {} } })()
-    throw new Error(body.message ?? body.detail ?? `请求没有完成（HTTP ${response.status}）`)
+  const timeout = timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined
+  const signal = options.signal && timeout ? AbortSignal.any([options.signal, timeout]) : options.signal ?? timeout
+  try {
+    const response = await fetch(url, { ...options, headers, signal })
+    if (!response.ok) {
+      const raw = await response.text()
+      const body = (() => { try { return JSON.parse(raw) as { message?: string; detail?: string } } catch { return {} } })()
+      throw new Error(body.message ?? body.detail ?? `请求没有完成（HTTP ${response.status}）`)
+    }
+    return response.status === 204 ? (undefined as T) : response.json() as Promise<T>
+  } catch (error) {
+    if (timeout?.aborted) throw new Error('服务响应超时，请确认后台服务正常后重试')
+    throw error
   }
-  return response.status === 204 ? (undefined as T) : response.json() as Promise<T>
 }
 
 export const api = {
   getSystemStatus: () => request<SystemStatus>('/api/system/status'),
   listProjects: () => request<Project[]>('/api/projects'),
-  createProject: (name: string, description = '') => request<Project>('/api/projects', { method: 'POST', body: JSON.stringify({ name, description }) }),
-  updateProject: (id: string, name: string, description = '') => request<Project>(`/api/projects/${id}`, { method: 'PUT', body: JSON.stringify({ name, description }) }),
-  deleteProject: (id: string) => request<void>(`/api/projects/${id}`, { method: 'DELETE' }),
+  createProject: (name: string, description = '') => request<Project>('/api/projects', { method: 'POST', body: JSON.stringify({ name, description }) }, 15_000),
+  updateProject: (id: string, name: string, description = '') => request<Project>(`/api/projects/${id}`, { method: 'PUT', body: JSON.stringify({ name, description }) }, 15_000),
+  deleteProject: (id: string) => request<void>(`/api/projects/${id}`, { method: 'DELETE' }, 15_000),
   listConnections: (projectId: string) => request<DataConnection[]>(`/api/projects/${projectId}/data-connections`),
   createConnection: (body: Record<string, unknown>) => request<DataConnection>('/api/data-connections', { method: 'POST', body: JSON.stringify(body) }),
   updateConnection: (id: string, body: Record<string, unknown>) => request<DataConnection>(`/api/data-connections/${id}`, { method: 'PUT', body: JSON.stringify(body) }),

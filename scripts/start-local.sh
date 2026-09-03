@@ -44,8 +44,15 @@ ensure_docker() {
   docker info >/dev/null 2>&1 || { echo "Docker is not running. Start Docker or Colima and retry." >&2; exit 1; }
 }
 
+start_existing_container() {
+  local name="$1"
+  if docker container inspect "$name" >/dev/null 2>&1; then
+    docker start "$name" >/dev/null
+    printf '%s container is running\n' "$name"
+  fi
+}
+
 start_onlyoffice() {
-  ensure_docker
   if docker container inspect "$OFFICE_CONTAINER" >/dev/null 2>&1; then
     docker start "$OFFICE_CONTAINER" >/dev/null
   else
@@ -80,6 +87,10 @@ start_service() {
   wait_for_url "$name" "$health_url" 60
 }
 
+ensure_docker
+start_existing_container "finflow-postgres"
+start_existing_container "finflow-minio"
+start_existing_container "finflow-demo-api"
 start_onlyoffice
 
 if [[ -z "${FINFLOW_OFFICE_API_BASE_URL:-}" ]]; then
@@ -107,9 +118,9 @@ start_service "Python worker" "http://127.0.0.1:8001/health" \
   "$ROOT/worker-python" "$RUN_DIR/python.pid" "$RUN_DIR/python.log" \
   "$ROOT/worker-python/.venv/bin/python" -m uvicorn app.main:app --host 127.0.0.1 --port 8001
 
-if curl -fsS --max-time 2 "http://127.0.0.1:8080/actuator/health" >/dev/null 2>&1; then
-  echo "Java API is already running. Restart it with this script if Office editing remains disabled."
-else
+if ! curl -fsS --max-time 2 "http://127.0.0.1:8080/actuator/health" >/dev/null 2>&1; then
+  echo "Building Java API..."
+  (cd "$ROOT/backend-java" && mvn -q -DskipTests package)
   (
     cd "$ROOT/backend-java"
     nohup env \
@@ -122,9 +133,14 @@ else
       "FINFLOW_DEMO_DATABASE_USERNAME=$FINFLOW_DEMO_DATABASE_USERNAME" \
       "FINFLOW_DEMO_DATABASE_PASSWORD=$FINFLOW_DEMO_DATABASE_PASSWORD" \
       mvn spring-boot:run >"$RUN_DIR/java.log" 2>&1 &
-    echo $! >"$RUN_DIR/java.pid"
+    echo $! >"$RUN_DIR/java-launcher.pid"
   )
   wait_for_url "Java API" "http://127.0.0.1:8080/actuator/health" 90
+  java_pid="$(lsof -tiTCP:8080 -sTCP:LISTEN 2>/dev/null | head -n 1)"
+  [[ -n "$java_pid" ]] || { echo "Java API is healthy but its process could not be identified." >&2; exit 1; }
+  echo "$java_pid" >"$RUN_DIR/java.pid"
+else
+  echo "Java API is already running"
 fi
 
 start_service "Vue workbench" "http://127.0.0.1:5174/" \
