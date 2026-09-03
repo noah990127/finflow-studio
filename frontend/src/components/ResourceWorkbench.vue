@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, ref, watch } from 'vue'
-import { Braces, CheckCircle2, ChevronDown, ChevronRight, Database, Download, ExternalLink, Eye, FilePenLine, FileText, Globe2, LoaderCircle, Pencil, Play, Plus, RefreshCw, Save, Search, Server, ShieldAlert, Trash2, X } from 'lucide-vue-next'
+import { BookOpen, Braces, CheckCircle2, ChevronDown, ChevronRight, Database, Download, ExternalLink, Eye, FilePenLine, FileText, Globe2, LoaderCircle, Pencil, Play, Plus, RefreshCw, Save, Search, Server, ShieldAlert, Trash2, X } from 'lucide-vue-next'
 import { api, deliverableContentUrl, downloadFile, inlineContentUrl, renderedOfficePreviewUrl, type CitationSource, type ConnectionPreview, type CsvPreview, type DataConnection, type DatabaseCatalog, type DatabaseTable, type DocumentPreview, type WebEmbedStatus, type WebPreview, type WorkspaceResource } from '../api/client'
 import DiagramPreview from './DiagramPreview.vue'
 import OfficeEditor from './OfficeEditor.vue'
@@ -16,6 +16,7 @@ const webLoading = ref(false), webPreview = ref<WebPreview | null>(null), webOri
 const webEmbedStatus = ref<WebEmbedStatus>({ status: 'CHECKING', reason: '' })
 const connection = ref<DataConnection | null>(null), connectionPreview = ref<ConnectionPreview | null>(null)
 const citations = ref<CitationSource[]>([]), citationError = ref('')
+const citationsOpen = ref(false)
 const previewQuery = ref(''), previewLoading = ref(false), testLoading = ref(false), connectionMessage = ref('')
 const connectionEditing = ref(false), connectionSaving = ref(false), catalogLoading = ref(false), catalog = ref<DatabaseCatalog | null>(null)
 const catalogSearch = ref(''), expandedSchemas = ref<string[]>([]), selectedTable = ref<DatabaseTable | null>(null)
@@ -137,6 +138,7 @@ watch(() => props.resource.id, () => {
   officeFallback.value = false
   webOriginalMode.value = true
   webPreview.value = null
+  citationsOpen.value = false
   load()
   loadCitations()
 }, { immediate: true })
@@ -188,7 +190,10 @@ async function previewData() {
       </nav>
     </header>
     <aside v-if="downloadMessage" class="resource-download-message"><span>{{ downloadMessage }}</span><button type="button" title="关闭" @click="downloadMessage = ''"><X :size="14"/></button></aside>
-    <aside v-if="(citations.length || citationError) && !isFinancialReport" class="deliverable-citation-strip" :class="{ error: citationError }"><span>{{ citationError || '引用来源 · 悬停查看原文' }}</span><CitationAnchor v-for="(citation, index) in citations" :key="citation.id" compact :citation="citation" :label="`[${index + 1}]`" @open-source="$emit('openSource', $event)"/></aside>
+    <aside v-if="(citations.length || citationError) && !isFinancialReport" class="deliverable-citation-strip" :class="{ error: citationError, open: citationsOpen }">
+      <button type="button" class="citation-strip-trigger" :disabled="!!citationError" @click="citationsOpen = !citationsOpen"><BookOpen :size="14"/><span>{{ citationError || '引用来源' }}</span><strong v-if="citations.length">{{ citations.length }}</strong><ChevronDown v-if="citations.length" :size="13"/></button>
+      <section v-if="citationsOpen && citations.length" class="citation-strip-panel"><header><div><small>引用来源</small><strong>点击查看原文片段</strong></div><button type="button" title="关闭" @click="citationsOpen = false"><X :size="14"/></button></header><div><CitationAnchor v-for="(citation, index) in citations" :key="citation.id" compact :citation="citation" :label="`[${index + 1}] ${citation.source_name}`" @open-source="$emit('openSource', $event)"/></div></section>
+    </aside>
 
     <div v-if="loading" class="resource-state"><LoaderCircle class="spin" :size="22"/>正在打开内容</div>
     <div v-else-if="error" class="resource-state error"><FileText :size="24"/><strong>暂时无法显示</strong><p>{{ error }}</p></div>

@@ -1,20 +1,19 @@
 <script setup lang="ts">
 import { autoUpdate, computePosition, flip, offset, shift } from '@floating-ui/dom'
-import { BookOpen, ExternalLink, FileText } from 'lucide-vue-next'
-import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
+import { BookOpen, ExternalLink, FileText, X } from 'lucide-vue-next'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import type { CitationSource } from '../api/client'
 
 const props = withDefaults(defineProps<{ citation: CitationSource; label?: string; compact?: boolean }>(), { label: '', compact: false })
 const emit = defineEmits<{ openSource: [citation: CitationSource] }>()
 const anchor = ref<HTMLElement | null>(null), card = ref<HTMLElement | null>(null), open = ref(false)
 let cleanup: (() => void) | undefined
-let closeTimer: number | undefined
 
 const displayLabel = computed(() => props.label || props.citation.formatted || props.citation.source_name)
 const sourceUrl = computed(() => typeof props.citation.location?.url === 'string' ? props.citation.location.url : '')
 const excerpt = computed(() => {
   const value = props.citation.text?.replace(/\s+/g, ' ').trim() || '当前来源没有可展示的原文摘要。'
-  return value.length > 220 ? `${value.slice(0, 220)}…` : value
+  return value.length > 360 ? `${value.slice(0, 360)}…` : value
 })
 const location = computed(() => {
   const labels: Record<string, string> = { page: '第 {value} 页', slide: '第 {value} 页', paragraph: '第 {value} 段', table: '表格 {value}', sheet: '工作表 {value}', rows: '第 {value} 行', row: '第 {value} 行', column: '字段 {value}', url: '{value}', start_seconds: '{value} 秒' }
@@ -27,26 +26,30 @@ async function position() {
   Object.assign(card.value.style, { left: `${result.x}px`, top: `${result.y}px` })
 }
 async function show() {
-  if (closeTimer) window.clearTimeout(closeTimer)
   open.value = true
   await nextTick()
   cleanup?.()
   if (anchor.value && card.value) cleanup = autoUpdate(anchor.value, card.value, position)
 }
-function scheduleClose() {
-  closeTimer = window.setTimeout(() => { open.value = false; cleanup?.(); cleanup = undefined }, 140)
-}
+function close() { open.value = false; cleanup?.(); cleanup = undefined }
+function toggle() { if (open.value) close(); else show() }
 function openSource() { emit('openSource', props.citation); open.value = false }
-onBeforeUnmount(() => { cleanup?.(); if (closeTimer) window.clearTimeout(closeTimer) })
+function closeOutside(event: PointerEvent) {
+  const target = event.target as Node
+  if (open.value && !anchor.value?.contains(target) && !card.value?.contains(target)) close()
+}
+function closeOnEscape(event: KeyboardEvent) { if (event.key === 'Escape') close() }
+onMounted(() => { document.addEventListener('pointerdown', closeOutside); document.addEventListener('keydown', closeOnEscape) })
+onBeforeUnmount(() => { cleanup?.(); document.removeEventListener('pointerdown', closeOutside); document.removeEventListener('keydown', closeOnEscape) })
 </script>
 
 <template>
-  <button ref="anchor" type="button" class="citation-anchor" :class="{ compact }" :aria-label="`查看来源：${citation.source_name}`" @mouseenter="show" @mouseleave="scheduleClose" @focus="show" @blur="scheduleClose" @click="show">
+  <button ref="anchor" type="button" class="citation-anchor" :class="{ compact }" :aria-label="`查看来源：${citation.source_name}`" :aria-expanded="open" @click="toggle">
     <BookOpen v-if="compact" :size="12"/><span>{{ displayLabel }}</span>
   </button>
   <Teleport to="body">
-    <article v-if="open" ref="card" class="citation-popover" role="dialog" @mouseenter="show" @mouseleave="scheduleClose">
-      <header><span><FileText :size="15"/></span><div><small>参考来源</small><strong>{{ citation.source_name }}</strong></div></header>
+    <article v-if="open" ref="card" class="citation-popover" role="dialog">
+      <header><span><FileText :size="15"/></span><div><small>来源片段</small><strong>{{ citation.source_name }}</strong></div><button type="button" title="关闭" @click="close"><X :size="14"/></button></header>
       <dl><div><dt>位置</dt><dd>{{ location }}</dd></div><div v-if="citation.version"><dt>版本</dt><dd>第 {{ citation.version }} 版</dd></div></dl>
       <blockquote>{{ excerpt }}</blockquote>
       <footer><span v-if="citation.content_hash">来源信息已记录</span><button v-if="citation.resource_id" type="button" @click="openSource">在工作区查看<ExternalLink :size="13"/></button><a v-else-if="sourceUrl" :href="sourceUrl" target="_blank" rel="noopener noreferrer">打开原网页<ExternalLink :size="13"/></a></footer>

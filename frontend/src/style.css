@@ -386,10 +386,22 @@
 .context-sidebar .primary-button { width: 100%; min-height: 36px; padding: 0 8px; font-size: 10px; }
 
 .resource-workbench { position: relative; min-height: 100%; display: grid; grid-template-rows: auto minmax(0, 1fr); background: #eef3f8; }
-.deliverable-citation-strip { position: absolute; z-index: 8; top: 58px; right: 16px; display: flex; align-items: center; gap: 3px; max-width: min(56vw, 520px); padding: 6px 8px; border: 1px solid #cfddeb; border-radius: 6px; background: rgba(255,255,255,.96); box-shadow: 0 5px 18px rgba(29, 59, 93, .12); }
-.deliverable-citation-strip > span { margin-right: 3px; color: #718198; font-size: 9px; white-space: nowrap; }
+.deliverable-citation-strip { position: absolute; z-index: 8; top: 58px; right: 16px; }
+.citation-strip-trigger { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; padding: 5px 9px; border: 1px solid #cfddeb; border-radius: 6px; color: #526b84; background: rgba(255,255,255,.97); box-shadow: 0 5px 18px rgba(29,59,93,.12); font-size: 10px; cursor: pointer; }
+.citation-strip-trigger strong { display: grid; place-items: center; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 9px; color: #fff; background: #2877c7; font-size: 9px; }
+.deliverable-citation-strip.open .citation-strip-trigger > svg:last-child { transform: rotate(180deg); }
+.citation-strip-panel { position: absolute; top: 36px; right: 0; width: min(390px, calc(100vw - 40px)); overflow: hidden; border: 1px solid #cbd9e9; border-radius: 7px; background: #fff; box-shadow: 0 14px 38px rgba(26,54,88,.2); }
+.citation-strip-panel > header { display: flex; align-items: center; justify-content: space-between; padding: 11px 12px; border-bottom: 1px solid #e5ecf4; background: #f8fbff; }
+.citation-strip-panel > header small, .citation-strip-panel > header strong { display: block; }
+.citation-strip-panel > header small { color: #74879a; font-size: 9px; }
+.citation-strip-panel > header strong { margin-top: 2px; color: #29435e; font-size: 11px; }
+.citation-strip-panel > header button { display: grid; place-items: center; padding: 4px; border: 0; color: #71849a; background: transparent; cursor: pointer; }
+.citation-strip-panel > div { display: grid; gap: 5px; max-height: min(55vh, 430px); padding: 8px; overflow: auto; }
+.citation-strip-panel .citation-anchor.compact { width: 100%; justify-content: flex-start; margin: 0; padding: 8px 9px; overflow: hidden; border-color: transparent; background: transparent; color: #35516e; font-weight: 600; text-align: left; }
+.citation-strip-panel .citation-anchor.compact:hover { border-color: #d4e3f2; background: #f5f9fd; color: #145fae; }
+.citation-strip-panel .citation-anchor.compact span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .deliverable-citation-strip.error { border-color: #efc8c8; background: #fff8f8; }
-.deliverable-citation-strip.error > span { color: #a34747; }
+.deliverable-citation-strip.error .citation-strip-trigger { color: #a34747; border-color: #efc8c8; background: #fff8f8; }
 .resource-toolbar { min-height: 66px; display: flex; align-items: center; justify-content: space-between; gap: 15px; padding: 12px 18px; border-bottom: 1px solid var(--line); background: #fff; }
 .resource-toolbar span, .resource-toolbar strong { display: block; }
 .resource-toolbar span { color: var(--muted); font-size: 9px; }
@@ -2260,6 +2272,7 @@ button {
 .citation-popover > header { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid #e4ebf3; background: #f7faff; }
 .citation-popover > header > span { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 5px; background: #e7f1ff; color: #1265d8; }
 .citation-popover > header div { min-width: 0; }
+.citation-popover > header > button { display: grid; place-items: center; flex: none; margin-left: auto; padding: 4px; border: 0; color: #71849a; background: transparent; cursor: pointer; }
 .citation-popover > header small, .citation-popover > header strong { display: block; }
 .citation-popover > header small { margin-bottom: 2px; color: #73839a; font-size: 9px; }
 .citation-popover > header strong { overflow: hidden; color: #203047; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
