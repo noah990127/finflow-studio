@@ -1,19 +1,10 @@
 import json
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 
 
-app = FastAPI(title="Market and Macro Demo API", version="1.0.0")
-
-MARKET_DATA = [
-    ("2026-01", 100.0, 100.0, 7.18, 50.3, 104.2),
-    ("2026-02", 97.5, 102.8, 7.21, 49.8, 101.6),
-    ("2026-03", 103.2, 105.4, 7.16, 50.6, 106.8),
-    ("2026-04", 108.6, 109.7, 7.12, 51.1, 110.5),
-    ("2026-05", 105.1, 114.3, 7.09, 50.4, 107.9),
-    ("2026-06", 101.8, 119.6, 7.04, 49.9, 103.7),
-]
+app = FastAPI(title="FinFlow Showcase Data API", version="1.0.0")
 
 NVIDIA_FIVE_YEAR_FINANCIALS = [
     {
@@ -48,17 +39,6 @@ NVIDIA_FIVE_YEAR_FINANCIALS = [
     },
 ]
 
-NVIDIA_PRODUCT_PORTFOLIO = [
-    {"segment": "AI数据中心", "platform": "DGX Vera Rubin NVL72", "generation": "Rubin", "form_factor": "机柜级系统", "target_workload": "大模型训练、推理与Agentic AI", "lifecycle": "2026年下半年合作伙伴可用", "evidence_url": "https://www.nvidia.com/en-us/data-center/technologies/rubin/"},
-    {"segment": "AI数据中心", "platform": "DGX Rubin NVL8", "generation": "Rubin", "form_factor": "8 GPU系统", "target_workload": "企业训练、后训练与推理", "lifecycle": "2026年发布", "evidence_url": "https://www.nvidia.com/en-us/data-center/dgx-rubin-nvl8/"},
-    {"segment": "AI数据中心", "platform": "GB300 NVL72", "generation": "Blackwell Ultra", "form_factor": "机柜级系统", "target_workload": "大规模推理与复杂推理", "lifecycle": "当前产品", "evidence_url": "https://www.nvidia.com/en-us/data-center/products/"},
-    {"segment": "企业服务器", "platform": "RTX PRO 6000 Blackwell Server Edition", "generation": "Blackwell", "form_factor": "PCIe GPU", "target_workload": "企业AI、数据科学与视觉计算", "lifecycle": "当前产品", "evidence_url": "https://www.nvidia.com/en-us/data-center/products/"},
-    {"segment": "边缘AI", "platform": "Jetson AGX Thor", "generation": "Blackwell", "form_factor": "嵌入式模组", "target_workload": "机器人与物理AI", "lifecycle": "当前产品", "evidence_url": "https://www.nvidia.com/en-us/autonomous-machines/embedded-systems/"},
-    {"segment": "专业工作站", "platform": "DGX Spark", "generation": "Grace Blackwell", "form_factor": "桌面AI系统", "target_workload": "本地AI开发与原型验证", "lifecycle": "当前产品", "evidence_url": "https://www.nvidia.com/en-us/products/workstations/dgx-spark/"},
-    {"segment": "汽车", "platform": "DRIVE AGX", "generation": "车规计算平台", "form_factor": "车载系统", "target_workload": "自动驾驶与智能座舱", "lifecycle": "平台产品", "evidence_url": "https://www.nvidia.com/en-us/self-driving-cars/drive-platform/hardware/"},
-    {"segment": "游戏与创作", "platform": "GeForce RTX 5090", "generation": "Blackwell", "form_factor": "消费级GPU", "target_workload": "4K游戏、生成式AI与内容创作", "lifecycle": "当前产品", "evidence_url": "https://www.nvidia.com/en-us/geforce/graphics-cards/50-series/rtx-5090/"},
-]
-
 GLOBAL_TAX_2026_TRENDS = [
     {"theme": "OECD Pillar Two", "region": "全球", "effective_period": "2024-2026", "status": "执行与申报基础设施完善", "impact": "15%全球最低税的GIR、安全港与数据口径", "priority": 5, "source_url": "https://www.oecd.org/en/about/news/announcements/2026/05/global-minimum-tax-release-of-a-common-understanding-of-implementing-jurisdictions-and-further-administrative-guidance-to-support-compliance.html"},
     {"theme": "EU CBAM", "region": "欧盟", "effective_period": "2026-01-01", "status": "正式阶段", "impact": "授权申报人、嵌入排放与证书成本", "priority": 5, "source_url": "https://taxation-customs.ec.europa.eu/carbon-border-adjustment-mechanism/cbam-definitive-regime_en"},
@@ -70,26 +50,11 @@ GLOBAL_TAX_2026_TRENDS = [
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "online", "records": len(MARKET_DATA), "notice": "simulated data"}
-
-
-@app.get("/api/v1/market/monthly-indicators")
-def monthly_indicators(year: int = Query(default=2026)) -> StreamingResponse:
-    def rows():
-        for period, sector_index, lithium_index, eur_cny, pmi, policy_attention in MARKET_DATA:
-            if not period.startswith(str(year)):
-                continue
-            yield json.dumps({
-                "period": period,
-                "new_energy_equipment_index": sector_index,
-                "lithium_material_price_index": lithium_index,
-                "eur_cny": eur_cny,
-                "manufacturing_pmi": pmi,
-                "policy_attention_index": policy_attention,
-                "source": "finflow-simulated-market-api",
-            }, ensure_ascii=False) + "\n"
-
-    return StreamingResponse(rows(), media_type="application/x-ndjson")
+    return {
+        "status": "online",
+        "records": len(NVIDIA_FIVE_YEAR_FINANCIALS) + len(GLOBAL_TAX_2026_TRENDS),
+        "notice": "showcase data",
+    }
 
 
 @app.get("/api/v1/companies/nvidia/five-year-financials")
@@ -104,11 +69,6 @@ def nvidia_five_year_financials() -> StreamingResponse:
             }, ensure_ascii=False) + "\n"
 
     return StreamingResponse(rows(), media_type="application/x-ndjson")
-
-
-@app.get("/api/v1/companies/nvidia/product-portfolio")
-def nvidia_product_portfolio() -> StreamingResponse:
-    return StreamingResponse((json.dumps(item, ensure_ascii=False) + "\n" for item in NVIDIA_PRODUCT_PORTFOLIO), media_type="application/x-ndjson")
 
 
 @app.get("/api/v1/tax/2026-policy-trends")

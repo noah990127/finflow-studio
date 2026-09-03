@@ -1,13 +1,11 @@
 # FinFlow curated demo cases
 
-This directory contains four portable demo cases. The first three are full showcase projects; Qiming is retained as the original fictional operating-analysis case.
+This directory contains two portable showcase cases:
 
-- `nvidia-devices`: NVIDIA device portfolio, workload fit, TCO and deployment-roadmap analysis;
 - `nvidia`: NVIDIA FY2022-FY2026 operating and financial-quality analysis;
-- `global-tax-2026`: 2026 global tax-policy trends, simulated entity exposure and action planning;
-- `qiming`: fictional operating and capital-market analysis for Qiming Manufacturing.
+- `global-tax-2026`: 2026 global tax-policy trends, simulated entity exposure and action planning.
 
-No API key, database password, private document or local absolute path is included. All device benchmarks, cost scenarios, quarterly splits, entity exposure and cash-impact scenarios marked as simulated are demonstration data.
+No API key, database password, private document or local absolute path is included. All quarterly splits, entity exposure and cash-impact scenarios marked as simulated are demonstration data.
 
 ## Included capabilities
 
@@ -36,7 +34,7 @@ python3 examples/cases/import_cases.py --api http://127.0.0.1:8080
 Import one or more cases by repeating `--case`:
 
 ```bash
-python3 examples/cases/import_cases.py --case nvidia-devices --case global-tax-2026
+python3 examples/cases/import_cases.py --case nvidia --case global-tax-2026
 ```
 
 The importer is idempotent for projects, source files, connections and starter deliverables. Re-running it updates each project's workflow to the bundled definition.
@@ -57,9 +55,7 @@ The importer uses only the Python standard library and requires no package insta
 
 ```bash
 export FINFLOW_NVIDIA_API_URL=http://demo-api:8011/api/v1/companies/nvidia/five-year-financials
-export FINFLOW_NVIDIA_PRODUCT_API_URL=http://demo-api:8011/api/v1/companies/nvidia/product-portfolio
 export FINFLOW_GLOBAL_TAX_API_URL=http://demo-api:8011/api/v1/tax/2026-policy-trends
-export FINFLOW_QIMING_MARKET_API_URL='http://demo-api:8011/api/v1/market/monthly-indicators?year=2026'
 export FINFLOW_DEMO_DATABASE_URL=jdbc:postgresql://postgres:5432/finflow
 export FINFLOW_DEMO_DATABASE_USERNAME=finflow
 ```

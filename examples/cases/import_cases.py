@@ -16,7 +16,7 @@ from urllib.request import Request, urlopen
 
 
 ROOT = Path(__file__).resolve().parent
-CASE_NAMES = ("nvidia-devices", "nvidia", "global-tax-2026", "qiming")
+CASE_NAMES = ("nvidia", "global-tax-2026")
 
 
 class Api:

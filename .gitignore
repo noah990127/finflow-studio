@@ -24,7 +24,8 @@ data-formulator/**/__pycache__/
 demo-data/
 demo-services/
 prototype/
-docs/
+docs/*
+!docs/Docker 部署指南.md
 
 /data/
 *.log
