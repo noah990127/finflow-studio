@@ -14,6 +14,7 @@ const loading = ref(false), error = ref(''), editing = ref(false), officeFallbac
 const downloadLoading = ref(false), downloadMessage = ref('')
 const webLoading = ref(false), webPreview = ref<WebPreview | null>(null), webOriginalMode = ref(true)
 const webEmbedStatus = ref<WebEmbedStatus>({ status: 'CHECKING', reason: '' })
+const webEmbedOverride = ref(false)
 const connection = ref<DataConnection | null>(null), connectionPreview = ref<ConnectionPreview | null>(null)
 const citations = ref<CitationSource[]>([]), citationError = ref('')
 const citationsOpen = ref(false)
@@ -79,9 +80,15 @@ async function openWebReader() {
   if (!webPreview.value) await loadWebPreview()
 }
 async function checkWebEmbedding() {
+  const resourceId = props.resource.id
+  webEmbedOverride.value = false
   webEmbedStatus.value = { status: 'CHECKING', reason: '' }
-  try { webEmbedStatus.value = await api.getWebEmbedStatus(props.resource.projectId, props.resource.id) }
-  catch { webEmbedStatus.value = { status: 'UNKNOWN', reason: '暂时无法确认该网站是否允许在 Studio 内显示' } }
+  try {
+    const result = await api.getWebEmbedStatus(props.resource.projectId, resourceId)
+    if (props.resource.id === resourceId) webEmbedStatus.value = result
+  } catch {
+    if (props.resource.id === resourceId) webEmbedStatus.value = { status: 'UNKNOWN', reason: 'Studio 服务暂时无法连接该网站，可能受到网络限制或被目标网站拒绝访问' }
+  }
 }
 async function loadCitations() {
   citations.value = []; citationError.value = ''
@@ -137,6 +144,7 @@ watch(() => props.resource.id, () => {
   editing.value = false
   officeFallback.value = false
   webOriginalMode.value = true
+  webEmbedOverride.value = false
   webPreview.value = null
   citationsOpen.value = false
   load()
@@ -257,7 +265,8 @@ async function previewData() {
     </section>
     <section v-else-if="isWebUrl" class="web-url-work-area">
       <header><Globe2 :size="18"/><span>{{ resource.url }}</span><div class="web-preview-modes"><button type="button" :class="{ active: webOriginalMode }" @click="webOriginalMode = true">原网页</button><button type="button" :class="{ active: !webOriginalMode }" @click="openWebReader">快速阅读</button><a :href="resource.url" target="_blank" rel="noopener noreferrer"><ExternalLink :size="14"/>新窗口</a></div></header>
-      <div v-if="webOriginalMode && webEmbedStatus.status === 'BLOCKED'" class="web-embed-blocked"><ShieldAlert :size="28"/><strong>该网页无法在 Studio 内打开</strong><p>{{ webEmbedStatus.reason }}。你仍可以快速阅读已提取的正文，或在浏览器中访问完整原文。</p><div><button class="secondary-button" type="button" @click="openWebReader">快速阅读</button><a class="primary-button" :href="resource.url" target="_blank" rel="noopener noreferrer"><ExternalLink :size="15"/>在浏览器中打开</a></div></div>
+      <div v-if="webOriginalMode && webEmbedStatus.status === 'CHECKING'" class="web-url-loading"><LoaderCircle class="spin" :size="21"/><strong>正在检查网页访问条件</strong><p>确认该网页是否允许在 Studio 内显示。</p></div>
+      <div v-else-if="webOriginalMode && !webEmbedOverride && ['BLOCKED', 'UNKNOWN'].includes(webEmbedStatus.status)" class="web-embed-blocked"><ShieldAlert :size="28"/><strong>该网页无法在 Studio 内打开</strong><p>{{ webEmbedStatus.reason }}。你仍可以快速阅读已提取的正文，或在浏览器中访问完整原文。</p><div><button class="secondary-button" type="button" @click="openWebReader">快速阅读</button><button v-if="webEmbedStatus.status === 'UNKNOWN'" class="secondary-button" type="button" @click="webEmbedOverride = true">仍尝试打开</button><a class="primary-button" :href="resource.url" target="_blank" rel="noopener noreferrer"><ExternalLink :size="15"/>在浏览器中打开</a></div></div>
       <div v-else-if="webOriginalMode" class="web-url-frame"><iframe :src="resource.url" :title="resource.name" referrerpolicy="strict-origin-when-cross-origin"></iframe></div>
       <div v-else-if="webLoading" class="web-url-loading"><LoaderCircle class="spin" :size="21"/><strong>正在整理网页内容</strong><p>首次读取后会缓存，之后打开会更快。</p></div>
       <div v-else-if="error" class="resource-state error"><Globe2 :size="24"/><strong>网站内容暂时无法读取</strong><p>{{ error }}</p><a class="secondary-button" :href="resource.url" target="_blank" rel="noopener noreferrer"><ExternalLink :size="14"/>新窗口打开</a></div>

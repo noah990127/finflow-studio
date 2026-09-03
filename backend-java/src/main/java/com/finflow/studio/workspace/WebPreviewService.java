@@ -90,7 +90,8 @@ public class WebPreviewService {
             }
             return new WorkspaceModels.WebEmbedStatus("ALLOWED", "");
         } catch (Exception error) {
-            return new WorkspaceModels.WebEmbedStatus("UNKNOWN", "暂时无法确认该网站是否允许在 Studio 内显示");
+            return new WorkspaceModels.WebEmbedStatus("UNKNOWN",
+                    "Studio 服务暂时无法连接该网站，可能受到网络限制或被目标网站拒绝访问");
         }
     }
 
