@@ -2,6 +2,11 @@ package com.finflow.studio.assistant;
 
 import com.finflow.studio.assistant.AssistantModels.PlanStep;
 import com.finflow.studio.assistant.AssistantModels.RunResponse;
+import com.finflow.studio.deliverable.DeliverableModels.CitationRequest;
+import com.finflow.studio.deliverable.DeliverableModels.CreateRequest;
+import com.finflow.studio.deliverable.DeliverableModels.SectionRequest;
+import com.finflow.studio.deliverable.DeliverableService;
+import com.finflow.studio.knowledge.KnowledgeService;
 import com.finflow.studio.project.ProjectService;
 import com.finflow.studio.worker.WorkerClient;
 import com.finflow.studio.workflow.WorkflowDefinitionService;
@@ -19,6 +24,7 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Instant;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -40,12 +46,15 @@ public class AssistantExecutionService {
     private final WorkerClient worker;
     private final ObjectMapper objectMapper;
     private final WorkspaceResourceService workspace;
+    private final KnowledgeService knowledge;
+    private final DeliverableService deliverables;
 
     public AssistantExecutionService(JdbcClient jdbc, AssistantEventService events,
                                      @Qualifier("applicationTaskExecutor") TaskExecutor taskExecutor,
                                      ProjectService projects, WorkflowDefinitionService workflows,
                                      WorkerClient worker, ObjectMapper objectMapper,
-                                     WorkspaceResourceService workspace) {
+                                     WorkspaceResourceService workspace, KnowledgeService knowledge,
+                                     DeliverableService deliverables) {
         this.jdbc = jdbc;
         this.events = events;
         this.taskExecutor = taskExecutor;
@@ -54,6 +63,8 @@ public class AssistantExecutionService {
         this.worker = worker;
         this.objectMapper = objectMapper;
         this.workspace = workspace;
+        this.knowledge = knowledge;
+        this.deliverables = deliverables;
     }
 
     public RunResponse start(String sessionId, String planId, String idempotencyKey) {
@@ -264,7 +275,7 @@ public class AssistantExecutionService {
                 .list();
     }
 
-    private String executeStep(PlanStep step, Map<String, Object> effects) {
+    String executeStep(PlanStep step, Map<String, Object> effects) {
         return switch (step.tool()) {
             case "workspace.inspect" -> inspectWorkspace(step, effects);
             case "workspace.navigate" -> navigate(step, effects);
@@ -272,12 +283,15 @@ public class AssistantExecutionService {
             case "assistant.analyze_context" -> analyzeContext(step, effects);
             case "project.create_workspace", "project.create_analysis_workspace" -> createAnalysisProject(step, effects);
             case "knowledge.discover_external_sources" -> discoverSources(step, effects);
+            case "knowledge.search" -> searchKnowledge(step, effects);
+            case "knowledge.add" -> addKnowledge(step, effects);
             case "workflow.initialize", "workflow.initialize_analysis" -> initializeWorkflow(step, effects);
             case "workflow.prepare" -> prepareWorkflow(step, effects);
             case "workflow.add_selected_resource" -> addSelectedResource(step, effects);
             case "workflow.add_data_transform" -> addDataTransform(step, effects);
             case "workflow.add_outputs" -> addOutputs(step, effects);
             case "dataset.profile" -> "已确认结构化数据可用于后续处理";
+            case "deliverable.create" -> createDeliverable(step, effects);
             default -> throw new IllegalArgumentException("当前版本尚不支持这个工作台动作：" + step.tool());
         };
     }
@@ -291,6 +305,8 @@ public class AssistantExecutionService {
         if (effects.containsKey("sourceProjectId")) value.put("sourceProjectId", effects.get("sourceProjectId"));
         if (effects.containsKey("workflowId")) value.put("workflowId", effects.get("workflowId"));
         if (effects.containsKey("createdProjectId")) value.put("createdProjectId", effects.get("createdProjectId"));
+        if (effects.containsKey("knowledgeCitations")) value.put("citations", effects.get("knowledgeCitations"));
+        if (effects.containsKey("deliverables")) value.put("deliverables", effects.get("deliverables"));
         return value;
     }
 
@@ -435,6 +451,163 @@ public class AssistantExecutionService {
         effects.put("researchSummary", Objects.toString(research.get("summary"), ""));
         return "已整理 " + sources.size() + " 个资料入口" +
                 ("search-plan-fallback".equals(effects.get("researchMode")) ? "（待进一步核实）" : "");
+    }
+
+    private String searchKnowledge(PlanStep step, Map<String, Object> effects) {
+        var projectId = argument(step, "project_id", Objects.toString(effects.get("sourceProjectId"), ""));
+        if (projectId.isBlank()) throw new IllegalStateException("当前项目不可用，无法搜索知识库");
+        var query = argument(step, "query", argument(step, "goal", ""));
+        if (query.isBlank()) throw new IllegalArgumentException("知识检索需要 query 参数");
+        var limit = step.arguments().get("limit") instanceof Number number ? number.intValue() : 10;
+        var refs = knowledge.search(projectId, query, Math.max(1, Math.min(limit, 20)));
+        var citations = new ArrayList<Map<String, Object>>();
+        if (effects.get("researchCitations") instanceof List<?> existing) {
+            existing.stream().filter(Map.class::isInstance).map(value -> (Map<String, Object>) value)
+                    .forEach(citations::add);
+        }
+        refs.stream().map(ref -> {
+            var citation = new LinkedHashMap<String, Object>();
+            citation.put("citationId", ref.id());
+            citation.put("resourceId", ref.resourceId());
+            citation.put("version", ref.version());
+            citation.put("sourceName", ref.sourceName());
+            citation.put("excerpt", ref.text());
+            citation.put("location", ref.location());
+            citation.put("contentHash", ref.contentHash());
+            citation.put("score", ref.score());
+            return Map.<String, Object>copyOf(citation);
+        }).forEach(citations::add);
+        effects.put("knowledgeSearchQuery", query);
+        effects.put("knowledgeCitations", citations);
+        return citations.isEmpty()
+                ? "当前项目知识库未命中相关证据，将继续通过后续资料检索步骤补充"
+                : "已从项目知识库找到 " + citations.size() + " 条可引用证据";
+    }
+
+    private String addKnowledge(PlanStep step, Map<String, Object> effects) {
+        var projectId = argument(step, "project_id", Objects.toString(effects.get("sourceProjectId"), ""));
+        if (projectId.isBlank()) throw new IllegalStateException("当前项目不可用，无法登记资料");
+        var material = argument(step, "text", "");
+        if (material.isBlank()) material = researchMaterial(effects);
+        var source = argument(step, "source", "");
+        if (material.isBlank() && !source.isBlank()) material = source;
+        if (material.isBlank()) throw new IllegalStateException("没有可登记的资料内容或来源");
+        var name = argument(step, "name", "Agent 研究资料索引.md");
+        if (!name.toLowerCase().endsWith(".md")) name += ".md";
+        var resource = knowledge.importBytes(projectId, name, "text/markdown",
+                material.getBytes(StandardCharsets.UTF_8));
+        effects.put("knowledgeResourceId", resource.id());
+        var researchCitations = researchCitations(effects, resource.id(), resource.currentVersion());
+        effects.put("researchCitations", researchCitations);
+        effects.put("knowledgeCitations", researchCitations);
+        effects.put("uiAction", Map.of("type", "OPEN_RESOURCE", "projectId", projectId,
+                "resourceId", resource.id(), "refreshWorkspace", true));
+        return "已将筛选后的资料索引加入项目知识库";
+    }
+
+    private List<Map<String, Object>> researchCitations(Map<String, Object> effects, String resourceId, int version) {
+        if (!(effects.get("researchSources") instanceof List<?> sources)) return List.of();
+        var citations = new ArrayList<Map<String, Object>>();
+        for (var value : sources) {
+            if (!(value instanceof Map<?, ?> source)) continue;
+            var title = Objects.toString(source.get("title"), "公开资料");
+            var url = Objects.toString(source.get("url"), "");
+            var excerpt = Objects.toString(source.get("snippet"),
+                    Objects.toString(source.get("why_relevant"), "公开资料入口"));
+            citations.add(Map.of(
+                    "citationId", "external-" + (citations.size() + 1),
+                    "resourceId", resourceId,
+                    "version", version,
+                    "sourceName", title,
+                    "excerpt", excerpt,
+                    "location", url.isBlank() ? Map.of() : Map.of("url", url),
+                    "contentHash", HashSupport.sha256(title + "\n" + url + "\n" + excerpt),
+                    "score", 1.0));
+        }
+        return List.copyOf(citations);
+    }
+
+    @SuppressWarnings("unchecked")
+    private String createDeliverable(PlanStep step, Map<String, Object> effects) {
+        var projectId = argument(step, "project_id", Objects.toString(effects.get("sourceProjectId"), ""));
+        if (projectId.isBlank()) throw new IllegalStateException("当前项目不可用，无法生成交付件");
+        var format = normalizeDeliverableFormat(argument(step, "format", "PPTX"));
+        var title = argument(step, "title", "Agent 分析成果");
+        var goal = argument(step, "goal", "基于已核验资料总结战略规划、经营状况、风险与结论");
+        var sourceText = argument(step, "content", "");
+        if (sourceText.isBlank()) sourceText = researchMaterial(effects);
+        if (sourceText.isBlank()) throw new IllegalStateException("没有可用于生成交付件的研究证据");
+        var generation = worker.generateContent(format, goal + "。所有事实和判断必须标注来源，不得编造。", sourceText);
+        var generatedBody = Objects.toString(generation.get("content"), "").trim();
+        if (generatedBody.isBlank()) throw new IllegalStateException("成果生成服务没有返回可用内容");
+
+        var citations = new ArrayList<CitationRequest>();
+        if (effects.get("knowledgeCitations") instanceof List<?> values) {
+            for (var value : values) {
+                if (!(value instanceof Map<?, ?> citation)) continue;
+                citations.add(new CitationRequest(
+                        Objects.toString(citation.get("citationId"), ""),
+                        Objects.toString(citation.get("resourceId"), ""),
+                        citation.get("version") instanceof Number number ? number.intValue() : 0,
+                        Objects.toString(citation.get("sourceName"), "公开资料"),
+                        Objects.toString(citation.get("excerpt"), ""),
+                        citation.get("location") instanceof Map<?, ?> location
+                                ? (Map<String, Object>) location : Map.of(),
+                        Objects.toString(citation.get("contentHash"), "")));
+            }
+        }
+        var section = new SectionRequest("分析结果", List.of(generatedBody), List.of(),
+                citations.stream().map(CitationRequest::id).filter(id -> !id.isBlank()).toList(), citations);
+        var pptSkill = "PPTX".equals(format) ? "guizang-huawei-style-c"
+                : "HTML_SLIDES".equals(format) ? "frontend-slides" : null;
+        var created = deliverables.create(new CreateRequest(projectId, null, title, "由 Agent 基于可追溯资料生成",
+                format, pptSkill, true, "IEEE", List.of(section)));
+        var outputs = effects.get("deliverables") instanceof List<?> values
+                ? new ArrayList<>(values.stream().filter(Map.class::isInstance)
+                    .map(value -> (Map<String, Object>) value).toList())
+                : new ArrayList<Map<String, Object>>();
+        outputs.add(Map.of("id", created.id(), "name", created.name(), "format", created.format(),
+                "version", created.currentVersion(), "downloadUrl", "/api/deliverables/" + created.id() + "/download"));
+        effects.put("deliverables", outputs);
+        effects.put("uiAction", Map.of("type", "OPEN_DELIVERABLE", "projectId", projectId,
+                "resourceId", created.id(), "refreshWorkspace", true));
+        return "已生成“" + created.name() + "”（" + created.format().toUpperCase() + "）";
+    }
+
+    private String normalizeDeliverableFormat(String value) {
+        return switch (value.trim().toUpperCase()) {
+            case "PPT", "POWERPOINT" -> "PPTX";
+            case "HTML", "WEB", "WEBPAGE" -> "HTML_SLIDES";
+            default -> value.trim().toUpperCase();
+        };
+    }
+
+    @SuppressWarnings("unchecked")
+    private String researchMaterial(Map<String, Object> effects) {
+        var result = new StringBuilder();
+        var summary = Objects.toString(effects.get("researchSummary"), "").trim();
+        if (!summary.isBlank()) result.append("研究摘要：").append(summary).append("\n\n");
+        if (effects.get("researchSources") instanceof List<?> sources) {
+            var index = 1;
+            for (var value : sources) {
+                if (!(value instanceof Map<?, ?> source)) continue;
+                result.append("[来源 ").append(index++).append("] ")
+                        .append(Objects.toString(source.get("title"), "未命名来源")).append('\n');
+                for (var key : List.of("url", "source_type", "why_relevant", "snippet", "published_at")) {
+                    var item = Objects.toString(source.get(key), "").trim();
+                    if (!item.isBlank()) result.append(key).append(": ").append(item).append('\n');
+                }
+                result.append('\n');
+            }
+        }
+        if (effects.get("knowledgeCitations") instanceof List<?> citations) {
+            for (var value : citations) {
+                if (!(value instanceof Map<?, ?> citation)) continue;
+                result.append("[项目证据] ").append(Objects.toString(citation.get("sourceName"), "项目资料"))
+                        .append("：").append(Objects.toString(citation.get("excerpt"), "")).append('\n');
+            }
+        }
+        return result.toString().trim();
     }
 
     @SuppressWarnings("unchecked")
@@ -680,6 +853,9 @@ public class AssistantExecutionService {
     }
 
     private String finalSummary(List<PlanStep> steps, Map<String, Object> effects) {
+        if (effects.get("deliverables") instanceof List<?> outputs && !outputs.isEmpty()) {
+            return "已完成研究分析并生成 " + outputs.size() + " 个交付件。";
+        }
         var response = Objects.toString(effects.get("assistantResponse"), "");
         if (!response.isBlank()) return response;
         var projectName = Objects.toString(effects.get("createdProjectName"), "");
