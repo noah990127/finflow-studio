@@ -305,7 +305,7 @@ watch(() => props.project?.id, (id, previousId) => {
 <template>
   <div class="project-shell" :class="{ 'workflow-mode': activeTab?.kind === 'workflow' }">
     <aside class="resource-sidebar">
-      <div class="workbench-brand"><span>F</span><div><strong>FinFlow Studio</strong><small>个人专注工作台</small></div></div>
+      <div class="workbench-brand"><span>F</span><div><strong>FinBTP Studio</strong><small>个人专注工作台</small></div></div>
       <button class="project-switcher" type="button" @click="openProjectManager"><div><small>当前项目</small><strong>{{ project?.name ?? '正在打开' }}</strong></div><ChevronDown :size="15"/></button>
       <div class="resource-search-row"><label class="resource-search"><Search :size="15"/><input v-model="search" placeholder="查找项目内容"></label><button type="button" title="新建目录" @click="startFolder('FILES')"><FolderPlus :size="16"/></button></div>
       <button class="workflow-entry" type="button" :class="{ active: activeTab?.kind === 'workflow' }" @click="openWorkflow"><WorkflowIcon :size="17"/><span>主工作流</span><small>第 {{ workspace?.workflow.currentVersion ?? 1 }} 版</small></button>

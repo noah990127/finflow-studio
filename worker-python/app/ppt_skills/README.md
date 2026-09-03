@@ -4,7 +4,7 @@
 
 https://github.com/SeanDongX/guizang-ppt-skill
 
-The upstream project is licensed under GNU AGPL-3.0. This directory does not copy its HTML template, JavaScript, SVG logo, validator, or layout source. It implements the documented red/grey corporate visual principles independently for FinFlow's native `.pptx` output.
+The upstream project is licensed under GNU AGPL-3.0. This directory does not copy its HTML template, JavaScript, SVG logo, validator, or layout source. It implements the documented red/grey corporate visual principles independently for FinBTP Studio's native `.pptx` output.
 
 ## Frontend Slides web presentation skill
 
@@ -12,4 +12,4 @@ The `frontend-slides` option produces a self-contained HTML + JavaScript present
 
 https://github.com/zarazhangrui/frontend-slides
 
-The upstream project is licensed under MIT (Copyright (c) 2025 Zara Zhang). FinFlow's generator is implemented independently and keeps attribution in generated HTML comments and metadata.
+The upstream project is licensed under MIT (Copyright (c) 2025 Zara Zhang). FinBTP Studio's generator is implemented independently and keeps attribution in generated HTML comments and metadata.

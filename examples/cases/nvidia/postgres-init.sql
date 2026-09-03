@@ -22,4 +22,4 @@ INSERT INTO demo_examples.nvidia_quarterly_operating_metrics VALUES
 ('FY2026-Q3',57006,51200,73.4,36780,31000,13320,'公开披露口径整理，用于演示'),
 ('FY2026-Q4',68127,62100,75.0,44700,39000,14200,'FY2026 年度拆分演示值，需回到原始披露复核');
 
-COMMENT ON TABLE demo_examples.nvidia_quarterly_operating_metrics IS 'FinFlow 演示表，混合公开披露整理与明确标注的演示拆分。';
+COMMENT ON TABLE demo_examples.nvidia_quarterly_operating_metrics IS 'FinBTP Studio 演示表，混合公开披露整理与明确标注的演示拆分。';

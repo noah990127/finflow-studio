@@ -18,4 +18,4 @@ if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
   docker stop "$OFFICE_CONTAINER" >/dev/null 2>&1 || true
 fi
 
-echo "FinFlow Studio local services have been stopped."
+echo "FinBTP Studio local services have been stopped."

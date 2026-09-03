@@ -1,4 +1,4 @@
-# FinFlow Studio Docker 完整部署指南
+# FinBTP Studio Docker 完整部署指南
 
 > 适用范围：当前仓库 `dev` / `main` 分支
 >
@@ -189,7 +189,7 @@ python3 examples/cases/import_cases.py --api http://127.0.0.1:8080 --case global
 ## 7. 访问地址
 
 ```text
-FinFlow 工作台：http://服务器IP:5173
+FinBTP Studio 工作台：http://服务器IP:5173
 Java 健康状态：http://服务器IP:8080/actuator/health
 ONLYOFFICE：http://服务器IP:8082/healthcheck
 MinIO 控制台：http://服务器IP:9001

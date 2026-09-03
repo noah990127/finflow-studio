@@ -8,9 +8,9 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 @EnableAsync
 @EnableScheduling
 @SpringBootApplication
-public class FinFlowStudioApplication {
+public class FinBtpStudioApplication {
 
     public static void main(String[] args) {
-        SpringApplication.run(FinFlowStudioApplication.class, args);
+        SpringApplication.run(FinBtpStudioApplication.class, args);
     }
 }

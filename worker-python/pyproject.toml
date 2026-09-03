@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "finflow-worker"
+name = "finbtp-worker"
 version = "0.1.0"
-description = "FinFlow Studio document, knowledge and file analysis worker"
+description = "FinBTP Studio document, knowledge and file analysis worker"
 requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.116,<1.0",

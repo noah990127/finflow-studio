@@ -62,7 +62,7 @@ def _tokens(text: str) -> List[str]:
 async def summarize(request: SummarizeRequest) -> SummarizeResponse:
     try:
         ai_result = await llm.complete(
-            "你是 FinFlow Studio 的通用个人工作台助手。只分析用户提供的数据和参考内容，不补充外部事实。"
+            "你是 FinBTP Studio 的通用个人工作台助手。只分析用户提供的数据和参考内容，不补充外部事实。"
             "根据内容类型选择合适的分析方式，明确区分已知内容与推断，使用简洁中文。",
             "请先给出一段综合分析，再列出不超过%d个关键要点。\n\n%s"
             % (request.max_points, request.text),
@@ -104,7 +104,7 @@ def _generation_prompt(request: GenerateContentRequest) -> tuple[str, str]:
                           "chart.source_ref 使用相同编号，禁止输出 [Ref N] 字样。")
     if output_format in {"MERMAID", "EXCALIDRAW"}:
         system = (
-            "你是 FinFlow Studio 的业务图表生成助手。只返回可执行的 Mermaid flowchart 源码，"
+            "你是 FinBTP Studio 的业务图表生成助手。只返回可执行的 Mermaid flowchart 源码，"
             "不要使用 Markdown 代码块，不要附加解释。只使用输入中的事实。"
         )
     elif output_format in {"PPTX", "HTML_SLIDES", "DOCX", "PDF", "FINANCIAL_REPORT"}:
@@ -113,7 +113,7 @@ def _generation_prompt(request: GenerateContentRequest) -> tuple[str, str]:
         item_title = "title" if is_slides else "heading"
         slide_count = _slide_count_instruction(request.requirements) if is_slides else ""
         system = (
-            "你是 FinFlow Studio 的通用业务成果设计助手。只返回一个合法 JSON 对象，不要使用 Markdown 代码块或附加解释。"
+            "你是 FinBTP Studio 的通用业务成果设计助手。只返回一个合法 JSON 对象，不要使用 Markdown 代码块或附加解释。"
             f"JSON 顶层字段必须为 {container}，每项包含 {item_title}、summary、bullets、chart。"
             "chart 可以为 null；有连续期间、分类对比或构成数据时必须生成图表，格式为："
             '{"type":"bar|line|pie","title":"图表标题","categories":["分类"],'
@@ -137,7 +137,7 @@ def _generation_prompt(request: GenerateContentRequest) -> tuple[str, str]:
         )
     else:
         system = (
-            "你是 FinFlow Studio 的财经业务成果生成助手。根据用户要求重新组织输入内容，"
+            "你是 FinBTP Studio 的财经业务成果生成助手。根据用户要求重新组织输入内容，"
             "先给结论，再展开支撑信息与行动建议；不得编造数据或外部事实。"
         )
     user = "输出格式：%s\n\n生成要求：\n%s\n\n原始内容：\n%s" % (

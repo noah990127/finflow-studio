@@ -47,7 +47,7 @@ public class WebPreviewService {
         try {
             validatePublicAddress(url);
             var document = Jsoup.connect(url)
-                    .userAgent("Mozilla/5.0 (compatible; FinFlowStudio/1.0; +https://github.com/noah990127/finflow-studio)")
+                    .userAgent("Mozilla/5.0 (compatible; FinBTPStudio/1.0; +https://github.com/noah990127/finflow-studio)")
                     .timeout(12_000)
                     .maxBodySize(3 * 1024 * 1024)
                     .followRedirects(true)
@@ -116,7 +116,7 @@ public class WebPreviewService {
 
     private Connection.Response requestHeaders(String url, Connection.Method method) throws java.io.IOException {
         return Jsoup.connect(url)
-                .userAgent("Mozilla/5.0 (compatible; FinFlowStudio/1.0; +https://github.com/noah990127/finflow-studio)")
+                .userAgent("Mozilla/5.0 (compatible; FinBTPStudio/1.0; +https://github.com/noah990127/finflow-studio)")
                 .timeout(6_000)
                 .followRedirects(true)
                 .ignoreHttpErrors(true)

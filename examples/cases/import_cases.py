@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Import the curated FinFlow demo cases through the public HTTP API."""
+"""Import the curated FinBTP Studio demo cases through the public HTTP API."""
 
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ class Api:
             detail = error.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"{method} {path} failed: HTTP {error.code} {detail}") from error
         except URLError as error:
-            raise RuntimeError(f"Cannot reach FinFlow API at {self.base_url}: {error.reason}") from error
+            raise RuntimeError(f"Cannot reach FinBTP Studio API at {self.base_url}: {error.reason}") from error
 
     def upload(self, project_id: str, path: Path) -> dict[str, Any]:
         boundary = "----finflow-" + uuid.uuid4().hex
@@ -206,10 +206,10 @@ def import_case(api: Api, case_name: str) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Import curated FinFlow demo cases")
+    parser = argparse.ArgumentParser(description="Import curated FinBTP Studio demo cases")
     parser.add_argument("--api", default=os.getenv("FINFLOW_API_BASE_URL", "http://127.0.0.1:8080"))
     parser.add_argument("--case", choices=CASE_NAMES, action="append", dest="cases")
-    parser.add_argument("--check", action="store_true", help="validate resources without writing to FinFlow")
+    parser.add_argument("--check", action="store_true", help="validate resources without writing to FinBTP Studio")
     args = parser.parse_args()
     selected = tuple(args.cases or CASE_NAMES)
     try:

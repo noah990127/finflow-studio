@@ -7,7 +7,7 @@ spring:
       max-file-size: ${FINFLOW_MAX_FILE_SIZE:500MB}
       max-request-size: ${FINFLOW_MAX_REQUEST_SIZE:510MB}
   application:
-    name: finflow-backend
+    name: finbtp-backend
   datasource:
     url: ${DATABASE_URL:jdbc:h2:file:./data/finflow;MODE=PostgreSQL}
     username: ${DATABASE_USERNAME:sa}

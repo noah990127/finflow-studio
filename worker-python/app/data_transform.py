@@ -185,7 +185,7 @@ async def generate_transform(request: TransformGenerateRequest) -> TransformGene
             quality_rules=checks,
             warnings=["当前脚本是基础回退方案"],
         )
-    system = """你是 FinFlow 的数据加工脚本生成器。根据用户要求和输入表结构生成一条 DuckDB SQL 只读查询。
+    system = """你是 FinBTP Studio 的数据加工脚本生成器。根据用户要求和输入表结构生成一条 DuckDB SQL 只读查询。
 必须只引用给出的数据别名；禁止读取文件、URL、数据库或调用外部扩展；禁止 INSERT/UPDATE/DELETE/COPY/DDL。
 字段名和别名使用双引号。关联时明确关联键与关联类型，金额等计算避免隐式字符串转换。
 只返回 JSON 对象：script、summary、assumptions、quality_rules。script 不要放 Markdown 代码块。"""

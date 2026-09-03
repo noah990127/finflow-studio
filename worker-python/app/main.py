@@ -45,7 +45,7 @@ import json
 
 
 app = FastAPI(
-    title="FinFlow Studio Worker",
+    title="FinBTP Studio Worker",
     version="0.1.0",
     description="Document, knowledge Ref and file analysis worker",
 )

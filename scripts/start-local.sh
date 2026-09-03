@@ -132,7 +132,7 @@ start_service "Vue workbench" "http://127.0.0.1:5174/" \
   npm run dev -- --host 127.0.0.1 --port 5174
 
 echo
-echo "FinFlow Studio is ready: http://127.0.0.1:5174/"
+echo "FinBTP Studio is ready: http://127.0.0.1:5174/"
 echo "Demo data API:          http://127.0.0.1:8011/health"
 echo "Inventory demo API:     http://127.0.0.1:8010/health"
 echo "ONLYOFFICE health:      http://127.0.0.1:8082/healthcheck"

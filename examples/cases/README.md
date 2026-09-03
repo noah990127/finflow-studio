@@ -1,4 +1,4 @@
-# FinFlow curated demo cases
+# FinBTP Studio curated demo cases
 
 This directory contains two portable showcase cases:
 
@@ -25,7 +25,7 @@ for file in examples/cases/*/postgres-init.sql; do
 done
 ```
 
-Import all cases through the public FinFlow API:
+Import all cases through the public FinBTP Studio API:
 
 ```bash
 python3 examples/cases/import_cases.py --api http://127.0.0.1:8080
@@ -43,7 +43,7 @@ For direct local development, `scripts/start-local.sh` also starts the demo data
 
 ## Offline deployment
 
-The offline image bundle must contain `finflow-demo-api:1.0.0` in addition to the main FinFlow images. On the restricted server, load the images and start with `--no-build`:
+The offline image bundle must contain `finflow-demo-api:1.0.0` in addition to the main FinBTP Studio images. On the restricted server, load the images and start with `--no-build`:
 
 ```bash
 docker compose -f docker-compose.yml -f examples/cases/docker-compose.cases.yml up -d --no-build

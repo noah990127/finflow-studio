@@ -24,4 +24,4 @@ INSERT INTO demo_examples.global_tax_entity_exposure VALUES
 ('BR-01','拉美','巴西',390,52,false,0,210000,74,'拉美税务'),
 ('AE-01','中东','阿联酋',310,25,true,0,68000,68,'中东税务');
 
-COMMENT ON TABLE demo_examples.global_tax_entity_exposure IS '完全模拟的跨国企业税务暴露数据，仅用于 FinFlow 产品演示。';
+COMMENT ON TABLE demo_examples.global_tax_entity_exposure IS '完全模拟的跨国企业税务暴露数据，仅用于 FinBTP Studio 产品演示。';

@@ -114,7 +114,7 @@ def test_generates_financial_report_workspace() -> None:
     report = json.loads(create_financial_report(request()))
 
     assert report["schema_version"] == 2
-    assert report["renderer"] == "finflow-echarts-perspective"
+    assert report["renderer"] == "finbtp-echarts-perspective"
     assert report["title"] == "8 月经营复盘"
     assert report["sections"][0]["heading"] == "核心结论"
     assert report["references"][0]["source_name"] == "经营报告.pdf"

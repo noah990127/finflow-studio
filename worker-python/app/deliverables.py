@@ -49,7 +49,7 @@ def create_pptx(request: DeliverableRequest) -> bytes:
     presentation.slide_height = Inches(7.5)
     title_slide = presentation.slides.add_slide(presentation.slide_layouts[6])
     _add_text(title_slide, request.title, 0.85, 2.15, 11.5, 1.15, 42, DARK, True, min_size=30)
-    _add_text(title_slide, request.subtitle or "由 FinFlow Studio 工作流生成", 0.88, 3.45, 11.2, 0.55,
+    _add_text(title_slide, request.subtitle or "由 FinBTP Studio 工作流生成", 0.88, 3.45, 11.2, 0.55,
               20, MUTED, False, min_size=15, single_line=True)
     _add_brand(title_slide, 1)
     slide_number = 2
@@ -86,10 +86,10 @@ def create_html_slides(request: DeliverableRequest) -> bytes:
     request = _normalize_ppt_request(request)
     slides: List[str] = [f"""
       <section class="slide cover active" data-kind="cover">
-        <div class="cover-kicker">FINFLOW WEB PRESENTATION</div>
+        <div class="cover-kicker">FINBTP WEB PRESENTATION</div>
         <div class="cover-rule"></div>
         <h1>{escape(request.title)}</h1>
-        <p>{escape(request.subtitle or '由 FinFlow Studio 工作流生成')}</p>
+        <p>{escape(request.subtitle or '由 FinBTP Studio 工作流生成')}</p>
         <div class="cover-meta"><span>HTML + JavaScript</span><span>浏览器演示文件</span></div>
       </section>"""]
     charts: List[dict[str, object]] = []
@@ -108,7 +108,7 @@ def create_html_slides(request: DeliverableRequest) -> bytes:
             source_html = f'<div class="slide-source">参考：{escape(source[:180])}</div>' if source else ""
             slides.append(f"""
       <section class="slide" data-kind="content">
-        <header class="slide-header"><span>{section_index:02d}</span><h2>{escape(heading)}</h2><em>FINFLOW STUDIO</em></header>
+        <header class="slide-header"><span>{section_index:02d}</span><h2>{escape(heading)}</h2><em>FINBTP STUDIO</em></header>
         {body}
         {source_html}<div class="slide-number">{slide_number:02d}</div>
       </section>""")
@@ -119,7 +119,7 @@ def create_html_slides(request: DeliverableRequest) -> bytes:
         items = "".join(f"<li>{escape(entry)}</li>" for entry in group)
         slides.append(f"""
       <section class="slide references" data-kind="references">
-        <header class="slide-header"><span>REF</span><h2>{heading}</h2><em>FINFLOW STUDIO</em></header>
+        <header class="slide-header"><span>REF</span><h2>{heading}</h2><em>FINBTP STUDIO</em></header>
         <ol>{items}</ol><div class="slide-number">{slide_number:02d}</div>
       </section>""")
         slide_number += 1
@@ -179,7 +179,7 @@ def _first_metric(value: str) -> str:
 def _html_slides_document(title: str, slides: str, chart_data: str) -> str:
     return f"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="generator" content="FinFlow Studio · Frontend Slides inspired"><title>{escape(title)}</title>
+<meta name="generator" content="FinBTP Studio · Frontend Slides inspired"><title>{escape(title)}</title>
 <style>
 :root{{--paper:#f7f8fa;--ink:#18202c;--muted:#647286;--line:#dce2e9;--blue:#1769e0;--teal:#0b9f91;--coral:#f05a47;--yellow:#f2bd42}}
 *{{box-sizing:border-box}}html,body{{width:100%;height:100%;margin:0;overflow:hidden;background:#0f1722;color:var(--ink);font-family:Inter,"Microsoft YaHei","PingFang SC",Arial,sans-serif}}
@@ -271,22 +271,22 @@ def create_pdf(request: DeliverableRequest) -> bytes:
         topMargin=18 * mm,
         bottomMargin=18 * mm,
         title=request.title,
-        author="FinFlow Studio",
+        author="FinBTP Studio",
     )
     base = getSampleStyleSheet()
-    title_style = ParagraphStyle("FinFlowTitle", parent=base["Title"], fontName=font_name,
+    title_style = ParagraphStyle("FinBtpTitle", parent=base["Title"], fontName=font_name,
                                  fontSize=24, leading=32, textColor=colors.HexColor("#1f2937"),
                                  alignment=TA_LEFT, spaceAfter=8 * mm)
-    subtitle_style = ParagraphStyle("FinFlowSubtitle", parent=base["Normal"], fontName=font_name,
+    subtitle_style = ParagraphStyle("FinBtpSubtitle", parent=base["Normal"], fontName=font_name,
                                     fontSize=11, leading=18, textColor=colors.HexColor("#5b697d"),
                                     spaceAfter=9 * mm)
-    heading_style = ParagraphStyle("FinFlowHeading", parent=base["Heading1"], fontName=font_name,
+    heading_style = ParagraphStyle("FinBtpHeading", parent=base["Heading1"], fontName=font_name,
                                    fontSize=16, leading=24, textColor=colors.HexColor("#19487e"),
                                    spaceBefore=5 * mm, spaceAfter=4 * mm)
-    body_style = ParagraphStyle("FinFlowBody", parent=base["BodyText"], fontName=font_name,
+    body_style = ParagraphStyle("FinBtpBody", parent=base["BodyText"], fontName=font_name,
                                 fontSize=10.5, leading=18, textColor=colors.HexColor("#1f2937"),
                                 spaceAfter=3 * mm)
-    ref_style = ParagraphStyle("FinFlowRef", parent=body_style, fontSize=8.5, leading=13,
+    ref_style = ParagraphStyle("FinBtpRef", parent=body_style, fontSize=8.5, leading=13,
                                textColor=colors.HexColor("#5b697d"))
     story = [Paragraph(_pdf_escape(request.title), title_style)]
     if request.subtitle:
@@ -322,9 +322,9 @@ def create_financial_report(request: DeliverableRequest) -> bytes:
     request = _normalize_document_request(request)
     specification = {
         "schema_version": 2,
-        "renderer": "finflow-echarts-perspective",
+        "renderer": "finbtp-echarts-perspective",
         "title": request.title,
-        "subtitle": request.subtitle or "由 FinFlow Studio 工作流生成",
+        "subtitle": request.subtitle or "由 FinBTP Studio 工作流生成",
         "theme": request.theme,
         "sections": [section.model_dump(mode="json") for section in request.sections],
         "references": reference_records(request),
@@ -412,7 +412,7 @@ def create_excalidraw(request: DeliverableRequest) -> bytes:
                 "originalText": label[:40], "autoResize": True, "lineHeight": 1.25,
             }))
     payload = {
-        "type": "excalidraw", "version": 2, "source": "https://finflow.local",
+        "type": "excalidraw", "version": 2, "source": "https://finbtp.local",
         "elements": elements,
         "appState": {"gridSize": None, "viewBackgroundColor": "#ffffff"}, "files": {},
     }
@@ -508,7 +508,7 @@ def _add_reference_slides(presentation: Presentation, request: DeliverableReques
 
 
 def _add_brand(slide, page_number: int) -> None:
-    _add_text(slide, "FINFLOW STUDIO", 0.85, 0.55, 3.0, 0.25, 10, BLUE, True)
+    _add_text(slide, "FINBTP STUDIO", 0.85, 0.55, 3.0, 0.25, 10, BLUE, True)
     _add_text(slide, str(page_number), 12.0, 6.9, 0.45, 0.2, 9, MUTED, False)
     shape = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0.85), Inches(1.55), Inches(1.05), Inches(0.07))
     shape.fill.solid()
@@ -797,7 +797,7 @@ def _format_refs(section: DeliverableSection) -> str:
 
 
 def _pdf_font() -> str:
-    name = "FinFlowCJK"
+    name = "FinBtpCJK"
     if name in pdfmetrics.getRegisteredFontNames():
         return name
     candidates = [
@@ -818,7 +818,7 @@ def _pdf_page(canvas, document) -> None:
     canvas.line(20 * mm, 14 * mm, A4[0] - 20 * mm, 14 * mm)
     canvas.setFillColor(colors.HexColor("#5b697d"))
     canvas.setFont(_pdf_font(), 8)
-    canvas.drawString(20 * mm, 9 * mm, "FINFLOW STUDIO")
+    canvas.drawString(20 * mm, 9 * mm, "FINBTP STUDIO")
     canvas.drawRightString(A4[0] - 20 * mm, 9 * mm, str(document.page))
     canvas.restoreState()
 

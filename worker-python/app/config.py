@@ -5,7 +5,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    service_name: str = "finflow-worker"
+    service_name: str = "finbtp-worker"
     llm_provider: str = Field(default="codex", validation_alias=AliasChoices("FINFLOW_LLM_PROVIDER", "LLM_PROVIDER"))
     openai_api_key: str = ""
     openai_base_url: str = "https://api.openai.com/v1"

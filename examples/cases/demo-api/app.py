@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 
 
-app = FastAPI(title="FinFlow Showcase Data API", version="1.0.0")
+app = FastAPI(title="FinBTP Studio Showcase Data API", version="1.0.0")
 
 NVIDIA_FIVE_YEAR_FINANCIALS = [
     {

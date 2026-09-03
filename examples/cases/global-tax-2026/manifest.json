@@ -10,7 +10,7 @@
     {"key":"playbook","path":"assets/全球税务项目实施手册_模拟.docx"}
   ],
   "connections":[
-    {"key":"tax-db","name":"全球税务实体暴露 PostgreSQL","sourceType":"POSTGRESQL","jdbcUrlEnv":"FINFLOW_DEMO_DATABASE_URL","jdbcUrlDefault":"jdbc:postgresql://postgres:5432/finflow","usernameEnv":"FINFLOW_DEMO_DATABASE_USERNAME","usernameDefault":"finflow","secretRefEnv":"FINFLOW_DEMO_DATABASE_SECRET_REF","secretRefDefault":"env:FINFLOW_DEMO_DATABASE_PASSWORD","options":{"ApplicationName":"FinFlowGlobalTaxDemo"}},
+    {"key":"tax-db","name":"全球税务实体暴露 PostgreSQL","sourceType":"POSTGRESQL","jdbcUrlEnv":"FINFLOW_DEMO_DATABASE_URL","jdbcUrlDefault":"jdbc:postgresql://postgres:5432/finflow","usernameEnv":"FINFLOW_DEMO_DATABASE_USERNAME","usernameDefault":"finflow","secretRefEnv":"FINFLOW_DEMO_DATABASE_SECRET_REF","secretRefDefault":"env:FINFLOW_DEMO_DATABASE_PASSWORD","options":{"ApplicationName":"FinBTPGlobalTaxDemo"}},
     {"key":"tax-api","name":"2026 全球税务政策数据服务","sourceType":"HTTP_API","jdbcUrlEnv":"FINFLOW_GLOBAL_TAX_API_URL","jdbcUrlDefault":"http://demo-api:8011/api/v1/tax/2026-policy-trends","options":{"format":"jsonl"}}
   ],
   "workflow":"workflow.json",
@@ -32,7 +32,7 @@
     },
     {
       "title":"2026 全球税务政策管理层汇报","subtitle":"政策变化、现金风险与 90 天行动","format":"pptx","pptSkill":"guizang-huawei-style-c","includeCitations":true,"citationStyle":"GB_T_7714",
-      "sections":[{"heading":"2026 年税务议程从规则理解转向运营落地","paragraphs":["政策管理需要与法人、财务、交易和供应链数据治理同步推进。"],"bullets":["Pillar Two 聚焦申报与交换准备","CBAM 进入正式阶段","ViDA 推动数字报告准备"],"refIds":[],"citations":[{"id":"tax-ppt-1","resourceId":"","version":1,"sourceName":"OECD 与 European Commission 官方资料","text":"全球最低税、CBAM 和 ViDA 的官方实施资料。","location":{"type":"url","url":"https://www.oecd.org/en/topics/sub-issues/global-minimum-tax.html"},"contentHash":"tax-ppt-policy"}]},{"heading":"资源应优先投向高暴露且数据不完整的实体","paragraphs":["模拟暴露模型将收入、税率、CBAM、交易量与数据完整度放在同一优先级框架。"],"bullets":["先修复关键主数据和账税勾稽","建立政策到流程和责任人的映射","按 30/60/90 天跟踪准备度"],"refIds":[],"citations":[{"id":"tax-ppt-2","resourceId":"","version":1,"sourceName":"FinFlow 模拟实体暴露数据","text":"实体暴露和现金影响为产品演示数据，不代表任何真实企业。","location":{"type":"dataset","table":"demo_examples.global_tax_entity_exposure"},"contentHash":"tax-ppt-demo"}]}]
+      "sections":[{"heading":"2026 年税务议程从规则理解转向运营落地","paragraphs":["政策管理需要与法人、财务、交易和供应链数据治理同步推进。"],"bullets":["Pillar Two 聚焦申报与交换准备","CBAM 进入正式阶段","ViDA 推动数字报告准备"],"refIds":[],"citations":[{"id":"tax-ppt-1","resourceId":"","version":1,"sourceName":"OECD 与 European Commission 官方资料","text":"全球最低税、CBAM 和 ViDA 的官方实施资料。","location":{"type":"url","url":"https://www.oecd.org/en/topics/sub-issues/global-minimum-tax.html"},"contentHash":"tax-ppt-policy"}]},{"heading":"资源应优先投向高暴露且数据不完整的实体","paragraphs":["模拟暴露模型将收入、税率、CBAM、交易量与数据完整度放在同一优先级框架。"],"bullets":["先修复关键主数据和账税勾稽","建立政策到流程和责任人的映射","按 30/60/90 天跟踪准备度"],"refIds":[],"citations":[{"id":"tax-ppt-2","resourceId":"","version":1,"sourceName":"FinBTP Studio 模拟实体暴露数据","text":"实体暴露和现金影响为产品演示数据，不代表任何真实企业。","location":{"type":"dataset","table":"demo_examples.global_tax_entity_exposure"},"contentHash":"tax-ppt-demo"}]}]
     }
   ]
 }

@@ -1,4 +1,4 @@
-# FinFlow Studio
+# FinBTP Studio
 
 面向个人专注工作的财经数据工作流平台。代码目录即当前目录：
 
@@ -31,7 +31,7 @@ docker compose up --build -d
 
 生产环境通过 `DATABASE_PASSWORD`、`DEEPSEEK_API_KEY` 和各数据源密码环境变量注入密钥。数据库连接配置中的密码字段只能填写 `env:变量名`，不会保存明文。
 
-FinFlow Studio 是一个面向个人深度工作的智能工作流平台。当前仓库包含三个可独立运行的应用：
+FinBTP Studio 是一个面向个人深度工作的智能工作流平台。当前仓库包含三个可独立运行的应用：
 
 - `frontend`：Vue 3 + TypeScript 的蓝白业务界面；
 - `backend-java`：JDK 21、Spring Boot 4、Spring AI 的主后端与 AI 安全执行控制面；

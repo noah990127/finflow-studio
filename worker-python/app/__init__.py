@@ -1,2 +1,2 @@
-"""FinFlow Studio Python worker."""
+"""FinBTP Studio Python worker."""
 

@@ -91,10 +91,10 @@ def _cover(deck: Presentation, request: DeliverableRequest) -> None:
     _rect(slide, 0.92, 1.18, 0.18, 0.18, RED)
     _text(slide, "MANAGEMENT REPORT", 1.28, 1.12, 4.5, 0.3, 10, RED, bold=True)
     _text(slide, request.title, 0.95, 2.03, 10.75, 1.48, 42, INK, bold=True, min_size=32)
-    _text(slide, request.subtitle or "由 FinFlow Studio 工作流生成", 0.98, 3.7, 10.2, 0.5, 17, MUTED,
+    _text(slide, request.subtitle or "由 FinBTP Studio 工作流生成", 0.98, 3.7, 10.2, 0.5, 17, MUTED,
           min_size=14, single_line=True)
     _rect(slide, 0.98, 4.46, 1.36, 0.07, RED)
-    _text(slide, "FINFLOW STUDIO", 10.75, 0.58, 1.65, 0.25, 10, INK, bold=True, align=PP_ALIGN.RIGHT)
+    _text(slide, "FINBTP STUDIO", 10.75, 0.58, 1.65, 0.25, 10, INK, bold=True, align=PP_ALIGN.RIGHT)
     _text(slide, "企业汇报 · Classic Red", 0.98, 6.72, 4.2, 0.25, 10, MUTED)
     _text(slide, "01", 11.65, 5.64, 0.65, 0.5, 18, WHITE, bold=True, align=PP_ALIGN.CENTER,
           fill=RED, vertical=MSO_ANCHOR.MIDDLE)
@@ -104,7 +104,7 @@ def _chrome(slide, page_number: int, section_number: int) -> None:
     _rect(slide, 0.95, 0.78, 0.18, 0.18, RED)
     _text(slide, f"{section_number:02d}", 1.22, 0.7, 0.45, 0.3, 10, RED, bold=True,
           min_size=10, single_line=True)
-    _text(slide, "FINFLOW STUDIO", 10.72, 0.26, 1.65, 0.22, 9, INK, bold=True,
+    _text(slide, "FINBTP STUDIO", 10.72, 0.26, 1.65, 0.22, 9, INK, bold=True,
           align=PP_ALIGN.RIGHT, min_size=9, single_line=True)
     _rect(slide, 0.95, 1.38, 11.42, 0.018, LINE)
     _text(slide, str(page_number), 11.98, 6.96, 0.35, 0.18, 8, MUTED,
