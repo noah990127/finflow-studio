@@ -1,6 +1,6 @@
 # FinBTP Studio curated demo cases
 
-This directory contains two portable showcase cases:
+This directory contains two portable showcase cases with ready-to-view snapshots:
 
 - `nvidia`: NVIDIA FY2022-FY2026 operating and financial-quality analysis;
 - `global-tax-2026`: 2026 global tax-policy trends, simulated entity exposure and action planning.
@@ -10,6 +10,8 @@ No API key, database password, private document or local absolute path is includ
 ## Included capabilities
 
 The showcase projects combine PostgreSQL, streaming data-service APIs, CSV, Markdown, PDF, Word and official web references. Their workflows include transparent DuckDB SQL, Ref retrieval, AI analysis, citation-enabled interactive reports, PowerPoint, HTML slides, editable Word output, Mermaid or Excalidraw diagrams. They intentionally omit the manual-review node.
+
+Each case also includes selected processed datasets and final deliverables under `assets/` and `outputs/`. The importer restores those artifacts without calling an LLM, rewrites source IDs for the destination project, and preserves citation metadata. Users can inspect the complete case immediately and still run the workflow to create later versions.
 
 ## Start with Docker Compose
 
@@ -37,7 +39,7 @@ Import one or more cases by repeating `--case`:
 python3 examples/cases/import_cases.py --case nvidia --case global-tax-2026
 ```
 
-The importer is idempotent for projects, source files, connections and starter deliverables. Re-running it updates each project's workflow to the bundled definition.
+The importer is idempotent for projects, source files, connections and bundled artifacts. Re-running it updates each project's workflow and imports a new artifact version only when the bundled file checksum changed.
 
 For direct local development, `scripts/start-local.sh` also starts the demo data API on port `8011`. Load `.env` before importing so the four API connections use `127.0.0.1`; Docker Compose keeps the default `demo-api:8011` service address.
 

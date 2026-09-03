@@ -1,0 +1,9 @@
+entity_code,region,jurisdiction,revenue_usd_m,covered_tax_usd_m,observed_tax_rate_pct,pillar_two_scope,cbam_import_usd_m,vida_transaction_count,data_completeness_pct,pillar_two_readiness_pct,e_invoice_readiness_pct,cbam_exposure,remediation_priority_score,owner
+EU-PL-01,欧洲,波兰,430.0,24.0,5.58,true,55.0,290000,79.0,82,71,high,37.65,欧洲税务
+BR-01,拉美,巴西,390.0,52.0,13.33,false,0.0,210000,74.0,41,38,low,36.25,拉美税务
+AE-01,中东,阿联酋,310.0,25.0,8.06,true,0.0,68000,68.0,47,44,medium,35.65,中东税务
+EU-NL-01,欧洲,荷兰,720.0,61.0,8.47,true,18.0,510000,88.0,82,71,high,34.5,欧洲税务
+EU-DE-01,欧洲,德国,980.0,118.0,12.04,true,42.0,680000,94.0,82,71,high,32.4,欧洲税务
+SG-01,亚太,新加坡,860.0,72.0,8.37,true,0.0,150000,83.0,58,62,medium,24.05,亚太税务
+CN-01,亚太,中国,1140.0,142.0,12.46,true,0.0,320000,91.0,58,62,medium,21.25,亚太税务
+US-CA-01,北美,美国,1680.0,250.0,14.88,true,0.0,0,96.0,64,55,low,19.4,美洲税务

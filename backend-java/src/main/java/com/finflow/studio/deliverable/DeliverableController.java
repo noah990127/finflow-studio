@@ -7,6 +7,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -27,6 +28,17 @@ public class DeliverableController {
     @PostMapping("/deliverables")
     @ResponseStatus(HttpStatus.CREATED)
     public Response create(@Valid @RequestBody CreateRequest request) { return deliverables.create(request); }
+
+    @PostMapping(value = "/projects/{projectId}/deliverables/import", consumes = "multipart/form-data")
+    @ResponseStatus(HttpStatus.CREATED)
+    public Response importArtifact(@PathVariable String projectId,
+                                   @RequestParam(required = false) String resourceId,
+                                   @RequestParam String title,
+                                   @RequestParam String format,
+                                   @RequestParam(defaultValue = "{}") String sourceSpec,
+                                   @RequestPart MultipartFile file) {
+        return deliverables.importArtifact(projectId, resourceId, title, format, sourceSpec, file);
+    }
 
     @GetMapping("/projects/{projectId}/deliverables")
     public List<Response> list(@PathVariable String projectId) { return deliverables.list(projectId); }

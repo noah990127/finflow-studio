@@ -1,0 +1,41 @@
+flowchart LR
+    A["分析判断｜AI 数据中心需求扩张"] --> B["分析判断｜业务平台转向计算、网络与数据中心"]
+    B --> C["公开事实｜数据中心收入占比<br/>FY2023 55.63% → FY2026 89.61%"]
+    C --> D["公开事实｜收入<br/>FY2023 26,974 → FY2026 215,938<br/>百万美元"]
+    D --> E["分析判断｜高价值产品放量与规模效应"]
+    E --> F["公开事实｜营业利润<br/>FY2023 4,224 → FY2026 130,387<br/>百万美元"]
+    E --> G["公开事实｜净利润<br/>FY2023 4,368 → FY2026 120,067<br/>百万美元"]
+    F --> H["公开事实｜经营现金流<br/>FY2023 5,641 → FY2026 102,718<br/>百万美元"]
+    G --> I["可复算指标｜现金转化率<br/>FY2024 94.39% → FY2026 85.55%"]
+    H --> I
+
+    B --> J["公开事实｜FY2026 毛利率 71.1%<br/>较 FY2025 下降 3.9 个百分点"]
+    J --> K["分析判断｜产品过渡、供给成本或组合变化<br/>可能扰动单位盈利能力"]
+
+    D --> L["公开事实｜FY2026 库存 21,403<br/>同比增长 112.33%"]
+    L --> M["可复算指标｜库存增速 112.33%<br/>高于收入增速 65.47%"]
+    M --> N["分析判断｜现金占用、减值与旧代产品风险"]
+
+    B --> O["公开披露线索｜客户集中风险"]
+    B --> P["公开披露线索｜出口管制风险"]
+    B --> Q["公开披露线索｜供应链与采购承诺风险"]
+
+    O --> R["管理重点｜需求能否顺利交付并转化为现金"]
+    P --> K
+    Q --> K
+    Q --> N
+    I --> R
+    K --> R
+    N --> R
+
+    classDef fact fill:#E8F3FF,stroke:#2563EB,color:#0F172A,stroke-width:1.5px;
+    classDef calc fill:#ECFDF5,stroke:#059669,color:#0F172A,stroke-width:1.5px;
+    classDef judgment fill:#FFF7ED,stroke:#EA580C,color:#0F172A,stroke-width:1.5px;
+    classDef risk fill:#FEF2F2,stroke:#DC2626,color:#0F172A,stroke-width:1.5px;
+    classDef focus fill:#F5F3FF,stroke:#7C3AED,color:#0F172A,stroke-width:2px;
+
+    class C,D,F,G,H,J,L fact;
+    class I,M calc;
+    class A,B,E,K,N judgment;
+    class O,P,Q risk;
+    class R focus;

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import mimetypes
 import os
@@ -39,18 +40,26 @@ class Api:
         except URLError as error:
             raise RuntimeError(f"Cannot reach FinBTP Studio API at {self.base_url}: {error.reason}") from error
 
-    def upload(self, project_id: str, path: Path) -> dict[str, Any]:
+    def multipart(self, endpoint: str, fields: dict[str, str], file_name: str,
+                  media_type: str, content: bytes) -> dict[str, Any]:
         boundary = "----finflow-" + uuid.uuid4().hex
-        media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-        head = (
+        parts: list[bytes] = []
+        for name, value in fields.items():
+            parts.append((
+                f"--{boundary}\r\n"
+                f'Content-Disposition: form-data; name="{name}"\r\n'
+                "Content-Type: text/plain; charset=utf-8\r\n\r\n"
+                f"{value}\r\n"
+            ).encode("utf-8"))
+        parts.append((
             f"--{boundary}\r\n"
-            f'Content-Disposition: form-data; name="file"; filename="{path.name}"\r\n'
+            f'Content-Disposition: form-data; name="file"; filename="{file_name}"\r\n'
             f"Content-Type: {media_type}\r\n\r\n"
-        ).encode("utf-8")
-        data = head + path.read_bytes() + f"\r\n--{boundary}--\r\n".encode("ascii")
+        ).encode("utf-8"))
+        parts.extend((content, f"\r\n--{boundary}--\r\n".encode("ascii")))
         request = Request(
-            f"{self.base_url}/api/projects/{project_id}/files",
-            data=data,
+            self.base_url + endpoint,
+            data=b"".join(parts),
             headers={"Content-Type": f"multipart/form-data; boundary={boundary}", "Accept": "application/json"},
             method="POST",
         )
@@ -59,7 +68,26 @@ class Api:
                 return json.loads(response.read())
         except HTTPError as error:
             detail = error.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"Upload {path.name} failed: HTTP {error.code} {detail}") from error
+            raise RuntimeError(f"Upload {file_name} failed: HTTP {error.code} {detail}") from error
+        except URLError as error:
+            raise RuntimeError(f"Cannot reach FinBTP Studio API at {self.base_url}: {error.reason}") from error
+
+    def upload(self, project_id: str, path: Path) -> dict[str, Any]:
+        media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        return self.multipart(f"/api/projects/{project_id}/files", {}, path.name, media_type, path.read_bytes())
+
+    def upload_deliverable(self, project_id: str, title: str, format_name: str, file_name: str,
+                           content: bytes, source_spec: dict[str, Any], resource_id: str | None) -> dict[str, Any]:
+        media_type = mimetypes.guess_type(file_name)[0] or "application/octet-stream"
+        fields = {
+            "title": title,
+            "format": format_name,
+            "sourceSpec": json.dumps(source_spec, ensure_ascii=False, separators=(",", ":")),
+        }
+        if resource_id:
+            fields["resourceId"] = resource_id
+        return self.multipart(f"/api/projects/{project_id}/deliverables/import", fields,
+                              file_name, media_type, content)
 
 
 def load_manifest(case_name: str) -> tuple[Path, dict[str, Any]]:
@@ -77,7 +105,12 @@ def resolve_value(item: dict[str, Any], name: str) -> str:
 
 def replace_refs(value: Any, replacements: dict[str, str]) -> Any:
     if isinstance(value, str):
-        return replacements.get(value, value)
+        if value in replacements:
+            return replacements[value]
+        for old_id, new_id in replacements.items():
+            if value.startswith(old_id + ":v"):
+                return new_id + value[len(old_id):]
+        return value
     if isinstance(value, list):
         return [replace_refs(item, replacements) for item in value]
     if isinstance(value, dict):
@@ -93,6 +126,8 @@ def validate_case(case_name: str) -> None:
         raise RuntimeError(f"{case_name}: manifest missing {', '.join(missing)}")
     paths = [case_dir / manifest["workflow"]]
     paths.extend(case_dir / item["path"] for item in manifest["files"])
+    paths.extend(case_dir / item["path"] for item in manifest.get("artifacts", []))
+    paths.extend(case_dir / item["sourceSpec"] for item in manifest.get("artifacts", []) if item.get("sourceSpec"))
     if manifest.get("postgresInit"):
         paths.append(case_dir / manifest["postgresInit"])
     absent = [str(path.relative_to(ROOT)) for path in paths if not path.is_file()]
@@ -109,6 +144,14 @@ def validate_case(case_name: str) -> None:
         valid_keys = file_keys if kind == "file" else connection_keys
         if key not in valid_keys or old_id not in workflow_text:
             raise RuntimeError(f"{case_name}: unresolved legacy reference {old_id} -> {reference}")
+    for old_id, reference in manifest.get("snapshotRefs", {}).items():
+        kind, separator, key = reference.partition(":")
+        if not separator or kind != "file" or key not in file_keys or not old_id:
+            raise RuntimeError(f"{case_name}: invalid snapshot reference {old_id} -> {reference}")
+    valid_formats = {"pptx", "html_slides", "docx", "pdf", "mermaid", "excalidraw", "financial_report"}
+    for artifact in manifest.get("artifacts", []):
+        if not artifact.get("title") or artifact.get("format") not in valid_formats:
+            raise RuntimeError(f"{case_name}: invalid artifact entry {artifact}")
 
 
 def ensure_project(api: Api, manifest: dict[str, Any]) -> dict[str, Any]:
@@ -195,6 +238,37 @@ def ensure_deliverables(api: Api, project_id: str, manifest: dict[str, Any]) -> 
         print(f"  deliverable created: {item['title']}")
 
 
+def ensure_artifacts(api: Api, project_id: str, case_dir: Path, manifest: dict[str, Any],
+                     files: dict[str, str]) -> None:
+    existing = {item["name"]: item for item in api.json("GET", f"/api/projects/{project_id}/deliverables")}
+    replacements = {
+        old_id: files[reference.split(":", 1)[1]]
+        for old_id, reference in manifest.get("snapshotRefs", {}).items()
+    }
+    for item in manifest.get("artifacts", []):
+        path = case_dir / item["path"]
+        content = path.read_bytes()
+        if item["format"] in {"financial_report", "html_slides", "mermaid", "excalidraw"}:
+            for old_id, new_id in replacements.items():
+                content = content.replace(old_id.encode("utf-8"), new_id.encode("utf-8"))
+        source_spec: dict[str, Any] = {}
+        if item.get("sourceSpec"):
+            source_spec = replace_refs(
+                json.loads((case_dir / item["sourceSpec"]).read_text(encoding="utf-8")), replacements
+            )
+        checksum = "sha256:" + hashlib.sha256(content).hexdigest()
+        current = existing.get(item["title"])
+        if current and current.get("checksum") == checksum:
+            print(f"  artifact exists: {item['title']}")
+            continue
+        imported = api.upload_deliverable(project_id, item["title"], item["format"],
+                                          path.name, content, source_spec,
+                                          current["id"] if current else None)
+        existing[item["title"]] = imported
+        action = "updated" if current else "imported"
+        print(f"  artifact {action}: {item['title']}")
+
+
 def import_case(api: Api, case_name: str) -> None:
     case_dir, manifest = load_manifest(case_name)
     print(f"Importing {manifest['name']}")
@@ -203,6 +277,7 @@ def import_case(api: Api, case_name: str) -> None:
     connections = ensure_connections(api, project["id"], manifest)
     install_workflow(api, project["id"], case_dir, manifest, files, connections)
     ensure_deliverables(api, project["id"], manifest)
+    ensure_artifacts(api, project["id"], case_dir, manifest, files)
 
 
 def main() -> int:

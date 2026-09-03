@@ -1,0 +1,7 @@
+fiscal_year,revenue_usd_m,gross_profit_usd_m,operating_income_usd_m,net_income_usd_m,operating_cash_flow_usd_m,rd_expense_usd_m,inventory_usd_m,data_center_revenue_usd_m,gross_margin_pct,net_margin_pct,cash_conversion_pct,rd_ratio_pct,data_center_mix_pct,revenue_yoy_pct,inventory_yoy_pct
+FY2022,26914,17475,10041,9752,9108,5268,2605,10613,64.9,36.23,93.4,19.57,39.43,,
+FY2023,26974,15356,4224,4368,5641,7339,5159,15005,56.9,16.19,129.14,27.21,55.63,0.22,98.04
+FY2024,60922,44301,32972,29760,28090,8675,5282,47525,72.7,48.85,94.39,14.24,78.01,125.85,2.38
+FY2025,130497,97858,81453,72880,64089,12914,10080,115186,75.0,55.85,87.94,9.9,88.27,114.2,90.84
+FY2026,215938,153463,130387,120067,102718,18497,21403,193500,71.1,55.6,85.55,8.57,89.61,65.47,112.33
+,,,,,,,,,,,,,,,

@@ -12,6 +12,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.web.multipart.MultipartFile;
 import tools.jackson.core.JacksonException;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
@@ -81,6 +82,60 @@ public class DeliverableService {
                 .param("path", stored.location()).param("size", stored.size()).param("checksum", stored.checksum())
                 .param("spec", writeJson(payload)).param("now", now).update();
         return get(resourceId);
+    }
+
+    @Transactional
+    public Response importArtifact(String projectId, String resourceId, String title, String requestedFormat,
+                                   String sourceSpecJson, MultipartFile file) {
+        projects.get(projectId);
+        if (title == null || title.isBlank()) throw new IllegalArgumentException("输出件名称不能为空");
+        if (title.trim().length() > 300) throw new IllegalArgumentException("输出件名称不能超过 300 个字符");
+        if (file == null || file.isEmpty()) throw new IllegalArgumentException("输出件文件不能为空");
+        if (file.getSize() > maxFileBytes) throw new IllegalArgumentException("输出件文件超过允许的大小");
+        var format = normalizeFormat(requestedFormat);
+        validateArtifactExtension(file.getOriginalFilename(), format);
+        var sourceSpec = sourceSpecJson == null || sourceSpecJson.isBlank()
+                ? Map.<String, Object>of() : readRequiredMap(sourceSpecJson);
+        var resolvedResourceId = resourceId == null || resourceId.isBlank()
+                ? UUID.randomUUID().toString() : resourceId;
+        var now = Instant.now();
+        var version = 1;
+        if (resourceId == null || resourceId.isBlank()) {
+            jdbc.sql("""
+                    insert into deliverable_resource(id, project_id, name, format, current_version, status, created_at, updated_at)
+                    values (:id, :projectId, :name, :format, 1, 'READY', :now, :now)
+                    """).param("id", resolvedResourceId).param("projectId", projectId).param("name", title.trim())
+                    .param("format", format).param("now", now).update();
+        } else {
+            var current = get(resolvedResourceId);
+            if (!projectId.equals(current.projectId()) || !format.equals(current.format())) {
+                throw new IllegalArgumentException("输出文件不属于当前项目或格式不一致");
+            }
+            version = current.currentVersion() + 1;
+            jdbc.sql("""
+                    update deliverable_resource set name = :name, current_version = :version, status = 'READY', updated_at = :now
+                    where id = :id
+                    """).param("name", title.trim()).param("version", version).param("now", now)
+                    .param("id", resolvedResourceId).update();
+        }
+        BlobStore.StoredObject stored;
+        try {
+            var safeTitle = title.trim().replaceAll("[^a-zA-Z0-9._\\-\\u4e00-\\u9fff]", "_");
+            if (safeTitle.length() > 180) safeTitle = safeTitle.substring(0, 180);
+            var key = projectId + "/deliverables/" + resolvedResourceId + "/v" + version + "/" +
+                    safeTitle + "." + extensionFor(format);
+            stored = blobStore.put(key, file.getInputStream(), maxFileBytes);
+        } catch (IOException exception) {
+            throw new IllegalStateException("输出件文件保存失败", exception);
+        }
+        jdbc.sql("""
+                insert into deliverable_version(id, resource_id, version_number, storage_path, size_bytes,
+                    checksum, source_spec_json, created_at)
+                values (:id, :resourceId, :version, :path, :size, :checksum, :spec, :now)
+                """).param("id", UUID.randomUUID().toString()).param("resourceId", resolvedResourceId)
+                .param("version", version).param("path", stored.location()).param("size", stored.size())
+                .param("checksum", stored.checksum()).param("spec", writeJson(sourceSpec)).param("now", now).update();
+        return get(resolvedResourceId);
     }
 
     public List<Response> list(String projectId) {
@@ -287,6 +342,21 @@ public class DeliverableService {
         return blobStore.putBytes(key, bytes, maxFileBytes);
     }
 
+    private void validateArtifactExtension(String originalName, String format) {
+        var name = Objects.toString(originalName, "").toLowerCase(Locale.ROOT);
+        var expected = "." + extensionFor(format);
+        if (!name.endsWith(expected)) throw new IllegalArgumentException("输出件文件扩展名应为 " + expected);
+    }
+
+    private String extensionFor(String format) {
+        return switch (format) {
+            case "mermaid" -> "mmd";
+            case "financial_report" -> "json";
+            case "html_slides" -> "html";
+            default -> format;
+        };
+    }
+
     private String normalizeFormat(String value) {
         var format = value.toLowerCase(Locale.ROOT).trim();
         if (!List.of("pptx", "html_slides", "docx", "pdf", "mermaid", "excalidraw", "financial_report").contains(format)) throw new IllegalArgumentException("输出格式只支持 PPTX、网页演示、DOCX、PDF、Mermaid、Excalidraw 和财务报告");
@@ -314,6 +384,15 @@ public class DeliverableService {
     private Map<String, Object> readMap(String value) {
         try { return objectMapper.readValue(value, new TypeReference<>() {}); }
         catch (JacksonException exception) { return Map.of(); }
+    }
+
+    private Map<String, Object> readRequiredMap(String value) {
+        try {
+            Map<String, Object> result = objectMapper.readValue(value, new TypeReference<>() {});
+            if (result == null) throw new IllegalArgumentException("输出规格必须是 JSON 对象");
+            return result;
+        }
+        catch (JacksonException exception) { throw new IllegalArgumentException("输出规格不是有效 JSON", exception); }
     }
 
     private List<?> list(Object value) { return value instanceof List<?> items ? items : List.of(); }

@@ -6,7 +6,9 @@
     {"key":"business-mix","path":"assets/nvidia_business_mix.csv"},
     {"key":"risk-monitor","path":"assets/management_risk_monitor.csv"},
     {"key":"annual-summary","path":"assets/NVIDIA_FY2022_FY2026年报摘要.pdf"},
-    {"key":"risk-memo","path":"assets/NVIDIA经营风险观察备忘录.docx"}
+    {"key":"risk-memo","path":"assets/NVIDIA经营风险观察备忘录.docx"},
+    {"key":"annual-metrics","path":"assets/NVIDIA五年经营质量指标.csv"},
+    {"key":"quarterly-momentum","path":"assets/NVIDIA季度动能与风险信号.csv"}
   ],
   "connections": [
     {"key":"nvidia-quarterly-db","name":"NVIDIA 季度经营指标 PostgreSQL","sourceType":"POSTGRESQL","jdbcUrlEnv":"FINFLOW_DEMO_DATABASE_URL","jdbcUrlDefault":"jdbc:postgresql://postgres:5432/finflow","usernameEnv":"FINFLOW_DEMO_DATABASE_USERNAME","usernameDefault":"finflow","secretRefEnv":"FINFLOW_DEMO_DATABASE_SECRET_REF","secretRefDefault":"env:FINFLOW_DEMO_DATABASE_PASSWORD","options":{"ApplicationName":"FinBTPNvidiaFinancialDemo"}},
@@ -23,14 +25,20 @@
     "20000000-0000-4000-8000-000000000014":"file:annual-summary",
     "20000000-0000-4000-8000-000000000015":"file:risk-memo"
   },
-  "deliverables": [
-    {
-      "title":"NVIDIA FY2022-FY2026 经营质量交互报告","subtitle":"增长、盈利、现金流与风险","format":"financial_report","includeCitations":true,"citationStyle":"IEEE",
-      "sections":[{"heading":"五年经营判断","paragraphs":["FY2024-FY2026 的收入、营业利润和经营现金流同步扩张，AI 基础设施需求显著改变业务规模与结构；同时，产品过渡、客户集中、供应链和监管变量进入重点观察范围。"],"bullets":["五年数据统一采用 NVIDIA 财年和百万美元口径","公开披露、计算指标和管理判断分别标注","季度演示拆分不得替代 10-K 原始披露"],"refIds":[],"citations":[{"id":"nvda-cite-1","resourceId":"","version":1,"sourceName":"NVIDIA Annual Reports","text":"历年年报与代理文件是五年经营数据的首要来源。","location":{"type":"url","url":"https://investor.nvidia.com/financial-info/annual-reports-and-proxies/default.aspx","section":"Annual reports"},"contentHash":"nvda-annual-reports"},{"id":"nvda-cite-2","resourceId":"","version":1,"sourceName":"NVIDIA FY2026 Form 10-K","text":"FY2026 经营结果、风险因素和财务报表应回到 SEC 原文复核。","location":{"type":"url","url":"https://www.sec.gov/Archives/edgar/data/1045810/000104581026000021/nvda-20260125.htm","section":"Form 10-K"},"contentHash":"nvda-2026-10k"}]}]
-    },
-    {
-      "title":"NVIDIA 五年经营状况管理层汇报","subtitle":"FY2022-FY2026 增长质量与风险","format":"pptx","pptSkill":"guizang-huawei-style-c","includeCitations":true,"citationStyle":"IEEE",
-      "sections":[{"heading":"AI 基础设施需求推动经营规模跃迁","paragraphs":["FY2024 起收入、利润和现金创造进入新阶段。"],"bullets":["收入与营业利润同步增长","数据中心成为核心业务引擎","现金流验证了大部分盈利增长"],"refIds":[],"citations":[{"id":"nvda-ppt-1","resourceId":"","version":1,"sourceName":"NVIDIA Annual Reports","text":"五年经营数据来自 NVIDIA 历年年报。","location":{"type":"url","url":"https://investor.nvidia.com/financial-info/annual-reports-and-proxies/default.aspx"},"contentHash":"nvda-ppt-annual"}]},{"heading":"增长质量需要结合结构与风险观察","paragraphs":["高增长提高了产品过渡、供应、客户集中和监管风险的重要性。"],"bullets":["跟踪毛利率与库存变化","观察研发投入和现金转化","按地区与客户运行压力情景"],"refIds":[],"citations":[{"id":"nvda-ppt-2","resourceId":"","version":1,"sourceName":"NVIDIA FY2026 Form 10-K","text":"最新风险与经营披露来自 FY2026 10-K。","location":{"type":"url","url":"https://www.sec.gov/Archives/edgar/data/1045810/000104581026000021/nvda-20260125.htm"},"contentHash":"nvda-ppt-10k"}]}]
-    }
+  "snapshotRefs": {
+    "07f6250c-0f75-4845-a546-231655d9c92e":"file:financials",
+    "5b9f2096-9383-40f1-a177-f9e0841b6e36":"file:business-mix",
+    "2b7d8a7e-8969-4000-84e5-ac55210b2146":"file:risk-monitor",
+    "fa553ac2-033d-43fc-bcf3-91e9198aa4b8":"file:annual-summary",
+    "9d271e20-ec28-49d6-b518-0bf660d86525":"file:risk-memo",
+    "c0f004c5-66bd-43f8-af54-3df354dba7d2":"file:annual-metrics",
+    "250e8355-7ac8-432f-85ff-be134191f67c":"file:quarterly-momentum"
+  },
+  "artifacts": [
+    {"title":"NVIDIA FY2022-FY2026 经营状况分析","format":"financial_report","path":"outputs/NVIDIA_FY2022-FY2026_经营状况分析.json","sourceSpec":"outputs/NVIDIA_FY2022-FY2026_经营状况分析.json"},
+    {"title":"NVIDIA 五年经营状况管理层汇报","format":"pptx","path":"outputs/NVIDIA_五年经营状况管理层汇报.pptx","sourceSpec":"outputs/NVIDIA_FY2022-FY2026_经营状况分析.json"},
+    {"title":"NVIDIA 五年经营状况交互演示","format":"html_slides","path":"outputs/NVIDIA_五年经营状况交互演示.html","sourceSpec":"outputs/NVIDIA_FY2022-FY2026_经营状况分析.json"},
+    {"title":"NVIDIA FY2022-FY2026 经营分析报告","format":"docx","path":"outputs/NVIDIA_FY2022-FY2026_经营分析报告.docx","sourceSpec":"outputs/NVIDIA_FY2022-FY2026_经营状况分析.json"},
+    {"title":"NVIDIA 经营增长驱动与风险传导图","format":"mermaid","path":"outputs/NVIDIA_经营增长驱动与风险传导图.mmd"}
   ]
 }
