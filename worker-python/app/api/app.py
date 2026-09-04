@@ -1,6 +1,7 @@
 import tempfile
 import shutil
 import subprocess
+import logging
 import httpx
 from pathlib import Path
 from typing import Optional
@@ -45,6 +46,9 @@ from ..data_transform import generate_transform, profile_tabular, run_transform,
 from ..agent import AgentPlanRequest, AgentPlanResponse, OpenTaskRequest, load_skills, plan_with_agent, run_open_task_stream
 from ..research import fetch_web
 import json
+
+
+logger = logging.getLogger(__name__)
 
 
 app = FastAPI(
@@ -131,6 +135,7 @@ async def plan_agent_task(request: AgentPlanRequest) -> AgentPlanResponse:
     try:
         result = await plan_with_agent(request)
     except RuntimeError as exception:
+        logger.exception("Agent planning failed for session %s", request.session_id)
         raise HTTPException(status_code=503, detail=str(exception)) from exception
     if result is None:
         raise HTTPException(status_code=503, detail="Agent 模型尚未配置")

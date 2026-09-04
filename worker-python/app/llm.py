@@ -31,7 +31,7 @@ def extract_response_text(data: dict[str, Any]) -> str:
 
 class LlmGateway:
     def __init__(self) -> None:
-        self._codex_cli_unavailable_until = 0.0
+        self._codex_cli_research_unavailable_until = 0.0
 
     @property
     def provider(self) -> str:
@@ -42,7 +42,7 @@ class LlmGateway:
         if self.provider == "codex":
             return bool(settings.openai_api_key)
         if self.provider == "codex-cli":
-            return self._codex_cli_path() is not None and self._codex_cli_available()
+            return self._codex_cli_path() is not None
         if self.provider == "deepseek":
             return deepseek.configured
         return False
@@ -95,15 +95,15 @@ class LlmGateway:
                       "/Applications/ChatGPT.app/Contents/Resources/codex"]
         return next((value for value in candidates if value and Path(value).is_file()), None)
 
-    def _codex_cli_available(self) -> bool:
-        return time.monotonic() >= self._codex_cli_unavailable_until
+    def _codex_cli_research_available(self) -> bool:
+        return time.monotonic() >= self._codex_cli_research_unavailable_until
 
-    def _mark_codex_cli_unavailable(self) -> None:
-        self._codex_cli_unavailable_until = time.monotonic() + settings.codex_cli_cooldown_seconds
+    def _mark_codex_cli_research_unavailable(self) -> None:
+        self._codex_cli_research_unavailable_until = time.monotonic() + settings.codex_cli_cooldown_seconds
 
     async def _complete_codex_cli(self, system: str, user: str) -> Optional[str]:
         executable = self._codex_cli_path()
-        if not executable or not self._codex_cli_available():
+        if not executable:
             return None
         with tempfile.TemporaryDirectory(prefix="finflow-codex-") as directory:
             output_path = Path(directory) / "result.txt"
@@ -139,10 +139,8 @@ class LlmGateway:
             except asyncio.TimeoutError as exception:
                 process.kill()
                 await process.wait()
-                self._mark_codex_cli_unavailable()
                 raise RuntimeError("Codex CLI 生成超时") from exception
             if process.returncode != 0:
-                self._mark_codex_cli_unavailable()
                 detail = stderr.decode("utf-8", errors="replace").strip().splitlines()[-1:]
                 raise RuntimeError("Codex CLI 调用失败" + ("：" + detail[0] if detail else ""))
             if not output_path.exists() or not output_path.read_text(encoding="utf-8").strip():
@@ -151,7 +149,7 @@ class LlmGateway:
 
     async def discover_sources(self, topic: str, max_sources: int) -> dict[str, Any]:
         executable = self._codex_cli_path()
-        if not executable or not self._codex_cli_available():
+        if not executable or not self._codex_cli_research_available():
             return self._research_fallback(topic)
         with tempfile.TemporaryDirectory(prefix="finflow-research-") as directory:
             workdir = Path(directory)
@@ -194,10 +192,10 @@ class LlmGateway:
                 )
             except asyncio.TimeoutError:
                 process.kill(); await process.wait()
-                self._mark_codex_cli_unavailable()
+                self._mark_codex_cli_research_unavailable()
                 return self._research_fallback(topic)
             if process.returncode != 0 or not output_path.exists():
-                self._mark_codex_cli_unavailable()
+                self._mark_codex_cli_research_unavailable()
                 return self._research_fallback(topic)
             try:
                 result = json.loads(output_path.read_text(encoding="utf-8"))

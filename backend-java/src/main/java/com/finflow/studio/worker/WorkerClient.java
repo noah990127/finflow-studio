@@ -1,6 +1,7 @@
 package com.finflow.studio.worker;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.buffer.DataBufferUtils;
@@ -21,6 +22,7 @@ import java.util.function.Consumer;
 @Component
 public class WorkerClient {
 
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private final WebClient client;
 
     public WorkerClient(@Value("${finflow.worker.base-url}") String baseUrl) {
@@ -149,11 +151,24 @@ public class WorkerClient {
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(request)
                 .retrieve()
+                .onStatus(status -> status.isError(), response -> response.bodyToMono(String.class)
+                        .defaultIfEmpty("")
+                        .map(body -> new IllegalStateException(workerError(response.statusCode().value(), body))))
                 .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {})
                 .timeout(Duration.ofMinutes(4))
                 .block();
         if (result == null) throw new IllegalStateException("Agent 没有返回计划");
         return result;
+    }
+
+    static String workerError(int statusCode, String body) {
+        try {
+            var detail = OBJECT_MAPPER.readTree(body).path("detail").asText("");
+            if (!detail.isBlank()) return detail;
+        } catch (Exception ignored) {
+            // Fall through to a compact transport error when the worker did not return JSON.
+        }
+        return "Agent 服务请求失败（HTTP " + statusCode + "）";
     }
 
     public Map<String, Object> runAgentTaskStreaming(Object request,

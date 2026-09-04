@@ -556,8 +556,15 @@ public class AssistantExecutionService {
         var knowledge = snapshot.resources().stream().filter(item -> "KNOWLEDGE".equals(item.group())).count();
         var outputs = snapshot.resources().stream().filter(item -> "OUTPUT".equals(item.group())).count();
         effects.put("workspaceCounts", Map.of("data", data, "knowledge", knowledge, "outputs", outputs));
+        effects.put("workspaceSummary", Map.of(
+                "projectId", projectId,
+                "projectName", snapshot.project().name(),
+                "data", data,
+                "knowledge", knowledge,
+                "outputs", outputs));
         effects.put("sourceProjectId", projectId);
-        return "已读取当前项目：数据 " + data + " 项、资料 " + knowledge + " 项、输出 " + outputs + " 项";
+        return "已读取当前项目“" + snapshot.project().name() + "”：数据 " + data
+                + " 项、资料 " + knowledge + " 项、输出 " + outputs + " 项";
     }
 
     private String navigate(PlanStep step, Map<String, Object> effects) {
@@ -607,7 +614,8 @@ public class AssistantExecutionService {
                     不得声称读取了未提供的文件内容，不得自行创建财务报表或其他成果。
                     用户目标：%s
                     工作台摘要：%s
-                    """.formatted(goal, effects.getOrDefault("workspaceCounts", Map.of())), "工作台助手回答", 5);
+                    """.formatted(goal, effects.getOrDefault("workspaceSummary",
+                            effects.getOrDefault("workspaceCounts", Map.of()))), "工作台助手回答", 5);
             var message = Objects.toString(result.get("summary"), "").trim();
             if (!message.isBlank()) {
                 effects.put("assistantResponse", message);

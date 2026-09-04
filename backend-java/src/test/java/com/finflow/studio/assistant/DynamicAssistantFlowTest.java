@@ -58,6 +58,8 @@ class DynamicAssistantFlowTest {
 
         var events = json(getJson("/api/assistant/sessions/" + session.get("id").asText() + "/event-history"));
         assertThat(events).filteredOn(event -> "agent.observation".equals(event.get("type").asText())).hasSize(3);
+        assertThat(events).filteredOn(event -> "agent.observation".equals(event.get("type").asText()))
+                .anySatisfy(event -> assertThat(event.get("payload").get("message").asText()).contains("动态 Auto"));
         assertThat(events).anySatisfy(event -> assertThat(event.get("type").asText()).isEqualTo("agent.plan_updated"));
     }
 

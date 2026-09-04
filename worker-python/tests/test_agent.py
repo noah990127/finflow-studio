@@ -6,6 +6,7 @@ from app.agent import OpenTaskRequest, load_skills, run_open_task_stream
 from app.agent import runtime
 from app.agent.runtime import AgentCapability, AgentDependencies, AgentPlanRequest, build_workbench_tools, plan_with_agent
 from app.integrations.codex_cli_chat_model import CodexCliChatModel
+from app.llm import LlmGateway
 
 
 def test_loads_reusable_skills_from_markdown() -> None:
@@ -83,6 +84,17 @@ def test_codex_cli_adapter_returns_native_tool_calls() -> None:
     call = result.generations[0].message.tool_calls[0]
     assert call["name"] == "resource_read"
     assert call["args"] == {"resource_id": "r1"}
+
+
+def test_research_cooldown_does_not_disable_agent_planning(monkeypatch) -> None:
+    gateway = LlmGateway()
+    monkeypatch.setattr(runtime.settings, "llm_provider", "codex-cli")
+    monkeypatch.setattr(gateway, "_codex_cli_path", lambda: "/tmp/codex")
+
+    gateway._mark_codex_cli_research_unavailable()
+
+    assert gateway.configured is True
+    assert gateway._codex_cli_research_available() is False
 
 
 @pytest.mark.asyncio
