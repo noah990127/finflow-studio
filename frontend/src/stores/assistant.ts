@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { api, type AssistantEvent, type ContextSnapshot, type Plan, type Run, type Selection } from '../api/client'
+import { api, type AssistantEvent, type AssistantMessage, type ContextSnapshot, type Plan, type Run, type Selection } from '../api/client'
 import { useProjectsStore } from './projects'
 
 type TimelineItem = {
@@ -53,6 +53,9 @@ export const useAssistantStore = defineStore('assistant', {
     lastEventSequence: 0,
     workbenchAction: null as Record<string, unknown> | null,
     workbenchActionSequence: 0,
+    executionMode: (localStorage.getItem('finflow.assistant.executionMode') === 'AUTO' ? 'AUTO' : 'APPROVAL') as 'AUTO' | 'APPROVAL',
+    history: [] as AssistantMessage[],
+    historySessionId: '',
   }),
   getters: {
     needsConfirmation: (state) =>
@@ -69,14 +72,35 @@ export const useAssistantStore = defineStore('assistant', {
       this.contextTitle = title
       this.selection = selection ?? null
     },
+    setExecutionMode(mode: 'AUTO' | 'APPROVAL') {
+      if (this.busy || this.streaming) return
+      this.executionMode = mode
+      localStorage.setItem('finflow.assistant.executionMode', mode)
+    },
     async ensureSession(projectId: string) {
       if (!this.sessionId || this.sessionProjectId !== projectId) {
-        const session = await api.createSession(projectId)
+        const storageKey = `finflow.assistant.session.${projectId}`
+        const storedId = localStorage.getItem(storageKey) ?? ''
+        let session = null
+        if (storedId) {
+          try {
+            const existing = await api.getAssistantSession(storedId)
+            if (existing.projectId === projectId) session = existing
+          } catch { localStorage.removeItem(storageKey) }
+        }
+        if (!session) session = await api.createSession(projectId)
         this.sessionId = session.id
         this.sessionProjectId = projectId
+        localStorage.setItem(storageKey, session.id)
         this.lastEventSequence = 0
       }
       this.connectEvents()
+      if (this.historySessionId !== this.sessionId) await this.loadHistory()
+    },
+    async loadHistory() {
+      if (!this.sessionId) return
+      this.history = await api.listAssistantMessages(this.sessionId)
+      this.historySessionId = this.sessionId
     },
     connectEvents() {
       if (!this.sessionId || (eventSource && eventSessionId === this.sessionId)) return
@@ -168,7 +192,6 @@ export const useAssistantStore = defineStore('assistant', {
       const text = this.input.trim()
       if (!text || this.busy) return
       this.busy = true
-      this.currentRequest = text
       this.error = ''
       this.plan = null
       this.run = null
@@ -179,7 +202,9 @@ export const useAssistantStore = defineStore('assistant', {
       this.streamLines = ['正在接收你的需求']
       try {
         await this.ensureSession(projectId)
-        const response = await api.sendMessage(this.sessionId, text, this.pageContext, this.selection ?? undefined)
+        if (this.currentRequest) await this.loadHistory()
+        this.currentRequest = text
+        const response = await api.sendMessage(this.sessionId, text, this.pageContext, this.selection ?? undefined, this.executionMode)
         this.assistantMessage = response.assistantMessage
         this.plan = response.plan
         this.context = response.context

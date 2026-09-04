@@ -4,12 +4,24 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, create_model
 
 from ..config import settings
 from ..llm import llm
 from ..research import fetch_web, search_web
 from ..skills.loader import Skill, load_skills
+
+
+_AGENT_CHECKPOINTER = None
+_ACTIVE_AGENT_THREADS: set[str] = set()
+
+
+def _agent_checkpointer():
+    global _AGENT_CHECKPOINTER
+    if _AGENT_CHECKPOINTER is None:
+        from langgraph.checkpoint.memory import InMemorySaver
+        _AGENT_CHECKPOINTER = InMemorySaver()
+    return _AGENT_CHECKPOINTER
 
 
 class AgentCapability(BaseModel):
@@ -35,6 +47,7 @@ class AgentMessage(BaseModel):
 
 
 class AgentPlanRequest(BaseModel):
+    session_id: str = ""
     goal: str
     page: str
     project_id: Optional[str] = None
@@ -87,6 +100,7 @@ class AgentDependencies:
     request: AgentPlanRequest
     skills: list[Skill]
     staged_actions: list[AgentAction] = field(default_factory=list)
+    selected_skills: set[str] = field(default_factory=set)
 
 def _model():
     from langchain_openai import ChatOpenAI
@@ -106,7 +120,44 @@ def _model():
             api_key=settings.deepseek_api_key,
             max_tokens=settings.openai_max_output_tokens,
         )
+    if llm.provider == "codex-cli" and llm.configured:
+        from ..integrations import CodexCliChatModel
+        return CodexCliChatModel()
     return None
+
+
+def build_workbench_tools(deps: AgentDependencies):
+    from langchain_core.tools import StructuredTool
+
+    tools = []
+    for capability in deps.request.capabilities:
+        safe_name = capability.id.replace(".", "_").replace("-", "_")
+        fields = {name: (Any, Field(default=None, description=f"{capability.id} 的 {name} 参数"))
+                  for name in capability.arguments}
+        args_schema = create_model(f"{safe_name.title().replace('_', '')}Input", **fields)
+
+        def make_invoke(item: AgentCapability):
+            async def invoke(**arguments: Any) -> str:
+                if len(deps.staged_actions) >= settings.agent_max_steps:
+                    return "计划步骤已达到上限，请结束规划并说明未完成部分"
+                clean_arguments = {key: value for key, value in arguments.items() if value is not None}
+                deps.staged_actions.append(AgentAction(
+                    tool=item.id,
+                    title=item.title,
+                    description=item.description,
+                    arguments=clean_arguments,
+                ))
+                return f"已选择 {item.id}，后端将在策略校验后执行"
+            return invoke
+
+        tools.append(StructuredTool.from_function(
+            coroutine=make_invoke(capability),
+            name=safe_name,
+            description=(f"{capability.description}。风险：{capability.risk}；"
+                         f"参数字段：{', '.join(capability.arguments) or '无'}。调用即把该操作加入本次执行序列。"),
+            args_schema=args_schema,
+        ))
+    return tools
 
 
 async def plan_with_agent(request: AgentPlanRequest, model_override: Any = None) -> Optional[AgentPlanResponse]:
@@ -114,7 +165,7 @@ async def plan_with_agent(request: AgentPlanRequest, model_override: Any = None)
         return None
     model = model_override or _model()
     if model is None:
-        return await _plan_with_gateway(request)
+        return None
 
     from deepagents import create_deep_agent
     from deepagents.backends import StateBackend
@@ -138,78 +189,74 @@ async def plan_with_agent(request: AgentPlanRequest, model_override: Any = None)
         """Find reusable work instructions relevant to the user's goal before choosing actions."""
         terms = set(re.findall(r"[\w\u4e00-\u9fff]+", query.lower()))
         ranked = sorted(deps.skills, key=lambda skill: sum(term in (skill.name + skill.description + skill.instructions).lower() for term in terms), reverse=True)
-        return [skill.model_dump() for skill in ranked[:4]]
+        selected = ranked[:4]
+        deps.selected_skills.update(skill.name for skill in selected)
+        return [skill.model_dump() for skill in selected]
 
     @tool
-    def inspect_capabilities() -> list[dict[str, Any]]:
-        """List every workbench operation available for the current run."""
-        return [capability.model_dump() for capability in deps.request.capabilities]
+    def search_tools(query: str) -> list[dict[str, Any]]:
+        """Search the workbench tool catalog by id, title, description, or argument name."""
+        terms = set(re.findall(r"[\w\u4e00-\u9fff]+", query.lower()))
+        matches = []
+        for capability in deps.request.capabilities:
+            text = " ".join([capability.id, capability.title, capability.description, *capability.arguments]).lower()
+            score = sum(term in text for term in terms)
+            if score or not terms:
+                matches.append((score, capability))
+        matches.sort(key=lambda item: item[0], reverse=True)
+        return [{"id": item.id, "tool_name": item.id.replace(".", "_"), "title": item.title,
+                 "description": item.description, "risk": item.risk} for _, item in matches[:12]]
 
     @tool
-    def stage_workbench_action(tool: str, title: str,
-                               description: str, arguments: dict[str, Any]) -> str:
-        """Add one workbench action to the proposed plan. This stages but never executes the action."""
-        allowed = {capability.id for capability in deps.request.capabilities}
-        if tool not in allowed:
-            return "不可用的能力，请重新查看能力目录"
-        if len(deps.staged_actions) >= settings.agent_max_steps:
-            return "计划步骤已达到上限"
-        deps.staged_actions.append(AgentAction(tool=tool, title=title, description=description, arguments=arguments))
-        return "已加入计划"
+    def describe_tool(tool_id: str) -> dict[str, Any]:
+        """Read the complete contract and risk metadata for one workbench tool."""
+        item = next((value for value in deps.request.capabilities if value.id == tool_id), None)
+        return item.model_dump() if item else {"error": "工具不存在", "tool_id": tool_id}
 
     instructions = """你是通用的个人工作台 Agent，不是固定的财经工作流模板。
 先理解用户真正想完成的事情和当前上下文，再自主选择 Skill、MCP 工具与工作台能力。
-必须先调用 inspect_workspace、find_skills 和 inspect_capabilities；需要外部只读信息时可调用管理员配置的 MCP。
-每个准备在工作台执行的动作都必须调用 stage_workbench_action，禁止捏造能力名称。
+先调用 inspect_workspace；按需调用 find_skills、search_tools、describe_tool。所有左侧工作区操作都已作为独立工具提供。
+必须亲自调用所需的具体工具来形成执行序列，禁止只描述计划或捏造工具名称。工具结果由 Java 权限网关真实执行。
 不要因为用户提到分析就自动创建财务报告，也不要在缺少结构化数据时创建数据加工或图表报告。
-读取、回答和导航可直接执行；创建、修改、删除、导出和外部写入只能形成待确认计划。
-用业务用户看得懂的中文描述计划，不暴露内部技术名词。"""
+根据用户选择的 Auto 或审批策略决定是否等待确认；风险分类由后端最终强制执行。
+完成工具选择后返回 JSON，包含 summary、intent、selected_skills。summary 描述接下来将执行什么，不得把尚未执行的动作说成已经完成。
+用业务用户看得懂的中文，不暴露隐藏推理。"""
+    workbench_tools = build_workbench_tools(deps)
     agent = create_deep_agent(
         model=model,
-        tools=[inspect_workspace, find_skills, inspect_capabilities, stage_workbench_action],
+        tools=[inspect_workspace, find_skills, search_tools, describe_tool, *workbench_tools],
         system_prompt=instructions,
-        response_format=AgentDecision,
         backend=StateBackend(),
-        checkpointer=True,
+        checkpointer=_agent_checkpointer(),
         name="finbtp-workbench-agent",
     )
+    thread_id = f"session:{request.session_id or request.project_id or 'personal'}"
+    messages = [] if thread_id in _ACTIVE_AGENT_THREADS else [
+        message.model_dump() for message in request.recent_messages if message.role in {"user", "assistant"}
+    ]
+    if not messages or messages[-1]["role"] != "user" or messages[-1]["content"] != request.goal:
+        messages.append({"role": "user", "content": request.goal})
     result = await agent.ainvoke(
-        {"messages": [{"role": "user", "content": request.goal}]},
-        config={"configurable": {"thread_id": f"plan:{request.project_id or 'personal'}"}},
+        {"messages": messages},
+        config={"configurable": {"thread_id": thread_id}},
     )
-    decision = result.get("structured_response")
-    if not isinstance(decision, AgentDecision):
-        decision = AgentDecision.model_validate(decision or {
-            "summary": "已根据当前工作台准备处理计划",
-            "intent": "workbench-task",
-            "selected_skills": [],
-        })
+    _ACTIVE_AGENT_THREADS.add(thread_id)
+    raw_content = getattr(result.get("messages", [None])[-1], "content", "")
+    try:
+        raw_decision = json.loads(raw_content) if isinstance(raw_content, str) else {}
+    except json.JSONDecodeError:
+        raw_decision = {"summary": str(raw_content)}
+    decision = AgentDecision.model_validate({
+        "summary": raw_decision.get("summary", "已根据当前工作台准备处理计划"),
+        "intent": raw_decision.get("intent", "workbench-task"),
+        "selected_skills": raw_decision.get("selected_skills", sorted(deps.selected_skills)),
+    })
     if not deps.staged_actions:
         deps.staged_actions.append(AgentAction(tool="assistant.respond", title="回答你的问题",
                                                description="结合当前项目和内容给出直接回答", arguments={"goal": request.goal}))
     return AgentPlanResponse(summary=decision.summary, intent=decision.intent,
-                             selected_skills=decision.selected_skills,
+                             selected_skills=decision.selected_skills or sorted(deps.selected_skills),
                              steps=deps.staged_actions, mode="deep-agents")
-
-
-async def _plan_with_gateway(request: AgentPlanRequest) -> Optional[AgentPlanResponse]:
-    """Keep Codex CLI usable locally; API deployments use the full tool-calling agent above."""
-    skills = load_skills(settings.agent_skills_dir)
-    system = """你是个人工作台 Agent。根据上下文和能力目录制定计划，不使用关键词模板。
-只选择能力目录中存在的 tool。缺少输入时先回答或检查，不得臆造报表。输出严格 JSON：
-{"summary":"...","intent":"...","selected_skills":["..."],"steps":[{"tool":"...","title":"...","description":"...","arguments":{}}]}"""
-    payload = request.model_dump()
-    payload["skills"] = [{"name": item.name, "description": item.description, "instructions": item.instructions} for item in skills]
-    raw = await llm.complete(system, json.dumps(payload, ensure_ascii=False))
-    if not raw:
-        return None
-    try:
-        match = re.search(r"\{.*\}", raw, re.DOTALL)
-        value = json.loads(match.group(0) if match else raw)
-        return AgentPlanResponse.model_validate({**value, "mode": "model-planner"})
-    except (ValueError, TypeError, json.JSONDecodeError):
-        return None
-
 
 async def run_open_task_stream(request: OpenTaskRequest, model_override: Any = None):
     """Run one governed open task and expose business-readable activity events."""

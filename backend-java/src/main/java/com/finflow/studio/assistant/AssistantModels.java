@@ -23,6 +23,15 @@ public final class AssistantModels {
         }
     }
 
+    public enum ExecutionPolicy {
+        AUTO,
+        APPROVAL;
+
+        public static ExecutionPolicy from(String value) {
+            return "AUTO".equalsIgnoreCase(value) ? AUTO : APPROVAL;
+        }
+    }
+
     public record CreateSessionRequest(String title) {
     }
 
@@ -48,7 +57,18 @@ public final class AssistantModels {
             @NotBlank String page,
             String route,
             Selection selection,
-            Integer clientContextVersion
+            Integer clientContextVersion,
+            String executionMode
+    ) {
+    }
+
+    public record MessageHistoryItem(
+            String id,
+            String role,
+            String content,
+            String modelName,
+            String traceId,
+            Instant createdAt
     ) {
     }
 

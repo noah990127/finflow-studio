@@ -113,7 +113,7 @@ class AssistantPlannerTest {
     }
 
     @Test
-    void agentResearchPlanCannotBypassEvidenceIndexAndWorkflow() {
+    void preservesTheToolsSelectedByTheDeepAgent() {
         var worker = new WorkerClient("http://127.0.0.1:9") {
             @Override
             public Map<String, Object> planAgent(Object request) {
@@ -136,10 +136,8 @@ class AssistantPlannerTest {
                         false, null, null, null, List.of(), List.of()));
 
         assertThat(work.steps()).extracting(AssistantModels.PlanStep::tool).containsExactly(
-                "workspace.inspect", "knowledge.discover_external_sources", "knowledge.add",
-                "workflow.prepare", "workflow.run");
-        assertThat(work.steps()).extracting(AssistantModels.PlanStep::tool)
-                .doesNotContain("deliverable.create", "assistant.analyze_context");
+                "workspace.inspect", "knowledge.discover_external_sources", "assistant.analyze_context",
+                "deliverable.create", "deliverable.create");
     }
 
     @Test

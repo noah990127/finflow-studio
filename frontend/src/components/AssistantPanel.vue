@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
-import { AlertCircle, ArrowUp, Bot, Check, CheckCircle2, ChevronDown, ChevronRight, Circle, LoaderCircle, PanelRightClose, RotateCcw, ShieldCheck, Sparkles, Square, Wrench } from 'lucide-vue-next'
+import { AlertCircle, ArrowUp, Bot, Check, CheckCircle2, ChevronDown, ChevronRight, Circle, LoaderCircle, PanelRightClose, RotateCcw, ShieldCheck, Sparkles, Square, Wrench, Zap } from 'lucide-vue-next'
 import { useAssistantStore } from '../stores/assistant'
 import type { Project } from '../api/client'
 
@@ -53,6 +53,9 @@ async function scrollToLatest() {
   if (conversation.value) conversation.value.scrollTop = conversation.value.scrollHeight
 }
 watch(() => [assistant.timeline.length, assistant.assistantMessage, assistant.currentRequest], scrollToLatest)
+watch(() => [assistant.open, props.project?.id] as const, ([open, projectId]) => {
+  if (open && projectId) void assistant.ensureSession(projectId)
+}, { immediate: true })
 watch(() => assistant.run?.status, status => {
   if (status && ['SUCCEEDED', 'FAILED', 'CANCELED', 'ROLLED_BACK'].includes(status)) showSteps.value = false
   if (status === 'SUCCEEDED') {
@@ -71,11 +74,17 @@ watch(() => assistant.run?.status, status => {
         <div class="assistant-title"><Bot :size="18" /> AI 助手</div>
         <p><span></span>{{ props.project?.name ?? '个人工作台' }} · {{ contextLabel }}</p>
       </div>
-      <button class="icon-button" type="button" title="收起助手" @click="assistant.open = false"><PanelRightClose :size="18" /></button>
+      <div class="assistant-header-actions">
+        <div class="assistant-mode-switch" role="group" aria-label="Agent 执行模式">
+          <button type="button" :class="{ active: assistant.executionMode === 'AUTO' }" :disabled="running || assistant.busy" title="自动执行 LLM 选择的工具" @click="assistant.setExecutionMode('AUTO')"><Zap :size="12" />Auto</button>
+          <button type="button" :class="{ active: assistant.executionMode === 'APPROVAL' }" :disabled="running || assistant.busy" title="修改前需要确认" @click="assistant.setExecutionMode('APPROVAL')"><ShieldCheck :size="12" />审批</button>
+        </div>
+        <button class="icon-button" type="button" title="收起助手" @click="assistant.open = false"><PanelRightClose :size="18" /></button>
+      </div>
     </header>
 
     <div ref="conversation" class="assistant-body assistant-conversation">
-      <section v-if="!assistant.currentRequest" class="assistant-empty">
+      <section v-if="!assistant.currentRequest && !assistant.history.length" class="assistant-empty">
         <span><Sparkles :size="21" /></span>
         <strong>让 Agent 直接处理当前工作</strong>
         <p>它会理解当前项目和你正在查看的内容，选择所需能力，并把操作实时呈现在工作台。</p>
@@ -86,7 +95,13 @@ watch(() => assistant.run?.status, status => {
         </div>
       </section>
 
-      <template v-else>
+      <section v-for="message in assistant.history" :key="message.id" class="assistant-history-turn" :data-role="message.role.toLowerCase()">
+        <div class="assistant-turn-label">{{ message.role === 'USER' ? '你' : 'Agent' }}</div>
+        <p>{{ message.content }}</p>
+        <time>{{ clock(message.createdAt) }}</time>
+      </section>
+
+      <template v-if="assistant.currentRequest">
         <article class="assistant-user-turn">
           <div class="assistant-turn-label">你</div>
           <p>{{ assistant.currentRequest }}</p>
@@ -163,7 +178,7 @@ watch(() => assistant.run?.status, status => {
         <button v-if="running && assistant.run" class="send-button stop" type="button" title="停止" @click="assistant.cancel"><Square :size="14" /></button>
         <button v-else class="send-button" type="button" title="发送" :disabled="assistant.busy || !assistant.input.trim()" @click="send"><ArrowUp :size="18" /></button>
       </div>
-      <p>涉及修改或对外操作时，Agent 会先请求确认</p>
+      <p>{{ assistant.executionMode === 'AUTO' ? 'Auto 模式会直接执行 Agent 选择的工具' : '审批模式会在修改工作台前请求确认' }}</p>
     </footer>
   </aside>
 </template>

@@ -76,7 +76,7 @@ async def render_office_preview(file: UploadFile = File(...), original_name: str
 @app.get("/health")
 async def health() -> dict:
     skills = load_skills(settings.agent_skills_dir)
-    runtime_mode = "deep-agents" if settings.llm_provider.strip().lower() in {"codex", "deepseek"} else "model-gateway"
+    runtime_mode = "deep-agents" if settings.llm_provider.strip().lower() in {"codex", "codex-cli", "deepseek"} else "fallback"
     return {
         "status": "online",
         "service": settings.service_name,

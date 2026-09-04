@@ -2363,9 +2363,18 @@ button {
 .assistant-codex-panel .assistant-title { gap: 7px; font-size: 14px; }
 .assistant-codex-panel .assistant-header p { display: flex; align-items: center; gap: 6px; margin-top: 5px; font-size: 10px; }
 .assistant-codex-panel .assistant-header p span { width: 6px; height: 6px; border-radius: 50%; background: #27a170; }
+.assistant-mode-switch { display: grid; grid-template-columns: 1fr 1fr; padding: 2px; border: 1px solid #d7e0ea; border-radius: 6px; background: #f4f7fa; }
+.assistant-mode-switch button { min-width: 58px; height: 26px; display: flex; align-items: center; justify-content: center; gap: 4px; padding: 0 7px; border: 0; border-radius: 4px; color: #718196; background: transparent; font-size: 9px; font-weight: 700; }
+.assistant-mode-switch button.active { color: #1e5f9f; background: #fff; box-shadow: 0 1px 3px rgb(40 67 94 / 14%); }
+.assistant-mode-switch button:disabled { cursor: default; opacity: .62; }
 .assistant-conversation { padding: 20px 18px 30px; scroll-behavior: smooth; }
 .assistant-user-turn { margin-left: 34px; padding: 11px 13px; border: 1px solid #dce5ef; border-radius: 8px; background: #f6f8fb; }
 .assistant-user-turn p { margin: 5px 0 0; overflow-wrap: anywhere; color: #26384d; font-size: 12px; line-height: 1.6; white-space: pre-wrap; }
+.assistant-history-turn { position: relative; margin: 0 0 18px; padding: 10px 12px; border-radius: 7px; }
+.assistant-history-turn[data-role="user"] { margin-left: 34px; border: 1px solid #dce5ef; background: #f6f8fb; }
+.assistant-history-turn[data-role="assistant"] { margin-right: 18px; border-left: 2px solid #8fb8e5; background: #f8fbfe; }
+.assistant-history-turn p { margin: 5px 0 0; overflow-wrap: anywhere; color: #34495f; font-size: 11px; line-height: 1.6; white-space: pre-wrap; }
+.assistant-history-turn time { display: block; margin-top: 5px; color: #9aa6b3; font-size: 8px; }
 .assistant-turn-label { display: flex; align-items: center; gap: 6px; color: #78889b; font-size: 10px; font-weight: 700; }
 .assistant-agent-turn { margin-top: 22px; }
 .assistant-agent-turn > .assistant-turn-label { color: #315c8b; }

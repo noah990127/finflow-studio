@@ -121,6 +121,28 @@ class AssistantFlowTest {
     }
 
     @Test
+    void autoModeRunsWriteToolsWithoutConfirmationAndKeepsConversationHistory() throws Exception {
+        var project = json(postJson("/api/projects", Map.of(
+                "name", "Auto Agent 测试", "description", "验证自动执行和历史记录")));
+        var session = json(postJson("/api/projects/" + project.get("id").asText() + "/assistant/sessions",
+                Map.of("title", "Auto 会话")));
+
+        var response = json(postJson("/api/assistant/sessions/" + session.get("id").asText() + "/messages",
+                Map.of("text", "根据当前项目创建一条分析工作流", "page", "project-home",
+                        "clientContextVersion", 1, "executionMode", "AUTO")));
+
+        assertThat(response.get("run").isNull()).isFalse();
+        assertThat(response.get("plan").get("status").asText()).isEqualTo("PLAN_READY");
+        assertThat(response.get("plan").get("steps")).allSatisfy(step ->
+                assertThat(step.get("requiresConfirmation").asBoolean()).isFalse());
+
+        var messages = json(mockMvc.perform(get("/api/assistant/sessions/" + session.get("id").asText() + "/messages"))
+                .andExpect(status().is2xxSuccessful()).andReturn().getResponse().getContentAsString());
+        assertThat(messages).extracting(item -> item.get("role").asText())
+                .containsSequence("USER", "ASSISTANT");
+    }
+
+    @Test
     void workspaceToolsCreateReadAndRunRealResources() {
         var project = projects.create("Agent 工具场景", "验证工作区与工作流工具真实执行");
         var effects = new LinkedHashMap<String, Object>();

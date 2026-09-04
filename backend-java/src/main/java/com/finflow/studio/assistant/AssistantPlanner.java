@@ -26,9 +26,13 @@ public class AssistantPlanner {
     }
 
     public PlannedWork plan(String goal, String page, Selection selection, WorkspaceContext context) {
+        return plan(goal, page, selection, context, "");
+    }
+
+    public PlannedWork plan(String goal, String page, Selection selection, WorkspaceContext context, String sessionId) {
         var normalized = goal == null ? "" : goal.trim().toLowerCase(Locale.ROOT);
         if (isDirectNavigation(normalized, context)) return fallbackPlan(goal, page, selection, context);
-        var agentPlan = planWithAgent(goal, page, selection, context);
+        var agentPlan = planWithAgent(goal, page, selection, context, sessionId);
         if (agentPlan != null) return agentPlan;
         return fallbackPlan(goal, page, selection, context);
     }
@@ -151,9 +155,11 @@ public class AssistantPlanner {
     }
 
     @SuppressWarnings("unchecked")
-    private PlannedWork planWithAgent(String goal, String page, Selection selection, WorkspaceContext context) {
+    private PlannedWork planWithAgent(String goal, String page, Selection selection, WorkspaceContext context,
+                                      String sessionId) {
         try {
             var request = new LinkedHashMap<String, Object>();
+            request.put("session_id", sessionId == null ? "" : sessionId);
             request.put("goal", goal == null ? "" : goal.trim());
             request.put("page", page == null ? "project-home" : page);
             request.put("project_id", context.projectId());
@@ -198,55 +204,11 @@ public class AssistantPlanner {
                             current.description(), current.arguments(), current.risk(), current.requiresConfirmation(), current.status()));
                 }
             }
-            if (isResearchDelivery(goal)) {
-                steps = enforceResearchDeliveryPipeline(goal, page, context, steps);
-            }
             var summary = readable(response.get("summary"), modelSummary(goal, steps, context), 240);
             return new PlannedWork(summary, List.copyOf(steps));
         } catch (RuntimeException exception) {
             return null;
         }
-    }
-
-    private boolean isResearchDelivery(String goal) {
-        var text = goal == null ? "" : goal.toLowerCase(Locale.ROOT);
-        return asksForSources(text) && asksForAnalysis(text) && !requestedFormats(text).isEmpty();
-    }
-
-    private ArrayList<PlanStep> enforceResearchDeliveryPipeline(String goal, String page,
-                                                                 WorkspaceContext context,
-                                                                 List<PlanStep> proposed) {
-        var formats = requestedFormats(goal == null ? "" : goal.toLowerCase(Locale.ROOT));
-        var steps = new ArrayList<PlanStep>();
-        proposed.stream()
-                .filter(item -> !List.of("knowledge.add", "assistant.analyze_context", "workflow.initialize",
-                        "workflow.prepare", "workflow.add_outputs", "workflow.run", "deliverable.create")
-                        .contains(item.tool()))
-                .limit(6)
-                .forEach(steps::add);
-        if (steps.stream().noneMatch(item -> "knowledge.discover_external_sources".equals(item.tool()))) {
-            steps.add(step(steps.size() + 1, "knowledge.discover_external_sources", "READ", "检索权威公开资料",
-                    "优先查找官网、监管披露、财报和投资者材料，并保留来源定位。", RiskLevel.READ_ONLY,
-                    mapOf("topic", inferProjectTopic(goal), "max_sources", 20, "project_id", context.projectId(),
-                            "page", page, "goal", goal)));
-        }
-        steps.add(step(steps.size() + 1, "knowledge.add", "WRITE", "保存研究资料索引",
-                "把本次采用的资料、URL、用途和核验状态写入当前项目，作为可追溯输入。",
-                RiskLevel.CREATE_VERSION, mapOf("project_id", context.projectId(), "name", "Agent 研究资料索引.md")));
-        steps.add(step(steps.size() + 1, "workflow.prepare", "WRITE", "创建可审计研究工作流",
-                "建立从资料读取、证据核验、比较分析到多格式成果的可见工作流。",
-                RiskLevel.CREATE_VERSION, mapOf("project_id", context.projectId(), "goal", goal,
-                        "output_formats", formats)));
-        steps.add(step(steps.size() + 1, "workflow.run", "WRITE", "执行工作流并生成成果",
-                "运行刚创建的研究工作流，成果中保留资料来源和版本关系。",
-                RiskLevel.CREATE_VERSION, mapOf("project_id", context.projectId(), "goal", goal,
-                        "output_formats", formats)));
-        for (var index = 0; index < steps.size(); index++) {
-            var current = steps.get(index);
-            steps.set(index, new PlanStep(current.id(), index + 1, current.tool(), current.mode(), current.title(),
-                    current.description(), current.arguments(), current.risk(), current.requiresConfirmation(), current.status()));
-        }
-        return steps;
     }
 
     private void enrichArguments(Map<String, Object> arguments, String goal, String page, WorkspaceContext context) {

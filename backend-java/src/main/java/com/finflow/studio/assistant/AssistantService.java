@@ -74,9 +74,25 @@ public class AssistantService {
                 .orElseThrow(() -> new IllegalArgumentException("助手会话不存在"));
     }
 
+    public List<MessageHistoryItem> listMessages(String sessionId) {
+        getSession(sessionId);
+        return jdbc.sql("""
+                        select id, role, content, model_name, trace_id, created_at
+                        from assistant_message where session_id = :sessionId
+                        order by created_at asc
+                        """)
+                .param("sessionId", sessionId)
+                .query((rs, rowNum) -> new MessageHistoryItem(
+                        rs.getString("id"), rs.getString("role"), rs.getString("content"),
+                        rs.getString("model_name"), rs.getString("trace_id"),
+                        rs.getTimestamp("created_at").toInstant()))
+                .list();
+    }
+
     @Transactional
     public MessageResponse sendMessage(String sessionId, MessageRequest request) {
         var session = getSession(sessionId);
+        var executionPolicy = ExecutionPolicy.from(request.executionMode());
         var traceId = UUID.randomUUID().toString();
         saveMessage(sessionId, "USER", request.text(), null, traceId);
         events.publish(sessionId, null, "assistant.request.received", Map.of(
@@ -98,6 +114,21 @@ public class AssistantService {
         var selected = request.selection() == null ? null : workspaceResponse.resources().stream()
                 .filter(resource -> resource.id().equals(request.selection().resourceId()))
                 .findFirst().orElse(null);
+        var workspaceItems = new ArrayList<Map<String, Object>>();
+        workspaceResponse.folders().stream().limit(120).forEach(folder -> {
+            var item = new LinkedHashMap<String, Object>();
+            item.put("id", folder.id());
+            item.put("name", folder.name());
+            item.put("type", "FOLDER");
+            item.put("group", folder.rootKind());
+            item.put("status", "READY");
+            if (folder.parentId() != null) item.put("parent_id", folder.parentId());
+            workspaceItems.add(item);
+        });
+        workspaceResponse.resources().stream().limit(Math.max(0, 120 - workspaceItems.size())).forEach(resource ->
+                workspaceItems.add(Map.<String, Object>of(
+                        "id", resource.id(), "name", resource.name(), "type", resource.resourceType(),
+                        "group", resource.group(), "status", resource.status())));
         var workspaceContext = new AssistantPlanner.WorkspaceContext(
                 session.projectId(), workspaceResponse.project().name(),
                 (int) workspaceResponse.resources().stream().filter(resource -> "DATA".equals(resource.group())).count(),
@@ -106,11 +137,15 @@ public class AssistantService {
                 workspaceResponse.resources().stream().anyMatch(resource -> "DATA".equals(resource.group())),
                 selected == null ? null : selected.id(), selected == null ? null : selected.resourceType(),
                 selected == null ? null : selected.name(),
-                workspaceResponse.resources().stream().limit(120).map(resource -> Map.<String, Object>of(
-                        "id", resource.id(), "name", resource.name(), "type", resource.resourceType(),
-                        "group", resource.group(), "status", resource.status())).toList(),
+                List.copyOf(workspaceItems),
                 recentMessages(sessionId, session.projectId()));
-        var plannedWork = planner.plan(request.text(), request.page(), request.selection(), workspaceContext);
+        var plannedWork = planner.plan(request.text(), request.page(), request.selection(), workspaceContext, sessionId);
+        if (executionPolicy == ExecutionPolicy.AUTO) {
+            var automaticSteps = plannedWork.steps().stream().map(step -> new PlanStep(
+                    step.id(), step.order(), step.tool(), step.mode(), step.title(), step.description(),
+                    step.arguments(), step.risk(), false, step.status())).toList();
+            plannedWork = new AssistantPlanner.PlannedWork(plannedWork.summary(), automaticSteps);
+        }
         events.publish(sessionId, null, "agent.planning", Map.of(
                 "status", "completed", "progress", 18, "message", plannedWork.summary()));
         var plan = savePlan(sessionId, context, request.text(), plannedWork);
@@ -121,7 +156,8 @@ public class AssistantService {
                 "summary", plan.summary(),
                 "progress", 20,
                 "message", "处理计划已经准备好",
-                "requiresConfirmation", plan.steps().stream().anyMatch(PlanStep::requiresConfirmation)));
+                "requiresConfirmation", plan.steps().stream().anyMatch(PlanStep::requiresConfirmation),
+                "executionMode", executionPolicy.name()));
         events.publish(sessionId, null, "agent.plan_updated", Map.of(
                 "status", "completed", "planId", plan.id(), "version", plan.version(),
                 "progress", 20, "message", "计划已更新，共 " + plan.steps().size() + " 个步骤"));
@@ -138,6 +174,11 @@ public class AssistantService {
                     "status", "waiting", "planId", plan.id(), "planHash", plan.planHash(),
                     "progress", 20, "message", "有写入、导出或高风险操作，需要确认后执行"));
         } else {
+            if (executionPolicy == ExecutionPolicy.AUTO) {
+                events.publish(sessionId, null, "agent.executing", Map.of(
+                        "status", "running", "progress", 21,
+                        "message", "Auto 模式已启用，正在直接执行 LLM 选择的工具"));
+            }
             run = execution.start(sessionId, plan.id(), "auto-" + plan.id());
         }
         return new MessageResponse(sessionId, plannedWork.summary(), context, plan, run);
@@ -150,7 +191,7 @@ public class AssistantService {
                 "content", "工作记忆[" + item.scope() + "/" + item.key() + "]：" + writeJson(item.value()))));
         var history = jdbc.sql("""
                 select role, content from assistant_message where session_id = :sessionId
-                order by created_at desc limit 8
+                order by created_at desc limit 30
                 """)
                 .param("sessionId", sessionId)
                 .query((rs, rowNum) -> Map.of("role", rs.getString("role").toLowerCase(Locale.ROOT),
@@ -349,6 +390,8 @@ public class AssistantService {
                 .param("traceId", traceId)
                 .param("createdAt", Instant.now())
                 .update();
+        jdbc.sql("update assistant_session set updated_at = :now where id = :id")
+                .param("now", Instant.now()).param("id", sessionId).update();
     }
 
     private String modelName() {

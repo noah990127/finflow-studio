@@ -38,6 +38,11 @@ public class AssistantController {
         return assistant.getSession(sessionId);
     }
 
+    @GetMapping("/assistant/sessions/{sessionId}/messages")
+    List<MessageHistoryItem> messageHistory(@PathVariable String sessionId) {
+        return assistant.listMessages(sessionId);
+    }
+
     @PostMapping("/assistant/sessions/{sessionId}/messages")
     MessageResponse sendMessage(@PathVariable String sessionId,
                                 @Valid @RequestBody MessageRequest request) {

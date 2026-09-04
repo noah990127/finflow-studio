@@ -21,6 +21,8 @@ export type ContextSnapshot = { id: string; projectId: string; page: string; sel
 export type Run = { id: string; sessionId: string; planId: string; status: string; currentStep: number; resultSummary: string; createdAt: string; startedAt?: string; finishedAt?: string; result: Record<string, unknown> }
 export type MessageResponse = { sessionId: string; assistantMessage: string; context: ContextSnapshot; plan: Plan; run?: Run }
 export type AssistantEvent = { eventId: string; eventSeq: number; sessionId: string; runId?: string; type: string; payload: Record<string, unknown>; createdAt: string }
+export type AssistantMessage = { id: string; role: 'USER' | 'ASSISTANT' | 'SYSTEM'; content: string; modelName?: string; traceId: string; createdAt: string }
+export type AssistantSession = { id: string; projectId: string; title: string; status: string; createdAt: string; updatedAt: string }
 export type WorkflowNodeType = 'RESOURCE' | 'ACQUIRE' | 'PROCESS' | 'AGENT_TASK' | 'TOOL' | 'CONTROL' | 'SUB_WORKFLOW' | 'OUTPUT' | 'FILE_INPUT' | 'LINK_INPUT' | 'DATASET_INPUT' | 'DATA_EXTRACT' | 'DATA_TRANSFORM' | 'SPREADSHEET_TRANSFORM' | 'REF_SEARCH' | 'AI_ANALYSIS' | 'REVIEW' | 'DELIVERABLE'
 export type WorkflowNode = { id: string; type: WorkflowNodeType; name: string; x: number; y: number; config: Record<string, unknown> }
 export type WorkflowEdge = { id: string; source: string; target: string }
@@ -106,8 +108,10 @@ export const api = {
   previewDeliverable: (id: string) => request<DocumentPreview>(`/api/deliverables/${id}/preview`),
   getFinancialReport: (id: string) => request<FinancialReportSpec>(`/api/deliverables/${id}/report-spec`),
   getDeliverableCitations: (id: string, version?: number) => request<CitationSource[]>(`/api/deliverables/${id}/citations${version ? `?version=${version}` : ''}`),
-  createSession: (projectId: string) => request<{ id: string }>(`/api/projects/${projectId}/assistant/sessions`, { method: 'POST', body: JSON.stringify({ title: '项目工作助手' }) }),
-  sendMessage: (sessionId: string, text: string, page = 'project-home', selection?: Selection) => request<MessageResponse>(`/api/assistant/sessions/${sessionId}/messages`, { method: 'POST', body: JSON.stringify({ text, page, route: window.location.pathname, selection, clientContextVersion: 1 }) }),
+  createSession: (projectId: string) => request<AssistantSession>(`/api/projects/${projectId}/assistant/sessions`, { method: 'POST', body: JSON.stringify({ title: '项目工作助手' }) }),
+  getAssistantSession: (sessionId: string) => request<AssistantSession>(`/api/assistant/sessions/${sessionId}`),
+  listAssistantMessages: (sessionId: string) => request<AssistantMessage[]>(`/api/assistant/sessions/${sessionId}/messages`),
+  sendMessage: (sessionId: string, text: string, page = 'project-home', selection?: Selection, executionMode: 'AUTO' | 'APPROVAL' = 'APPROVAL') => request<MessageResponse>(`/api/assistant/sessions/${sessionId}/messages`, { method: 'POST', body: JSON.stringify({ text, page, route: window.location.pathname, selection, clientContextVersion: 1, executionMode }) }),
   confirmPlan: (plan: Plan, context: ContextSnapshot) => request<Run>(`/api/assistant/plans/${plan.id}/confirm`, { method: 'POST', body: JSON.stringify({ planVersion: plan.version, planHash: plan.planHash, idempotencyKey: crypto.randomUUID(), expectedResourceVersions: context.resourceVersions }) }),
   getRun: (runId: string) => request<Run>(`/api/assistant/runs/${runId}`),
   cancelAssistantRun: (runId: string) => request<Run>(`/api/assistant/runs/${runId}/cancel`, { method: 'POST' }),

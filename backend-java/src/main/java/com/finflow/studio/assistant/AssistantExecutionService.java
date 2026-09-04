@@ -195,6 +195,7 @@ public class AssistantExecutionService {
                     .param("finishedAt", finishedAt)
                     .param("id", runId)
                     .update();
+            saveAssistantMessage(run.sessionId(), summary, runId);
             events.publish(run.sessionId(), runId, "assistant.run.completed", Map.of(
                     "runId", runId, "summary", summary, "message", summary, "progress", 100,
                     "canRollback", effects.containsKey("createdProjectId")));
@@ -204,11 +205,13 @@ public class AssistantExecutionService {
                     "status", "completed", "summary", summary, "message", summary, "progress", 100,
                     "provenance", Map.of("traceId", runId, "toolCount", steps.size())));
         } catch (RuntimeException ex) {
+            var failure = ex.getMessage() == null ? "执行失败" : ex.getMessage();
             jdbc.sql("update assistant_run set status = 'FAILED', result_summary = :message, finished_at = :finishedAt where id = :id")
-                    .param("message", ex.getMessage() == null ? "执行失败" : ex.getMessage())
+                    .param("message", failure)
                     .param("finishedAt", Instant.now())
                     .param("id", runId)
                     .update();
+            saveAssistantMessage(run.sessionId(), "本次任务未完成：" + failure, runId);
             events.publish(run.sessionId(), runId, "assistant.run.failed", Map.of(
                     "runId", runId, "progress", 100,
                     "message", "当前步骤没有完成，可以从这里重试",
@@ -218,6 +221,21 @@ public class AssistantExecutionService {
                     "message", "当前步骤没有完成，可以展开查看错误",
                     "error", ex.getMessage() == null ? "" : ex.getMessage()));
         }
+    }
+
+    private void saveAssistantMessage(String sessionId, String content, String traceId) {
+        jdbc.sql("""
+                        insert into assistant_message(id, session_id, role, content, model_name, trace_id, created_at)
+                        values (:id, :sessionId, 'ASSISTANT', :content, 'deep-agents', :traceId, :createdAt)
+                        """)
+                .param("id", UUID.randomUUID().toString())
+                .param("sessionId", sessionId)
+                .param("content", content)
+                .param("traceId", traceId)
+                .param("createdAt", Instant.now())
+                .update();
+        jdbc.sql("update assistant_session set updated_at = :now where id = :id")
+                .param("now", Instant.now()).param("id", sessionId).update();
     }
 
     private boolean isCanceled(String runId) {
