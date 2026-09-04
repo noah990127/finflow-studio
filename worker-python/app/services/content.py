@@ -208,7 +208,11 @@ async def generate_content(request: GenerateContentRequest) -> GenerateContentRe
     try:
         content = await llm.complete(system, user)
     except Exception as exception:
-        logger.warning("LLM deliverable generation failed; using local fallback (%s)", type(exception).__name__)
+        logger.warning(
+            "LLM deliverable generation failed; using local fallback (%s: %s)",
+            type(exception).__name__,
+            exception,
+        )
         return GenerateContentResponse(content=_fallback_generated_content(request), mode="local-extractive-fallback")
     if not content or not content.strip():
         return GenerateContentResponse(content=_fallback_generated_content(request), mode="local-extractive-fallback")
@@ -252,7 +256,11 @@ async def generate_content_stream(request: GenerateContentRequest) -> AsyncItera
             await asyncio.sleep(0.025)
         yield {"type": "complete", "content": clean, "mode": llm.provider, "progress": 94}
     except Exception as exception:
-        logger.warning("Streaming LLM deliverable generation failed; using local fallback (%s)", type(exception).__name__)
+        logger.warning(
+            "Streaming LLM deliverable generation failed; using local fallback (%s: %s)",
+            type(exception).__name__,
+            exception,
+        )
         fallback = _fallback_generated_content(request)
         yield {"type": "status", "message": "模型不可用，正在使用本地可交付模式", "progress": 78}
         yield {"type": "complete", "content": fallback, "mode": "local-extractive-fallback", "progress": 94}

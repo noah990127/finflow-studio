@@ -36,6 +36,9 @@ import java.util.concurrent.CancellationException;
 
 @Service
 public class WorkflowRunService {
+    static final int MAX_WORKFLOW_CONTEXT_CHARS = 180_000;
+    private static final Set<String> TEXT_PREVIEW_EXTENSIONS = Set.of(
+            "csv", "tsv", "txt", "md", "json", "jsonl", "xml", "html", "htm", "yaml", "yml", "sql");
     private final JdbcClient jdbc;
     private final ObjectMapper objectMapper;
     private final ProjectService projects;
@@ -284,7 +287,7 @@ public class WorkflowRunService {
         return switch (node.type()) {
             case FILE_INPUT -> {
                 var file = knowledge.get(text(config, "resourceId"));
-                var refs = knowledge.currentRefs(file.id(), 24);
+                var refs = knowledge.sampledCurrentRefs(file.id(), 160);
                 yield Map.of("fileId", file.id(), "name", file.name(), "version", file.currentVersion(),
                         "downloadUrl", "/api/files/" + file.id() + "/download",
                         "refs", refs.stream().map(this::refMap).toList(),
@@ -833,25 +836,39 @@ public class WorkflowRunService {
         } else taskExecutor.execute(task);
     }
 
-    private String collectText(Map<String, Map<String, Object>> values) {
+    String collectText(Map<String, Map<String, Object>> values) {
         var result = new StringBuilder();
         for (var output : values.values()) {
+            var hasParsedText = false;
             for (var key : List.of("analysis", "summary", "text")) {
-                if (output.get(key) != null) result.append(output.get(key)).append('\n');
+                var value = Objects.toString(output.get(key), "").trim();
+                if (!value.isBlank()) {
+                    result.append(value).append('\n');
+                    hasParsedText = true;
+                }
             }
             for (var item : list(output.get("refs"))) {
-                if (item instanceof Map<?, ?> map && map.get("text") != null) result.append(map.get("text")).append('\n');
+                if (item instanceof Map<?, ?> map) {
+                    var value = Objects.toString(map.get("text"), "").trim();
+                    if (!value.isBlank()) {
+                        result.append(value).append('\n');
+                        hasParsedText = true;
+                    }
+                }
             }
             var url = Objects.toString(output.get("url"), "");
             if (!url.isBlank()) result.append("网站资料：").append(Objects.toString(output.get("title"), url))
                     .append(" ").append(url).append('\n');
             var fileId = Objects.toString(output.get("fileId"), "");
-            if (!fileId.isBlank()) appendFilePreview(result, knowledge.filePath(fileId,
+            if (!fileId.isBlank() && !hasParsedText) appendFilePreview(result, knowledge.filePath(fileId,
                     output.get("version") instanceof Number number ? number.intValue() : null));
             var extractId = Objects.toString(output.get("extractJobId"), "");
             if (!extractId.isBlank()) appendFilePreview(result, extracts.outputPath(extractId));
         }
-        return result.toString().trim();
+        var text = result.toString().trim();
+        if (text.length() <= MAX_WORKFLOW_CONTEXT_CHARS) return text;
+        return text.substring(0, MAX_WORKFLOW_CONTEXT_CHARS)
+                + "\n[工作流上下文较长，已按安全上限截断]";
     }
 
     private String collectReferenceCatalog(Map<String, Map<String, Object>> context) {
@@ -881,6 +898,10 @@ public class WorkflowRunService {
     }
 
     private void appendFilePreview(StringBuilder result, Path path) {
+        var name = path.getFileName() == null ? "" : path.getFileName().toString();
+        var separator = name.lastIndexOf('.');
+        var extension = separator < 0 ? "" : name.substring(separator + 1).toLowerCase(Locale.ROOT);
+        if (!TEXT_PREVIEW_EXTENSIONS.contains(extension)) return;
         try (var input = Files.newInputStream(path)) {
             var bytes = input.readNBytes(300_000);
             if (bytes.length > 0) {

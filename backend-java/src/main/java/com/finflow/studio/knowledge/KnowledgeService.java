@@ -252,6 +252,31 @@ public class KnowledgeService {
                         rs.getString("content_hash"), 1.0)).list();
     }
 
+    public List<RefResponse> sampledCurrentRefs(String resourceId, int limit) {
+        get(resourceId);
+        var refs = jdbc.sql("""
+                        select k.* from knowledge_ref k
+                        join file_resource r on r.id = k.resource_id and r.current_version = k.version_number
+                        where k.resource_id = :resourceId order by k.chunk_index limit 5000
+                        """).param("resourceId", resourceId)
+                .query((rs, rowNum) -> new RefResponse(rs.getString("id"), rs.getString("project_id"),
+                        rs.getString("resource_id"), rs.getInt("version_number"), rs.getString("source_name"),
+                        rs.getString("text_content"), readMap(rs.getString("location_json")),
+                        rs.getString("content_hash"), 1.0)).list();
+        return evenlySample(refs, Math.max(1, Math.min(limit, 500)));
+    }
+
+    static <T> List<T> evenlySample(List<T> items, int limit) {
+        if (items.size() <= limit) return List.copyOf(items);
+        if (limit == 1) return List.of(items.getFirst());
+        var sampled = new ArrayList<T>(limit);
+        for (int index = 0; index < limit; index++) {
+            var sourceIndex = (int) Math.round(index * (items.size() - 1.0) / (limit - 1.0));
+            sampled.add(items.get(sourceIndex));
+        }
+        return List.copyOf(sampled);
+    }
+
     public FileResourceResponse reparse(String resourceId) {
         var resource = get(resourceId);
         var versionId = jdbc.sql("select id from file_version where resource_id = :id and version_number = :version")

@@ -166,8 +166,19 @@ public class WorkerClient {
 
     static String workerError(int statusCode, String body) {
         try {
-            var detail = OBJECT_MAPPER.readTree(body).path("detail").asText("");
-            if (!detail.isBlank()) return detail;
+            var detail = OBJECT_MAPPER.readTree(body).path("detail");
+            if (detail.isTextual() && !detail.asText().isBlank()) return detail.asText();
+            if (detail.isArray()) {
+                var messages = new java.util.ArrayList<String>();
+                detail.forEach(item -> {
+                    var message = item.path("msg").asText("").trim();
+                    var location = item.path("loc");
+                    var field = location.isArray() && !location.isEmpty()
+                            ? location.get(location.size() - 1).asText("") : "";
+                    if (!message.isBlank()) messages.add(field.isBlank() ? message : field + "：" + message);
+                });
+                if (!messages.isEmpty()) return "Worker 参数校验失败（" + String.join("；", messages) + "）";
+            }
         } catch (Exception ignored) {
             // Fall through to a compact transport error when the worker did not return JSON.
         }
@@ -201,6 +212,9 @@ public class WorkerClient {
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(Map.of("format", format, "requirements", requirements, "source_text", sourceText))
                 .retrieve()
+                .onStatus(status -> status.isError(), response -> response.bodyToMono(String.class)
+                        .defaultIfEmpty("")
+                        .map(body -> new IllegalStateException(workerError(response.statusCode().value(), body))))
                 .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {})
                 .timeout(Duration.ofMinutes(5))
                 .block();
@@ -217,6 +231,9 @@ public class WorkerClient {
                 .accept(MediaType.APPLICATION_NDJSON)
                 .bodyValue(Map.of("format", format, "requirements", requirements, "source_text", sourceText))
                 .retrieve()
+                .onStatus(status -> status.isError(), response -> response.bodyToMono(String.class)
+                        .defaultIfEmpty("")
+                        .map(body -> new IllegalStateException(workerError(response.statusCode().value(), body))))
                 .bodyToFlux(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {})
                 .doOnNext(event -> {
                     eventConsumer.accept(event);
