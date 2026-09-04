@@ -206,12 +206,13 @@ class AssistantFlowTest {
                 .filter(node -> node.type() == NodeType.DELIVERABLE)
                 .toList();
         assertThat(outputNodes).hasSize(2);
-        assertThat(outputNodes).allSatisfy(node ->
-                assertThat(node.config()).containsOnlyKeys("generationPrompt"));
+        assertThat(outputNodes).allSatisfy(node -> assertThat(node.config())
+                .containsKeys("generationPrompt", "format", "title", "includeCitations", "citationStyle", "pptSkill")
+                .containsEntry("includeCitations", true)
+                .containsEntry("citationStyle", "IEEE"));
         assertThat(outputNodes.stream()
-                .map(node -> node.config().get("generationPrompt").toString()))
-                .anySatisfy(prompt -> assertThat(prompt).contains("输出形式：PPTX"))
-                .anySatisfy(prompt -> assertThat(prompt).contains("输出形式：HTML_SLIDES"));
+                .map(node -> node.config().get("format").toString()))
+                .containsExactlyInAnyOrder("PPTX", "HTML_SLIDES");
 
         var disposable = workflows.create(project.id(), new SaveRequest(
                 "待删除工作流", "验证 Agent 删除工具", List.of(), List.of()));

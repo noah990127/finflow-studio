@@ -1139,7 +1139,17 @@ public class AssistantExecutionService {
             var id = "output_" + shortId();
             var config = new LinkedHashMap<String, Object>();
             var requirement = goal.isBlank() ? "根据上游内容生成结构清晰、可编辑的成果。" : goal;
-            config.put("generationPrompt", requirement + "\n输出形式：" + format);
+            config.put("generationPrompt", requirement);
+            config.put("format", format);
+            config.put("title", topic.isBlank() ? outputLabel(format) : topic + " - " + outputLabel(format));
+            config.put("subtitle", "由 Agent 基于工作流生成");
+            config.put("heading", "核心发现");
+            config.put("targetAudience", "业务负责人");
+            config.put("lengthHint", "适中");
+            config.put("includeCitations", true);
+            config.put("citationStyle", "IEEE");
+            config.put("pptSkill", "PPTX".equals(format) ? "guizang-huawei-style-c"
+                    : "HTML_SLIDES".equals(format) ? "frontend-slides" : "");
             nodes.add(new NodeDefinition(id, NodeType.DELIVERABLE, outputLabel(format), 900, 100 + index * 180, config));
             if (upstreamId != null) edges.add(new EdgeDefinition("edge_" + shortId(), upstreamId, id));
         }

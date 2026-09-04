@@ -53,6 +53,20 @@ class WorkflowTextAssemblyTest {
     }
 
     @Test
+    void preservesExplicitDeliverableTypeCitationAndSkillChoices() {
+        var plan = deliverables.configuredPlan(Map.of(
+                "format", "PPTX", "title", "经营复盘", "heading", "核心结论",
+                "pptSkill", "guizang-huawei-style-c", "includeCitations", true,
+                "citationStyle", "GB_T_7714"));
+
+        assertThat(plan).containsEntry("format", "PPTX")
+                .containsEntry("title", "经营复盘")
+                .containsEntry("ppt_skill", "guizang-huawei-style-c")
+                .containsEntry("include_citations", true)
+                .containsEntry("citation_style", "GB_T_7714");
+    }
+
+    @Test
     void deduplicatesReferencesAcrossConnectedNodes() {
         var reference = Map.<String, Object>of(
                 "id", "ref-1", "resourceId", "file-1", "version", 2,

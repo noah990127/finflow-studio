@@ -113,8 +113,12 @@ class WorkflowFlowTest {
                 first.currentVersion()));
         assertThat(saved.currentVersion()).isEqualTo(2);
         assertThat(saved.nodes().getFirst().config()).doesNotContainKey("maxPoints");
-        assertThat(saved.nodes().get(1).config()).containsOnlyKeys("generationPrompt")
-                .containsEntry("generationPrompt", "生成董事会汇报");
+        assertThat(saved.nodes().get(1).config())
+                .containsEntry("generationPrompt", "生成董事会汇报")
+                .containsEntry("format", "PPTX")
+                .containsEntry("title", "旧标题")
+                .containsEntry("targetAudience", "董事会")
+                .containsEntry("includeCitations", true);
 
         assertThatThrownBy(() -> definitions.saveProjectWorkflow(project.id(), new SaveRequest("旧版本", "",
                 List.of(node), List.of(), first.currentVersion())))
