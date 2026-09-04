@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
-import { AlertCircle, ArrowUp, Bot, Check, CheckCircle2, ChevronDown, ChevronRight, Circle, LoaderCircle, MessageSquarePlus, PanelRightClose, RotateCcw, ShieldCheck, Sparkles, Square, Wrench, Zap } from 'lucide-vue-next'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { Activity, AlertCircle, ArrowUp, Bot, Check, CheckCircle2, ChevronDown, ChevronRight, Circle, Clock3, LoaderCircle, MessageSquarePlus, PanelRightClose, RotateCcw, ShieldCheck, Sparkles, Square, Wrench, Zap } from 'lucide-vue-next'
 import { useAssistantStore } from '../stores/assistant'
 import type { Project } from '../api/client'
 
@@ -8,8 +8,12 @@ const props = defineProps<{ project: Project | null }>()
 const emit = defineEmits<{ workbenchAction: [action: Record<string, unknown>] }>()
 const assistant = useAssistantStore()
 const conversation = ref<HTMLElement | null>(null)
-const showSteps = ref(true)
-const showEvents = ref(true)
+const latestAnchor = ref<HTMLElement | null>(null)
+const showSteps = ref(false)
+const showEvents = ref(false)
+const now = ref(Date.now())
+let clockTimer: number | undefined
+let conversationObserver: MutationObserver | undefined
 
 const contextLabel = computed(() => assistant.selection?.range.join('、') || assistant.contextTitle || '项目概览')
 const running = computed(() => ['QUEUED', 'RUNNING'].includes(assistant.run?.status ?? '') || assistant.streaming)
@@ -28,6 +32,23 @@ const taskState = computed(() => {
 const completedSteps = computed(() => {
   if (!assistant.plan) return 0
   return assistant.plan.steps.filter(step => step.status === 'SUCCEEDED').length
+})
+const latestActivity = computed(() => assistant.timeline.at(-1))
+const activeStep = computed(() => assistant.plan?.steps.find(step => stepState(step.order) === 'running'))
+const elapsedLabel = computed(() => {
+  const starts = [assistant.timeline[0]?.time, assistant.run?.createdAt, assistant.run?.startedAt]
+    .filter((value): value is string => Boolean(value))
+    .map(value => new Date(value).getTime())
+    .filter(value => Number.isFinite(value))
+  if (!starts.length) return '刚刚开始'
+  const started = Math.min(...starts)
+  const finished = assistant.run?.finishedAt
+  const end = finished ? new Date(finished).getTime() : now.value
+  const seconds = Math.max(0, Math.floor((end - started) / 1000))
+  if (seconds < 60) return `已处理 ${seconds} 秒`
+  const minutes = Math.floor(seconds / 60)
+  const remainder = seconds % 60
+  return remainder ? `已处理 ${minutes} 分 ${remainder} 秒` : `已处理 ${minutes} 分钟`
 })
 function stepState(order: number) {
   const persisted = assistant.plan?.steps.find(step => step.order === order)?.status
@@ -54,9 +75,20 @@ function clock(value: string) {
 }
 async function scrollToLatest() {
   await nextTick()
-  if (conversation.value) conversation.value.scrollTop = conversation.value.scrollHeight
+  window.requestAnimationFrame(() => {
+    if (!conversation.value) return
+    conversation.value.scrollTop = conversation.value.scrollHeight
+    latestAnchor.value?.scrollIntoView({ block: 'end' })
+  })
 }
-watch(() => [assistant.timeline.length, assistant.assistantMessage, assistant.currentRequest], scrollToLatest)
+watch(() => [assistant.timeline.at(-1)?.id, assistant.timeline.at(-1)?.detail, assistant.assistantMessage,
+  assistant.currentRequest, assistant.history.length, assistant.run?.status, assistant.run?.currentStep,
+  assistant.plan?.steps.length], scrollToLatest,
+{ flush: 'post' })
+watch(() => assistant.currentRequest, () => {
+  showSteps.value = false
+  showEvents.value = false
+})
 watch(() => [assistant.open, props.project?.id] as const, ([open, projectId]) => {
   if (open && projectId) void assistant.ensureSession(projectId)
 }, { immediate: true })
@@ -66,6 +98,20 @@ watch(() => assistant.run?.status, status => {
     const action = assistant.run?.result?.uiAction
     if (action && typeof action === 'object') emit('workbenchAction', action as Record<string, unknown>)
   }
+})
+onMounted(() => {
+  clockTimer = window.setInterval(() => { now.value = Date.now() }, 1000)
+  if (conversation.value) {
+    conversationObserver = new MutationObserver(() => {
+      if (running.value || assistant.needsConfirmation) void scrollToLatest()
+    })
+    conversationObserver.observe(conversation.value, { childList: true, subtree: true, characterData: true })
+  }
+  void scrollToLatest()
+})
+onBeforeUnmount(() => {
+  if (clockTimer !== undefined) window.clearInterval(clockTimer)
+  conversationObserver?.disconnect()
 })
 </script>
 
@@ -118,7 +164,7 @@ watch(() => assistant.run?.status, status => {
         </article>
 
         <article class="assistant-agent-turn" :data-state="taskState.code">
-          <div class="assistant-turn-label"><span><Sparkles :size="13" /></span>Agent</div>
+          <div class="assistant-turn-label"><span><Sparkles :size="13" /></span>Agent <time class="assistant-elapsed"><Clock3 :size="11" />{{ elapsedLabel }}</time></div>
           <div class="assistant-run-state" aria-live="polite">
             <LoaderCircle v-if="taskState.code === 'running'" :size="15" class="assistant-spinner" />
             <CheckCircle2 v-else-if="taskState.code === 'completed'" :size="15" />
@@ -131,9 +177,19 @@ watch(() => assistant.run?.status, status => {
             <i><span :style="{ width: `${assistant.progress}%` }"></span></i><small>{{ completedSteps }}/{{ assistant.plan.steps.length }} 步</small>
           </div>
 
+          <section v-if="running || assistant.needsConfirmation" class="assistant-current-activity" aria-live="polite" aria-atomic="true">
+            <header><span><Activity :size="13" />当前进展</span><small>{{ elapsedLabel }}</small></header>
+            <strong>{{ latestActivity?.title || activeStep?.title || taskState.label }}</strong>
+            <p>{{ latestActivity?.detail || activeStep?.description || taskState.detail }}</p>
+            <small v-if="latestActivity?.toolName">{{ latestActivity.toolName }}<template v-if="latestActivity.argumentSummary"> · {{ latestActivity.argumentSummary }}</template></small>
+          </section>
+
+          <p v-if="assistant.assistantMessage && assistant.run?.status === 'SUCCEEDED'" class="assistant-final-answer">{{ assistant.assistantMessage }}</p>
+          <p v-if="assistant.error" class="assistant-error">{{ assistant.error }}</p>
+
           <section v-if="assistant.plan" class="assistant-tool-group">
             <button type="button" @click="showSteps = !showSteps">
-              <span><Wrench :size="14" /><strong>工作过程</strong><small>{{ showSteps ? '从上到下执行' : `${completedSteps}/${assistant.plan.steps.length} 已完成` }}</small></span>
+              <span><Wrench :size="14" /><strong>执行步骤</strong><small>{{ completedSteps }}/{{ assistant.plan.steps.length }} 已完成</small></span>
               <ChevronDown v-if="showSteps" :size="15" /><ChevronRight v-else :size="15" />
             </button>
             <div v-if="showSteps" class="assistant-tool-list">
@@ -154,11 +210,8 @@ watch(() => assistant.run?.status, status => {
             <button class="primary-button" type="button" :disabled="assistant.busy" @click="assistant.confirm">确认执行</button>
           </div>
 
-          <p v-if="assistant.assistantMessage && assistant.run?.status === 'SUCCEEDED'" class="assistant-final-answer">{{ assistant.assistantMessage }}</p>
-          <p v-if="assistant.error" class="assistant-error">{{ assistant.error }}</p>
-
           <details v-if="assistant.timeline.length" class="assistant-event-details assistant-activity-stream" :open="showEvents" @toggle="showEvents = ($event.target as HTMLDetailsElement).open">
-            <summary>Agent 活动 · {{ assistant.timeline.length }} 条</summary>
+            <summary>详细活动 · {{ assistant.timeline.length }} 条</summary>
             <div>
               <article v-for="item in assistant.timeline" :key="item.id" class="assistant-activity-item" :data-tone="item.tone">
                 <time>{{ clock(item.time) }}</time>
@@ -179,6 +232,7 @@ watch(() => assistant.run?.status, status => {
           </div>
         </article>
       </template>
+      <div ref="latestAnchor" class="assistant-latest-anchor" aria-hidden="true"></div>
     </div>
 
     <footer class="assistant-composer">
