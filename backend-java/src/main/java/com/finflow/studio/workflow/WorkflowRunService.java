@@ -904,10 +904,20 @@ public class WorkflowRunService {
         var url = text(config, "url");
         var title = optional(config, "title", node.name());
         var id = "link:" + UUID.nameUUIDFromBytes(url.getBytes(StandardCharsets.UTF_8));
+        var sourceText = "网页资料：" + title;
+        var contentHash = UUID.nameUUIDFromBytes(url.getBytes(StandardCharsets.UTF_8)).toString();
+        try {
+            var fetched = worker.fetchResearchSource(url);
+            sourceText = Objects.toString(fetched.get("text"), sourceText);
+            contentHash = Objects.toString(fetched.get("content_hash"), contentHash);
+            title = Objects.toString(fetched.get("title"), title);
+        } catch (RuntimeException ignored) {
+            sourceText += "（正文读取失败，仅保留来源定位）";
+        }
         var ref = Map.<String, Object>of("id", id, "resourceId", "", "version", 0,
-                "sourceName", title, "text", "网页资料：" + title,
-                "location", Map.of("url", url), "contentHash", UUID.nameUUIDFromBytes(url.getBytes(StandardCharsets.UTF_8)).toString());
-        return Map.of("url", url, "title", title, "refs", List.of(ref), "refIds", List.of(id));
+                "sourceName", title, "text", sourceText,
+                "location", Map.of("url", url), "contentHash", contentHash);
+        return Map.of("url", url, "title", title, "text", sourceText, "refs", List.of(ref), "refIds", List.of(id));
     }
 
     private Map<String, Object> refMap(com.finflow.studio.knowledge.KnowledgeModels.RefResponse ref) {

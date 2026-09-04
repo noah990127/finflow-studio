@@ -1,3 +1,5 @@
+import json
+
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -61,16 +63,39 @@ def test_dataset_profile_reports_nulls() -> None:
     assert response.json()["columns"][0]["null_count"] == 1
 
 
-def test_generate_content_fails_clearly_without_model(monkeypatch) -> None:
+def test_generate_content_falls_back_without_model(monkeypatch) -> None:
     from app.config import settings
     monkeypatch.setattr(settings, "llm_provider", "disabled")
     response = client.post(
         "/v1/knowledge/generate",
-        json={"format": "MERMAID", "requirements": "从左到右", "source_text": "从收入数据得到分析结论"},
+        json={"format": "PPTX", "requirements": "生成12页中文管理层汇报", "source_text": "收入增长来自云业务。[1]\n经营现金流保持稳定。[2]"},
     )
 
-    assert response.status_code == 503
-    assert "大模型尚未配置" in response.json()["detail"]
+    assert response.status_code == 200
+    assert response.json()["mode"] == "local-extractive-fallback"
+    assert len(json.loads(response.json()["content"])["slides"]) == 12
+
+
+def test_stream_generate_content_falls_back_without_model(monkeypatch) -> None:
+    from app.config import settings
+    monkeypatch.setattr(settings, "llm_provider", "disabled")
+
+    response = client.post(
+        "/v1/knowledge/generate/stream",
+        json={"format": "HTML", "requirements": "生成经营分析", "source_text": "收入增长来自云业务。[1]"},
+    )
+
+    assert response.status_code == 200
+    events = [json.loads(line) for line in response.text.splitlines()]
+    assert events[-1]["type"] == "complete"
+    assert events[-1]["mode"] == "local-extractive-fallback"
+    assert events[-1]["content"] == "收入增长来自云业务。"
+
+
+def test_research_fetch_rejects_private_network_urls() -> None:
+    response = client.post("/v1/research/fetch", json={"url": "http://127.0.0.1:8080/private"})
+
+    assert response.status_code == 422
 
 
 def test_financial_report_requests_structured_sections_and_charts() -> None:

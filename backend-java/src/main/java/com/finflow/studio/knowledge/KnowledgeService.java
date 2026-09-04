@@ -252,6 +252,20 @@ public class KnowledgeService {
                         rs.getString("content_hash"), 1.0)).list();
     }
 
+    public FileResourceResponse reparse(String resourceId) {
+        var resource = get(resourceId);
+        var versionId = jdbc.sql("select id from file_version where resource_id = :id and version_number = :version")
+                .param("id", resourceId).param("version", resource.currentVersion())
+                .query(String.class).optional()
+                .orElseThrow(() -> new IllegalArgumentException("文件版本不存在"));
+        jdbc.sql("update file_version set parse_status = 'QUEUED', parse_message = '' where id = :id")
+                .param("id", versionId).update();
+        jdbc.sql("update file_resource set status = 'PROCESSING', updated_at = :now where id = :id")
+                .param("now", Instant.now()).param("id", resourceId).update();
+        scheduleParse(versionId);
+        return get(resourceId);
+    }
+
     private void parse(String versionId) {
         var version = jdbc.sql("""
                         select v.*, r.project_id from file_version v join file_resource r on r.id = v.resource_id

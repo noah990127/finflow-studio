@@ -76,6 +76,32 @@ class AssistantPlannerTest {
     }
 
     @Test
+    void fallbackRunsResearchAnalysisAndAllRequestedOutputsEndToEnd() {
+        var unavailableWorker = new WorkerClient("http://127.0.0.1:9") {
+            @Override
+            public Map<String, Object> planAgent(Object request) {
+                throw new IllegalStateException("model unavailable");
+            }
+        };
+        var planner = new AssistantPlanner(unavailableWorker);
+
+        var work = planner.plan("搜索2026年头部科技公司战略和经营状况，分析后输出PPT和HTML",
+                "project-home", null,
+                new AssistantPlanner.WorkspaceContext("project-1", "研究项目", 0, 0, 0,
+                        false, null, null, null, List.of(), List.of()));
+
+        assertThat(work.steps()).extracting(AssistantModels.PlanStep::tool).containsExactly(
+                "workspace.inspect",
+                "knowledge.discover_external_sources",
+                "knowledge.add",
+                "workflow.prepare",
+                "workflow.run"
+        );
+        assertThat(work.steps().get(3).arguments().get("output_formats"))
+                .isEqualTo(List.of("PPTX", "HTML_SLIDES"));
+    }
+
+    @Test
     void doesNotInventAReportForAGenericRequestWithoutData() {
         var planner = new AssistantPlanner(new WorkerClient("http://127.0.0.1:9"));
 
@@ -84,6 +110,36 @@ class AssistantPlannerTest {
         assertThat(work.steps()).extracting(AssistantModels.PlanStep::tool)
                 .containsExactly("workspace.inspect", "assistant.respond");
         assertThat(work.steps()).noneMatch(step -> step.tool().contains("output") || step.tool().contains("deliverable"));
+    }
+
+    @Test
+    void agentResearchPlanCannotBypassEvidenceIndexAndWorkflow() {
+        var worker = new WorkerClient("http://127.0.0.1:9") {
+            @Override
+            public Map<String, Object> planAgent(Object request) {
+                return Map.of("summary", "research", "steps", List.of(
+                        Map.of("tool", "knowledge.discover_external_sources", "title", "search",
+                                "description", "search", "arguments", Map.of("topic", "tech")),
+                        Map.of("tool", "assistant.analyze_context", "title", "analyze",
+                                "description", "analyze", "arguments", Map.of()),
+                        Map.of("tool", "deliverable.create", "title", "ppt",
+                                "description", "12-slide PPTX", "arguments", Map.of("format", "PPTX")),
+                        Map.of("tool", "deliverable.create", "title", "html",
+                                "description", "HTML report", "arguments", Map.of("format", "HTML"))));
+            }
+        };
+        var planner = new AssistantPlanner(worker);
+
+        var work = planner.plan("Research latest results, analyze them and create a 12-slide PPTX and HTML report",
+                "project-home", null,
+                new AssistantPlanner.WorkspaceContext("project-1", "Research", 0, 0, 0,
+                        false, null, null, null, List.of(), List.of()));
+
+        assertThat(work.steps()).extracting(AssistantModels.PlanStep::tool).containsExactly(
+                "workspace.inspect", "knowledge.discover_external_sources", "knowledge.add",
+                "workflow.prepare", "workflow.run");
+        assertThat(work.steps()).extracting(AssistantModels.PlanStep::tool)
+                .doesNotContain("deliverable.create", "assistant.analyze_context");
     }
 
     @Test

@@ -38,6 +38,8 @@ public class AssistantPlanner {
         var normalized = text.toLowerCase(Locale.ROOT);
         var steps = new ArrayList<PlanStep>();
         var resourceId = selection == null ? null : selection.resourceId();
+        var formats = requestedFormats(normalized);
+        var researchDelivery = asksForSources(normalized) && asksForAnalysis(normalized) && !formats.isEmpty();
 
         steps.add(step(1, "workspace.inspect", "READ", "了解当前工作",
                 contextDescription(page, context), RiskLevel.READ_ONLY,
@@ -56,7 +58,6 @@ public class AssistantPlanner {
             var projectName = projectName(topic);
             var discoverSources = asksForSources(normalized) || asksForAnalysis(normalized);
             var createWorkflow = asksForWorkflow(normalized) || asksForAnalysis(normalized) || discoverSources;
-            var formats = requestedFormats(normalized);
             steps.add(step(steps.size() + 1, "project.create_workspace", "WRITE", "创建项目",
                     "新建“" + projectName + "”个人项目", RiskLevel.CREATE_VERSION,
                     Map.of("project_name", projectName, "topic", topic,
@@ -99,16 +100,28 @@ public class AssistantPlanner {
             steps.add(step(steps.size() + 1, "knowledge.discover_external_sources", "READ", "查找相关资料",
                     "按当前主题查找公开资料入口，并保留来源", RiskLevel.READ_ONLY,
                     Map.of("topic", inferProjectTopic(text), "max_sources", 12)));
+            if (researchDelivery) {
+                steps.add(step(steps.size() + 1, "knowledge.add", "WRITE", "保存研究证据",
+                        "把检索到的资料入口和来源信息保存到当前项目", RiskLevel.CREATE_VERSION,
+                        mapOf("project_id", context.projectId(), "name", "Agent 研究资料索引.md")));
+            }
         }
 
-        if (asksForAnalysis(normalized) && !asksToModifyData(normalized)) {
+        if (asksForAnalysis(normalized) && !asksToModifyData(normalized) && !researchDelivery) {
             steps.add(step(steps.size() + 1, "assistant.analyze_context", "READ", "分析相关内容",
                     resourceId == null ? "从当前项目已有内容中提取与问题相关的信息" : "读取并分析当前选中的内容",
                     RiskLevel.READ_ONLY, mapOf("project_id", context.projectId(), "resource_id", resourceId,
                             "resource_name", context.selectedResourceName(), "goal", text)));
         }
 
-        if (asksForWorkflow(normalized)) {
+        if (researchDelivery) {
+            steps.add(step(steps.size() + 1, "workflow.prepare", "WRITE", "创建研究分析工作流",
+                    "建立从证据读取、分析到多格式成果生成的可审计工作流", RiskLevel.CREATE_VERSION,
+                    mapOf("project_id", context.projectId(), "goal", text, "output_formats", formats)));
+            steps.add(step(steps.size() + 1, "workflow.run", "WRITE", "执行分析并生成成果",
+                    "运行研究工作流并生成用户要求的全部成果", RiskLevel.CREATE_VERSION,
+                    mapOf("project_id", context.projectId())));
+        } else if (asksForWorkflow(normalized)) {
             steps.add(step(steps.size() + 1, "workflow.prepare", "WRITE", "创建工作流",
                     "在当前项目中新建一条可继续编排的工作流", RiskLevel.CREATE_VERSION,
                     mapOf("project_id", context.projectId(), "goal", text, "resource_id", resourceId,
@@ -121,8 +134,7 @@ public class AssistantPlanner {
                             "resource_type", context.selectedResourceType(), "resource_name", context.selectedResourceName())));
         }
 
-        var formats = requestedFormats(normalized);
-        if (!formats.isEmpty() && !asksForWorkflow(normalized)) {
+        if (!formats.isEmpty() && !asksForWorkflow(normalized) && !researchDelivery) {
             steps.add(step(steps.size() + 1, "workflow.add_outputs", "WRITE", "配置输出成果",
                     "在当前工作流中加入用户明确指定的输出类型", RiskLevel.CREATE_VERSION,
                     mapOf("project_id", context.projectId(), "goal", text, "output_formats", formats,
@@ -186,11 +198,55 @@ public class AssistantPlanner {
                             current.description(), current.arguments(), current.risk(), current.requiresConfirmation(), current.status()));
                 }
             }
+            if (isResearchDelivery(goal)) {
+                steps = enforceResearchDeliveryPipeline(goal, page, context, steps);
+            }
             var summary = readable(response.get("summary"), modelSummary(goal, steps, context), 240);
             return new PlannedWork(summary, List.copyOf(steps));
         } catch (RuntimeException exception) {
             return null;
         }
+    }
+
+    private boolean isResearchDelivery(String goal) {
+        var text = goal == null ? "" : goal.toLowerCase(Locale.ROOT);
+        return asksForSources(text) && asksForAnalysis(text) && !requestedFormats(text).isEmpty();
+    }
+
+    private ArrayList<PlanStep> enforceResearchDeliveryPipeline(String goal, String page,
+                                                                 WorkspaceContext context,
+                                                                 List<PlanStep> proposed) {
+        var formats = requestedFormats(goal == null ? "" : goal.toLowerCase(Locale.ROOT));
+        var steps = new ArrayList<PlanStep>();
+        proposed.stream()
+                .filter(item -> !List.of("knowledge.add", "assistant.analyze_context", "workflow.initialize",
+                        "workflow.prepare", "workflow.add_outputs", "workflow.run", "deliverable.create")
+                        .contains(item.tool()))
+                .limit(6)
+                .forEach(steps::add);
+        if (steps.stream().noneMatch(item -> "knowledge.discover_external_sources".equals(item.tool()))) {
+            steps.add(step(steps.size() + 1, "knowledge.discover_external_sources", "READ", "检索权威公开资料",
+                    "优先查找官网、监管披露、财报和投资者材料，并保留来源定位。", RiskLevel.READ_ONLY,
+                    mapOf("topic", inferProjectTopic(goal), "max_sources", 20, "project_id", context.projectId(),
+                            "page", page, "goal", goal)));
+        }
+        steps.add(step(steps.size() + 1, "knowledge.add", "WRITE", "保存研究资料索引",
+                "把本次采用的资料、URL、用途和核验状态写入当前项目，作为可追溯输入。",
+                RiskLevel.CREATE_VERSION, mapOf("project_id", context.projectId(), "name", "Agent 研究资料索引.md")));
+        steps.add(step(steps.size() + 1, "workflow.prepare", "WRITE", "创建可审计研究工作流",
+                "建立从资料读取、证据核验、比较分析到多格式成果的可见工作流。",
+                RiskLevel.CREATE_VERSION, mapOf("project_id", context.projectId(), "goal", goal,
+                        "output_formats", formats)));
+        steps.add(step(steps.size() + 1, "workflow.run", "WRITE", "执行工作流并生成成果",
+                "运行刚创建的研究工作流，成果中保留资料来源和版本关系。",
+                RiskLevel.CREATE_VERSION, mapOf("project_id", context.projectId(), "goal", goal,
+                        "output_formats", formats)));
+        for (var index = 0; index < steps.size(); index++) {
+            var current = steps.get(index);
+            steps.set(index, new PlanStep(current.id(), index + 1, current.tool(), current.mode(), current.title(),
+                    current.description(), current.arguments(), current.risk(), current.requiresConfirmation(), current.status()));
+        }
+        return steps;
     }
 
     private void enrichArguments(Map<String, Object> arguments, String goal, String page, WorkspaceContext context) {
@@ -242,10 +298,10 @@ public class AssistantPlanner {
     private boolean isCreateProjectIntent(String text) { return containsAny(text, "新建", "新增", "创建") && text.contains("项目"); }
     private boolean asksForWorkflow(String text) { return text.contains("工作流") && containsAny(text, "新建", "新增", "创建", "搭建", "编排", "建立"); }
     private boolean asksToAddSelectionToWorkflow(String text) { return text.contains("工作流") && containsAny(text, "加入", "添加", "放进", "拖进"); }
-    private boolean asksForAnalysis(String text) { return containsAny(text, "分析", "总结", "归因", "洞察", "复盘", "研究", "对比"); }
+    private boolean asksForAnalysis(String text) { return containsAny(text, "分析", "总结", "归因", "洞察", "复盘", "研究", "对比", "analyze", "analysis", "research", "compare", "summary"); }
     private boolean asksForDataWork(String text) { return containsAny(text, "数据", "字段", "清理", "整理", "异常", "表格", "excel", "csv", "关联", "合并", "计算"); }
     private boolean asksToModifyData(String text) { return containsAny(text, "清理", "整理", "加工", "关联", "合并", "计算", "转换", "去重", "补全"); }
-    private boolean asksForSources(String text) { return containsAny(text, "找资料", "查资料", "搜集资料", "收集资料", "搜索资料", "联网", "公开资料", "参考资料", "信息来源"); }
+    private boolean asksForSources(String text) { return containsAny(text, "搜索", "检索", "查找", "找资料", "查资料", "搜集资料", "收集资料", "联网", "公开资料", "参考资料", "信息来源", "search", "research", "find sources", "latest results"); }
 
     private boolean isDirectNavigation(String text, WorkspaceContext context) {
         return navigationTarget(text, context) != null
@@ -278,7 +334,7 @@ public class AssistantPlanner {
         if (text.contains("pdf")) formats.add("PDF");
         if (text.contains("mermaid")) formats.add("MERMAID");
         if (containsAny(text, "excalidraw", "手绘图")) formats.add("EXCALIDRAW");
-        if (containsAny(text, "html幻灯", "网页幻灯", "html slides")) formats.add("HTML_SLIDES");
+        if (containsAny(text, "html", "网页幻灯", "网页分析", "网页报告", "html slides")) formats.add("HTML_SLIDES");
         if (containsAny(text, "交互报告", "可交互报告", "图表报告", "财务报告")) formats.add("FINANCIAL_REPORT");
         return formats.stream().distinct().toList();
     }

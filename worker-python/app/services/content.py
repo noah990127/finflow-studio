@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import math
 import re
@@ -26,6 +27,58 @@ SENTENCE_PATTERN = re.compile(r"(?<=[。！？.!?])\s*")
 logger = logging.getLogger(__name__)
 MAX_GENERATION_SOURCE_CHARS = 24_000
 MAX_GENERATION_REQUIREMENTS_CHARS = 6_000
+
+
+def _requested_slide_count(requirements: str) -> int:
+    range_match = re.search(
+        r"(\d{1,2})\s*(?:-|~|〜|–|—|至|到)\s*(\d{1,2})\s*(?:页|屏|slides?)",
+        requirements,
+        flags=re.IGNORECASE,
+    )
+    if range_match:
+        return max(6, min(max(int(range_match.group(1)), int(range_match.group(2))), 16))
+    exact_match = re.search(r"(?<!\d)(\d{1,2})\s*(?:页|屏|slides?)", requirements, flags=re.IGNORECASE)
+    return max(6, min(int(exact_match.group(1)), 16)) if exact_match else 8
+
+
+def _fallback_generated_content(request: GenerateContentRequest) -> str:
+    lines = [part.strip(" \t\r\n-*#") for part in re.split(r"\n+|(?<=[。！？.!?])\s*", request.source_text)]
+    evidence = [line for line in lines if len(line) >= 6]
+    if not evidence:
+        evidence = [request.source_text.strip() or "当前没有足够的可引用内容，需补充资料后更新。"]
+
+    output_format = request.format.strip().upper()
+    if output_format in {"MERMAID", "EXCALIDRAW"}:
+        labels = [re.sub(r"[^\w\u4e00-\u9fff ]", "", item)[:28] or "分析步骤" for item in evidence[:6]]
+        return "flowchart LR\n" + "\n".join(
+            f'  N{index}["{label}"]' + (f" --> N{index + 1}" if index < len(labels) else "")
+            for index, label in enumerate(labels, start=1)
+        )
+
+    if output_format not in {"PPTX", "HTML_SLIDES", "DOCX", "PDF", "FINANCIAL_REPORT"}:
+        return "\n".join(evidence[:20])
+
+    is_slides = output_format in {"PPTX", "HTML_SLIDES"}
+    count = _requested_slide_count(request.requirements) if is_slides else min(10, max(6, len(evidence)))
+    section_titles = [
+        "执行摘要", "研究范围与口径", "战略方向概览", "最新经营表现", "增长驱动",
+        "投入与资源配置", "竞争格局", "风险与不确定性", "横向比较", "管理启示",
+        "行动建议", "来源与后续更新",
+    ]
+    items = []
+    for index in range(count):
+        selected = [evidence[(index * 3 + offset) % len(evidence)] for offset in range(3)]
+        item = {
+            "summary": selected[0][:64],
+            "bullets": [value[:56] for value in selected],
+            "chart": None,
+        }
+        item["title" if is_slides else "heading"] = section_titles[index % len(section_titles)]
+        items.append(item)
+    payload: dict[str, object] = {"slides" if is_slides else "sections": items}
+    if is_slides:
+        payload["total_slides"] = count
+    return json.dumps(payload, ensure_ascii=False)
 
 
 def _slide_count_instruction(requirements: str) -> str:
@@ -115,7 +168,8 @@ def _generation_prompt(request: GenerateContentRequest) -> tuple[str, str]:
         system = (
             "你是 FinBTP Studio 的通用业务成果设计助手。只返回一个合法 JSON 对象，不要使用 Markdown 代码块或附加解释。"
             f"JSON 顶层字段必须为 {container}，每项包含 {item_title}、summary、bullets、chart。"
-            "chart 可以为 null；有连续期间、分类对比或构成数据时必须生成图表，格式为："
+            + ("如果用户要求确切总页数，JSON 顶层还必须包含 total_slides，值为最终文件总页数（含封面和参考文献）。" if is_slides else "")
+            + "chart 可以为 null；有连续期间、分类对比或构成数据时必须生成图表，格式为："
             '{"type":"bar|line|pie","title":"图表标题","categories":["分类"],'
             '"series":[{"name":"指标及单位","values":[1.0]}],"source_ref":"[Ref 1]"}。'
             "趋势用 line、分类比较用 bar、同一总体的构成用 pie；categories 与每个 series.values 长度必须相同。"
@@ -150,20 +204,23 @@ def _generation_prompt(request: GenerateContentRequest) -> tuple[str, str]:
 async def generate_content(request: GenerateContentRequest) -> GenerateContentResponse:
     system, user = _generation_prompt(request)
     if not llm.configured:
-        raise RuntimeError("大模型尚未配置，无法按生成要求制作成果")
+        return GenerateContentResponse(content=_fallback_generated_content(request), mode="local-extractive-fallback")
     try:
         content = await llm.complete(system, user)
     except Exception as exception:
-        logger.exception("LLM deliverable generation failed")
-        raise RuntimeError("大模型生成失败：%s" % str(exception)) from exception
+        logger.warning("LLM deliverable generation failed; using local fallback (%s)", type(exception).__name__)
+        return GenerateContentResponse(content=_fallback_generated_content(request), mode="local-extractive-fallback")
     if not content or not content.strip():
-        raise RuntimeError("大模型没有返回可用内容")
+        return GenerateContentResponse(content=_fallback_generated_content(request), mode="local-extractive-fallback")
     return GenerateContentResponse(content=content.strip(), mode=llm.provider)
 
 
 async def generate_content_stream(request: GenerateContentRequest) -> AsyncIterator[dict[str, object]]:
     if not llm.configured:
-        raise RuntimeError("大模型尚未配置，无法按生成要求制作成果")
+        fallback = _fallback_generated_content(request)
+        yield {"type": "status", "message": "模型不可用，正在使用本地可交付模式", "progress": 72}
+        yield {"type": "complete", "content": fallback, "mode": "local-extractive-fallback", "progress": 94}
+        return
     system, user = _generation_prompt(request)
     yield {"type": "status", "message": "正在连接大模型", "progress": 42}
     task = asyncio.create_task(llm.complete(system, user))
@@ -195,8 +252,10 @@ async def generate_content_stream(request: GenerateContentRequest) -> AsyncItera
             await asyncio.sleep(0.025)
         yield {"type": "complete", "content": clean, "mode": llm.provider, "progress": 94}
     except Exception as exception:
-        logger.exception("Streaming LLM deliverable generation failed")
-        yield {"type": "error", "message": "大模型生成失败：%s" % str(exception), "progress": 0}
+        logger.warning("Streaming LLM deliverable generation failed; using local fallback (%s)", type(exception).__name__)
+        fallback = _fallback_generated_content(request)
+        yield {"type": "status", "message": "模型不可用，正在使用本地可交付模式", "progress": 78}
+        yield {"type": "complete", "content": fallback, "mode": "local-extractive-fallback", "progress": 94}
 
 
 def search(request: SearchRequest) -> List[SearchHit]:

@@ -588,11 +588,29 @@ def _content_points(section: DeliverableSection) -> List[str]:
 
 def _normalize_ppt_request(request: DeliverableRequest) -> DeliverableRequest:
     normalized: List[DeliverableSection] = []
+    target_slide_count: Optional[int] = None
     for section in request.sections:
         generated = normalize_markers("\n".join(section.paragraphs).strip(), request)
+        target_slide_count = target_slide_count or _json_target_slide_count(generated)
         slides = _json_ppt_sections(generated, section, request) or _labeled_ppt_sections(generated, section)
         normalized.extend(slides or [section])
-    return request.model_copy(update={"sections": normalized}, deep=True)
+    result = request.model_copy(update={"sections": normalized}, deep=True)
+    if target_slide_count is not None and normalized:
+        reference_pages = math.ceil(len(reference_entries(result)) / 7)
+        content_pages = max(1, target_slide_count - 1 - reference_pages)
+        result = result.model_copy(update={"sections": normalized[:content_pages]}, deep=True)
+    return result
+
+
+def _json_target_slide_count(value: str) -> Optional[int]:
+    candidate = re.sub(r"^```(?:json)?\s*", "", value.strip(), flags=re.IGNORECASE)
+    candidate = re.sub(r"\s*```$", "", candidate)
+    try:
+        payload = json.loads(candidate)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    count = payload.get("total_slides") if isinstance(payload, dict) else None
+    return max(2, min(int(count), 18)) if isinstance(count, int) else None
 
 
 def _normalize_document_request(request: DeliverableRequest) -> DeliverableRequest:

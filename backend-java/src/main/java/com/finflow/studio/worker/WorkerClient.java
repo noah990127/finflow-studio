@@ -132,6 +132,18 @@ public class WorkerClient {
         return result;
     }
 
+    public Map<String, Object> fetchResearchSource(String url) {
+        var result = client.post().uri("/v1/research/fetch")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("url", url, "domain_allowlist", List.of()))
+                .retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {})
+                .timeout(Duration.ofSeconds(40))
+                .block();
+        if (result == null) throw new IllegalStateException("网页资料没有返回内容");
+        return result;
+    }
+
     public Map<String, Object> planAgent(Object request) {
         var result = client.post().uri("/v1/agent/plan")
                 .contentType(MediaType.APPLICATION_JSON)

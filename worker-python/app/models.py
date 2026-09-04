@@ -99,6 +99,11 @@ class ResearchResponse(BaseModel):
     mode: str
 
 
+class ResearchFetchRequest(BaseModel):
+    url: str = Field(min_length=8, max_length=2_000)
+    domain_allowlist: List[str] = Field(default_factory=list, max_length=50)
+
+
 class ParsedChunk(BaseModel):
     index: int
     text: str

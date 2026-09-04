@@ -34,6 +34,22 @@ def test_generates_real_office_files_with_refs() -> None:
     assert "经营报告.pdf" in "\n".join(paragraph.text for paragraph in document.paragraphs)
 
 
+def test_exact_total_slide_count_includes_cover() -> None:
+    slides = [{"title": f"第{index}部分", "summary": "核心判断", "bullets": ["支撑信息"], "chart": None}
+              for index in range(1, 13)]
+    item = request().model_copy(update={
+        "include_citations": False,
+        "sections": [DeliverableSection(
+            heading="分析结果",
+            paragraphs=[json.dumps({"slides": slides, "total_slides": 12}, ensure_ascii=False)],
+        )],
+    }, deep=True)
+
+    deck = Presentation(BytesIO(create_pptx(item)))
+
+    assert len(deck.slides) == 12
+
+
 def test_generates_readable_pdf() -> None:
     pdf = create_pdf(request())
     reader = PdfReader(BytesIO(pdf))

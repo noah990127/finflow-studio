@@ -10,6 +10,7 @@ import com.finflow.studio.knowledge.KnowledgeService;
 import com.finflow.studio.project.ProjectService;
 import com.finflow.studio.worker.WorkerClient;
 import com.finflow.studio.workflow.WorkflowDefinitionService;
+import com.finflow.studio.workflow.WorkflowRunService;
 import com.finflow.studio.workflow.WorkflowModels.EdgeDefinition;
 import com.finflow.studio.workflow.WorkflowModels.ExecutionMode;
 import com.finflow.studio.workflow.WorkflowModels.NodeDefinition;
@@ -28,9 +29,11 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.Set;
 import tools.jackson.core.JacksonException;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
@@ -48,13 +51,16 @@ public class AssistantExecutionService {
     private final WorkspaceResourceService workspace;
     private final KnowledgeService knowledge;
     private final DeliverableService deliverables;
+    private final WorkflowRunService workflowRuns;
+    private final AssistantWorkspaceToolGateway workspaceTools;
 
     public AssistantExecutionService(JdbcClient jdbc, AssistantEventService events,
                                      @Qualifier("applicationTaskExecutor") TaskExecutor taskExecutor,
                                      ProjectService projects, WorkflowDefinitionService workflows,
                                      WorkerClient worker, ObjectMapper objectMapper,
                                      WorkspaceResourceService workspace, KnowledgeService knowledge,
-                                     DeliverableService deliverables) {
+                                     DeliverableService deliverables, WorkflowRunService workflowRuns,
+                                     AssistantWorkspaceToolGateway workspaceTools) {
         this.jdbc = jdbc;
         this.events = events;
         this.taskExecutor = taskExecutor;
@@ -65,6 +71,8 @@ public class AssistantExecutionService {
         this.workspace = workspace;
         this.knowledge = knowledge;
         this.deliverables = deliverables;
+        this.workflowRuns = workflowRuns;
+        this.workspaceTools = workspaceTools;
     }
 
     public RunResponse start(String sessionId, String planId, String idempotencyKey) {
@@ -290,10 +298,20 @@ public class AssistantExecutionService {
             case "workflow.add_selected_resource" -> addSelectedResource(step, effects);
             case "workflow.add_data_transform" -> addDataTransform(step, effects);
             case "workflow.add_outputs" -> addOutputs(step, effects);
-            case "dataset.profile" -> "已确认结构化数据可用于后续处理";
+            case "workflow.run" -> runWorkflow(step, effects);
             case "deliverable.create" -> createDeliverable(step, effects);
-            default -> throw new IllegalArgumentException("当前版本尚不支持这个工作台动作：" + step.tool());
+            default -> workspaceTools.execute(step, effects);
         };
+    }
+
+    static Set<String> supportedTools() {
+        var tools = new java.util.LinkedHashSet<>(AssistantWorkspaceToolGateway.supportedTools());
+        tools.addAll(Set.of(
+                "workspace.inspect", "workspace.navigate", "assistant.respond", "assistant.analyze_context",
+                "project.create_workspace", "knowledge.discover_external_sources", "knowledge.search", "knowledge.add",
+                "workflow.initialize", "workflow.prepare", "workflow.add_selected_resource",
+                "workflow.add_data_transform", "workflow.add_outputs", "workflow.run", "deliverable.create"));
+        return Set.copyOf(tools);
     }
 
     private Map<String, Object> provenance(PlanStep step, Map<String, Object> effects) {
@@ -533,7 +551,8 @@ public class AssistantExecutionService {
         if (projectId.isBlank()) throw new IllegalStateException("当前项目不可用，无法生成交付件");
         var format = normalizeDeliverableFormat(argument(step, "format", "PPTX"));
         var title = argument(step, "title", "Agent 分析成果");
-        var goal = argument(step, "goal", "基于已核验资料总结战略规划、经营状况、风险与结论");
+        var goal = argument(step, "goal", step.description() == null || step.description().isBlank()
+                ? "基于已核验资料总结战略规划、经营状况、风险与结论" : step.description());
         var sourceText = argument(step, "content", "");
         if (sourceText.isBlank()) sourceText = researchMaterial(effects);
         if (sourceText.isBlank()) throw new IllegalStateException("没有可用于生成交付件的研究证据");
@@ -641,7 +660,7 @@ public class AssistantExecutionService {
                     Map.of("prompt", argument(step, "goal", "围绕" + topic + "进行分析，区分事实、推断和待核实信息。"))));
             edges.add(new EdgeDefinition("edge_" + shortId(), refId, analysisId));
         }
-        var formats = stringList(step.arguments().get("output_formats"));
+        var formats = requestedFormats(step);
         if (!formats.isEmpty()) addOutputNodes(nodes, edges, formats, includeAnalysis ? analysisId : null, topic, argument(step, "goal", topic));
         var created = workflows.create(projectId, new SaveRequest("主工作流", "围绕" + topic + "组织和处理项目内容",
                 nodes, edges, ExecutionMode.MANUAL, null, null));
@@ -670,6 +689,20 @@ public class AssistantExecutionService {
                 if (resourceInput != null) nodes.add(resourceInput);
             }
         }
+        if (effects.get("researchSources") instanceof List<?> sources) {
+            var sourceIndex = 0;
+            for (var value : sources) {
+                if (!(value instanceof Map<?, ?> source)) continue;
+                var url = Objects.toString(source.get("url"), "");
+                if (!url.startsWith("http://") && !url.startsWith("https://")) continue;
+                var title = Objects.toString(source.get("title"), "公开资料 " + (sourceIndex + 1));
+                nodes.add(new NodeDefinition("source_" + shortId(), NodeType.LINK_INPUT, title,
+                        70, 70 + (++sourceIndex) * 105,
+                        Map.of("title", title, "url", url,
+                                "sourceType", Objects.toString(source.get("source_type"), "网页资料"),
+                                "whyRelevant", Objects.toString(source.get("why_relevant"), ""))));
+            }
+        }
         var goal = argument(step, "goal", "整理并分析当前项目内容");
         var analysisId = "analysis_" + shortId();
         if (nodes.isEmpty()) {
@@ -681,7 +714,7 @@ public class AssistantExecutionService {
                 Map.of("prompt", goal, "externalResearch", "ON", "transparent", true)));
         nodes.stream().filter(node -> !analysisId.equals(node.id())).forEach(node ->
                 edges.add(new EdgeDefinition("edge_" + shortId(), node.id(), analysisId)));
-        var formats = stringList(step.arguments().get("output_formats"));
+        var formats = requestedFormats(step);
         addOutputNodes(nodes, edges, formats, analysisId, "工作成果", goal);
         var created = workflows.create(projectId, new SaveRequest(workflowName(step), "由 AI 助手按当前目标创建，可继续在画布中编排",
                 nodes, edges, ExecutionMode.MANUAL, null, null));
@@ -732,7 +765,22 @@ public class AssistantExecutionService {
         var current = workflows.getProjectWorkflow(projectId);
         var nodes = new ArrayList<>(current.nodes());
         var edges = new ArrayList<>(current.edges());
-        var formats = stringList(step.arguments().get("output_formats"));
+        var existingFormats = nodes.stream()
+                .filter(node -> node.type() == NodeType.DELIVERABLE || node.type() == NodeType.OUTPUT)
+                .map(NodeDefinition::config)
+                .filter(Objects::nonNull)
+                .map(config -> Objects.toString(config.get("format"), ""))
+                .filter(format -> !format.isBlank())
+                .collect(java.util.stream.Collectors.toSet());
+        var formats = requestedFormats(step).stream()
+                .filter(format -> !existingFormats.contains(format))
+                .toList();
+        if (formats.isEmpty()) {
+            effects.put("workflowId", current.id());
+            effects.put("uiAction", Map.of("type", "OPEN_WORKFLOW", "projectId", projectId,
+                    "workflowId", current.id(), "refreshWorkspace", true));
+            return "所需输出节点已经在工作流中";
+        }
         var upstream = nodes.stream().filter(node -> node.type() != NodeType.DELIVERABLE).reduce((left, right) -> right).map(NodeDefinition::id).orElse(null);
         addOutputNodes(nodes, edges, formats, upstream, "工作成果", argument(step, "goal", "根据当前项目内容生成成果"));
         workflows.update(current.id(), new SaveRequest(current.name(), current.description(), nodes, edges,
@@ -741,6 +789,80 @@ public class AssistantExecutionService {
         effects.put("uiAction", Map.of("type", "OPEN_WORKFLOW", "projectId", projectId,
                 "workflowId", current.id(), "refreshWorkspace", true));
         return "已加入 " + String.join("、", formats) + " 输出节点，可在画布中继续调整要求";
+    }
+
+    @SuppressWarnings("unchecked")
+    private String runWorkflow(PlanStep step, Map<String, Object> effects) {
+        var workflowId = argument(step, "workflow_id", Objects.toString(effects.get("workflowId"), ""));
+        if (workflowId.contains("${")) workflowId = Objects.toString(effects.get("workflowId"), "");
+        if (workflowId.isBlank()) throw new IllegalStateException("没有可运行的工作流");
+        ensureWorkflowOutputs(workflowId, step);
+        var run = workflowRuns.start(workflowId);
+        effects.put("workflowId", workflowId);
+        effects.put("workflowRunId", run.id());
+        effects.put("uiAction", Map.of("type", "OPEN_WORKFLOW", "workflowId", workflowId,
+                "runId", run.id(), "refreshWorkspace", true));
+
+        var deadline = System.nanoTime() + java.util.concurrent.TimeUnit.MINUTES.toNanos(15);
+        while (List.of("QUEUED", "RUNNING", "CANCEL_REQUESTED").contains(run.status())
+                && System.nanoTime() < deadline) {
+            try {
+                Thread.sleep(250);
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("等待工作流完成时任务被中断", exception);
+            }
+            run = workflowRuns.get(run.id());
+        }
+        effects.put("workflowRunStatus", run.status());
+        effects.put("workflowRunOutput", run.output());
+        if ("FAILED".equals(run.status())) {
+            throw new IllegalStateException("工作流执行失败：" + Objects.toString(run.errorMessage(), "未知错误"));
+        }
+        if ("CANCELED".equals(run.status()) || "REJECTED".equals(run.status())) {
+            throw new IllegalStateException("工作流未完成：" + run.status());
+        }
+        if ("WAITING_REVIEW".equals(run.status())) {
+            effects.put("waitingReview", true);
+            return "工作流已运行到人工复核节点，正在等待确认";
+        }
+        if (!"SUCCEEDED".equals(run.status())) {
+            return "工作流已启动并继续在后台执行，运行编号 " + run.id();
+        }
+
+        var outputs = effects.get("deliverables") instanceof List<?> values
+                ? new ArrayList<>(values.stream().filter(Map.class::isInstance)
+                    .map(value -> (Map<String, Object>) value).toList())
+                : new ArrayList<Map<String, Object>>();
+        for (var node : run.nodes()) {
+            var deliverableId = Objects.toString(node.output().get("deliverableId"), "");
+            if (deliverableId.isBlank()) continue;
+            outputs.add(new LinkedHashMap<>(node.output()));
+        }
+        if (!outputs.isEmpty()) effects.put("deliverables", outputs);
+        return outputs.isEmpty() ? "工作流已执行完成" : "工作流已执行完成并生成 " + outputs.size() + " 个交付件";
+    }
+
+    private void ensureWorkflowOutputs(String workflowId, PlanStep step) {
+        var formats = requestedFormats(step);
+        if (formats.isEmpty()) return;
+        var current = workflows.get(workflowId);
+        var existing = current.nodes().stream()
+                .filter(node -> node.type() == NodeType.DELIVERABLE || node.type() == NodeType.OUTPUT)
+                .map(NodeDefinition::config)
+                .filter(Objects::nonNull)
+                .map(config -> Objects.toString(config.get("format"), ""))
+                .collect(java.util.stream.Collectors.toSet());
+        var missing = formats.stream().filter(format -> !existing.contains(format)).toList();
+        if (missing.isEmpty()) return;
+        var nodes = new ArrayList<>(current.nodes());
+        var edges = new ArrayList<>(current.edges());
+        var upstream = nodes.stream()
+                .filter(node -> node.type() != NodeType.DELIVERABLE && node.type() != NodeType.OUTPUT)
+                .reduce((left, right) -> right).map(NodeDefinition::id).orElse(null);
+        addOutputNodes(nodes, edges, missing, upstream, "工作成果", argument(step, "goal", current.description()));
+        workflows.update(workflowId, new SaveRequest(current.name(), current.description(), nodes, edges,
+                current.executionMode(), current.schedule(), current.currentVersion()));
     }
 
     private String addDataTransform(PlanStep step, Map<String, Object> effects) {
@@ -828,6 +950,17 @@ public class AssistantExecutionService {
         return list.stream().map(Object::toString).filter(item -> !item.isBlank()).distinct().toList();
     }
 
+    private List<String> requestedFormats(PlanStep step) {
+        var requested = new ArrayList<>(stringList(step.arguments().get("output_formats")));
+        if (step.arguments().get("parameters") instanceof Map<?, ?> parameters) {
+            requested.addAll(stringList(parameters.get("output_formats")));
+        }
+        var goal = argument(step, "goal", "").toLowerCase(Locale.ROOT);
+        if (goal.contains("ppt") || goal.contains("演示文稿")) requested.add("PPTX");
+        if (goal.contains("html") || goal.contains("网页报告") || goal.contains("网页幻灯")) requested.add("HTML_SLIDES");
+        return requested.stream().map(this::normalizeDeliverableFormat).filter(item -> !item.isBlank()).distinct().toList();
+    }
+
     private List<NodeDefinition> append(List<NodeDefinition> source, NodeDefinition item) {
         var result = new ArrayList<>(source);
         result.add(item);
@@ -854,6 +987,10 @@ public class AssistantExecutionService {
 
     private String finalSummary(List<PlanStep> steps, Map<String, Object> effects) {
         if (effects.get("deliverables") instanceof List<?> outputs && !outputs.isEmpty()) {
+            if ("search-plan-fallback".equals(effects.get("researchMode"))) {
+                return "已将待核实资料索引写入项目，建立并运行可见工作流，生成 " + outputs.size()
+                        + " 个研究草稿。联网检索当前不可用，未读取成功的来源已明确标注，不应视为已核验结论。";
+            }
             return "已完成研究分析并生成 " + outputs.size() + " 个交付件。";
         }
         var response = Objects.toString(effects.get("assistantResponse"), "");

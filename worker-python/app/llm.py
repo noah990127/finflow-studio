@@ -2,6 +2,7 @@ import asyncio
 import json
 import shutil
 import tempfile
+import time
 from urllib.parse import quote_plus
 from pathlib import Path
 from typing import Any, Optional
@@ -29,6 +30,9 @@ def extract_response_text(data: dict[str, Any]) -> str:
 
 
 class LlmGateway:
+    def __init__(self) -> None:
+        self._codex_cli_unavailable_until = 0.0
+
     @property
     def provider(self) -> str:
         return settings.llm_provider.strip().lower()
@@ -38,7 +42,7 @@ class LlmGateway:
         if self.provider == "codex":
             return bool(settings.openai_api_key)
         if self.provider == "codex-cli":
-            return self._codex_cli_path() is not None
+            return self._codex_cli_path() is not None and self._codex_cli_available()
         if self.provider == "deepseek":
             return deepseek.configured
         return False
@@ -91,9 +95,15 @@ class LlmGateway:
                       "/Applications/ChatGPT.app/Contents/Resources/codex"]
         return next((value for value in candidates if value and Path(value).is_file()), None)
 
+    def _codex_cli_available(self) -> bool:
+        return time.monotonic() >= self._codex_cli_unavailable_until
+
+    def _mark_codex_cli_unavailable(self) -> None:
+        self._codex_cli_unavailable_until = time.monotonic() + settings.codex_cli_cooldown_seconds
+
     async def _complete_codex_cli(self, system: str, user: str) -> Optional[str]:
         executable = self._codex_cli_path()
-        if not executable:
+        if not executable or not self._codex_cli_available():
             return None
         with tempfile.TemporaryDirectory(prefix="finflow-codex-") as directory:
             output_path = Path(directory) / "result.txt"
@@ -129,8 +139,10 @@ class LlmGateway:
             except asyncio.TimeoutError as exception:
                 process.kill()
                 await process.wait()
+                self._mark_codex_cli_unavailable()
                 raise RuntimeError("Codex CLI 生成超时") from exception
             if process.returncode != 0:
+                self._mark_codex_cli_unavailable()
                 detail = stderr.decode("utf-8", errors="replace").strip().splitlines()[-1:]
                 raise RuntimeError("Codex CLI 调用失败" + ("：" + detail[0] if detail else ""))
             if not output_path.exists() or not output_path.read_text(encoding="utf-8").strip():
@@ -139,7 +151,7 @@ class LlmGateway:
 
     async def discover_sources(self, topic: str, max_sources: int) -> dict[str, Any]:
         executable = self._codex_cli_path()
-        if not executable:
+        if not executable or not self._codex_cli_available():
             return self._research_fallback(topic)
         with tempfile.TemporaryDirectory(prefix="finflow-research-") as directory:
             workdir = Path(directory)
@@ -178,12 +190,14 @@ class LlmGateway:
             )
             try:
                 _, stderr = await asyncio.wait_for(
-                    process.communicate(prompt.encode("utf-8")), timeout=settings.codex_cli_timeout_seconds
+                    process.communicate(prompt.encode("utf-8")), timeout=settings.codex_cli_research_timeout_seconds
                 )
             except asyncio.TimeoutError:
                 process.kill(); await process.wait()
+                self._mark_codex_cli_unavailable()
                 return self._research_fallback(topic)
             if process.returncode != 0 or not output_path.exists():
+                self._mark_codex_cli_unavailable()
                 return self._research_fallback(topic)
             try:
                 result = json.loads(output_path.read_text(encoding="utf-8"))
@@ -198,14 +212,27 @@ class LlmGateway:
 
     def _research_fallback(self, topic: str) -> dict[str, Any]:
         query = quote_plus(topic)
+        official = {
+            "microsoft": ("Microsoft Investor Relations", "https://www.microsoft.com/en-us/Investor"),
+            "apple": ("Apple Investor Relations", "https://investor.apple.com/"),
+            "alphabet": ("Alphabet Investor Relations", "https://abc.xyz/investor/"),
+            "amazon": ("Amazon Investor Relations", "https://ir.aboutamazon.com/"),
+            "meta": ("Meta Investor Relations", "https://investor.atmeta.com/"),
+            "nvidia": ("NVIDIA Investor Relations", "https://investor.nvidia.com/"),
+        }
+        lowered = topic.lower()
         sources = [
-            {"title": f"{topic} 官方与投资者关系资料检索", "url": f"https://www.bing.com/search?q={query}+官方+投资者关系",
-             "source_type": "待核实检索", "why_relevant": "用于定位主体官网、公告和财务披露"},
-            {"title": f"{topic} 监管披露资料检索", "url": f"https://www.bing.com/search?q={query}+监管披露+年报",
-             "source_type": "待核实检索", "why_relevant": "用于定位交易所、SEC 或其他监管披露"},
-            {"title": f"{topic} 行业与宏观资料检索", "url": f"https://www.bing.com/search?q={query}+行业数据+宏观政策",
-             "source_type": "待核实检索", "why_relevant": "用于补充行业、政策和宏观环境"},
+            {"title": title, "url": url, "source_type": "官方投资者关系入口（待读取核验）",
+             "why_relevant": "用于读取该公司最新财报、业绩公告、电话会材料和管理层指引"}
+            for key, (title, url) in official.items() if key in lowered
         ]
+        if not sources:
+            sources = [
+                {"title": f"{topic} 官方与投资者关系资料检索", "url": f"https://www.bing.com/search?q={query}+官方+投资者关系",
+                 "source_type": "待核实检索", "why_relevant": "用于定位主体官网、公告和财务披露"},
+                {"title": f"{topic} 监管披露资料检索", "url": f"https://www.bing.com/search?q={query}+监管披露+年报",
+                 "source_type": "待核实检索", "why_relevant": "用于定位交易所、SEC 或其他监管披露"},
+            ]
         return {"topic": topic, "summary": "联网资料搜索暂不可用，已建立待核实的资料搜集入口。",
                 "sources": sources, "mode": "search-plan-fallback"}
 

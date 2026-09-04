@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Locale;
+import java.util.Set;
 
 public final class AssistantCapabilityRegistry {
     private static final Map<String, Capability> CAPABILITIES = new LinkedHashMap<>();
@@ -151,6 +152,10 @@ public final class AssistantCapabilityRegistry {
 
     public static List<Map<String, Object>> catalog() {
         return CAPABILITIES.values().stream().map(AssistantCapabilityRegistry::toMap).toList();
+    }
+
+    public static Set<String> ids() {
+        return Set.copyOf(CAPABILITIES.keySet());
     }
 
     private static Map<String, Object> toMap(Capability capability) {

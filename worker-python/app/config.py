@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     codex_cli_reasoning_effort: Literal["low", "medium", "high", "xhigh"] = "low"
     codex_cli_force_http: bool = True
     codex_cli_timeout_seconds: float = 240.0
+    codex_cli_research_timeout_seconds: float = 60.0
+    codex_cli_cooldown_seconds: float = 300.0
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_chat_model: str = "deepseek-v4-flash"

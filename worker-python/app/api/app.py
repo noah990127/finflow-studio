@@ -1,6 +1,7 @@
 import tempfile
 import shutil
 import subprocess
+import httpx
 from pathlib import Path
 from typing import Optional
 
@@ -27,6 +28,7 @@ from ..models import (
     SearchRequest,
     ResearchRequest,
     ResearchResponse,
+    ResearchFetchRequest,
     SummarizeRequest,
     SummarizeResponse,
     TransformGenerateRequest,
@@ -41,6 +43,7 @@ from ..ppt_skills import catalog as ppt_skill_catalog
 from ..spreadsheet_files import profile_spreadsheet, transform_spreadsheet
 from ..data_transform import generate_transform, profile_tabular, run_transform, sample_transform
 from ..agent import AgentPlanRequest, AgentPlanResponse, OpenTaskRequest, load_skills, plan_with_agent, run_open_task_stream
+from ..research import fetch_web
 import json
 
 
@@ -161,9 +164,6 @@ async def generate_knowledge_content(request: GenerateContentRequest) -> Generat
 
 @app.post("/v1/knowledge/generate/stream")
 async def stream_knowledge_content(request: GenerateContentRequest) -> StreamingResponse:
-    if not llm.configured:
-        raise HTTPException(status_code=503, detail="大模型尚未配置，无法按生成要求制作成果")
-
     async def stream():
         async for event in generate_content_stream(request):
             yield json.dumps(event, ensure_ascii=False) + "\n"
@@ -180,6 +180,14 @@ async def search_knowledge(request: SearchRequest) -> list[SearchHit]:
 async def discover_research_sources(request: ResearchRequest) -> ResearchResponse:
     result = await llm.discover_sources(request.topic, request.max_sources)
     return ResearchResponse.model_validate(result)
+
+
+@app.post("/v1/research/fetch")
+async def fetch_research_source(request: ResearchFetchRequest) -> dict[str, object]:
+    try:
+        return await fetch_web(request.url, request.domain_allowlist)
+    except (ValueError, OSError, httpx.HTTPError) as exception:
+        raise HTTPException(status_code=422, detail=str(exception)) from exception
 
 
 @app.post("/v1/datasets/profile", response_model=DatasetProfileResponse)
