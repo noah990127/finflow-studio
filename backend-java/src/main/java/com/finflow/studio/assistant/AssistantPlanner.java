@@ -163,42 +163,9 @@ public class AssistantPlanner {
     private PlannedWork planWithAgent(String goal, String page, Selection selection, WorkspaceContext context,
                                       String sessionId, String executionMode) {
         try {
-            var request = new LinkedHashMap<String, Object>();
-            request.put("session_id", sessionId == null ? "" : sessionId);
-            request.put("execution_mode", executionMode == null ? "APPROVAL" : executionMode);
-            request.put("goal", goal == null ? "" : goal.trim());
-            request.put("page", page == null ? "project-home" : page);
-            request.put("project_id", context.projectId());
-            request.put("project_name", context.projectName());
-            request.put("selection", selection == null ? Map.of() : mapOf(
-                    "type", selection.type(), "resource_id", selection.resourceId(), "range", selection.range()));
-            request.put("resources", context.resources());
-            request.put("recent_messages", context.recentMessages());
-            request.put("capabilities", AssistantCapabilityRegistry.catalog());
-            var response = worker.planAgent(request);
-            var selectedSkills = response.get("selected_skills") instanceof List<?> values
-                    ? values.stream().map(String::valueOf).filter(value -> !value.isBlank()).limit(4).toList()
-                    : List.<String>of();
-            var rawSteps = response.get("steps");
-            if (!(rawSteps instanceof List<?> items) || items.isEmpty()) return null;
-            var steps = new ArrayList<PlanStep>();
-            for (var item : items) {
-                if (!(item instanceof Map<?, ?> raw)) continue;
-                var tool = String.valueOf(raw.get("tool"));
-                var capability = AssistantCapabilityRegistry.find(tool).orElse(null);
-                if (capability == null) continue;
-                var arguments = new LinkedHashMap<String, Object>();
-                if (raw.get("arguments") instanceof Map<?, ?> values) {
-                    values.forEach((key, value) -> arguments.put(String.valueOf(key), value));
-                }
-                enrichArguments(arguments, goal, page, context);
-                secureArguments(tool, arguments, context);
-                if (!selectedSkills.isEmpty()) arguments.put("agent_skills", selectedSkills);
-                var title = readable(raw.get("title"), capability.title(), 40);
-                var description = readable(raw.get("description"), capability.description(), 120);
-                steps.add(step(steps.size() + 1, tool, capability.mode(), title, description, capability.risk(), arguments));
-                if (steps.size() >= 10) break;
-            }
+            var response = worker.planAgent(agentRequest(goal, page, selection, context, sessionId, executionMode,
+                    false, Map.of(), 0));
+            var steps = parseAgentSteps(response, goal, page, context);
             if (steps.isEmpty()) return null;
             if (steps.stream().noneMatch(step -> "workspace.inspect".equals(step.tool()))) {
                 steps.addFirst(step(1, "workspace.inspect", "READ", "了解当前工作",
@@ -211,10 +178,69 @@ public class AssistantPlanner {
                 }
             }
             var summary = readable(response.get("summary"), modelSummary(goal, steps, context), 240);
-            return new PlannedWork(summary, List.copyOf(steps));
+            return new PlannedWork(summary, List.copyOf(steps), true);
         } catch (RuntimeException exception) {
             return null;
         }
+    }
+
+    public DynamicTurn continueAfterObservation(String goal, String page, WorkspaceContext context,
+                                                 String sessionId, String executionMode,
+                                                 Map<String, Object> observation, int completedActions) {
+        var response = worker.planAgent(agentRequest(goal, page, null, context, sessionId, executionMode,
+                true, observation, completedActions));
+        var steps = parseAgentSteps(response, goal, page, context);
+        var completed = Boolean.TRUE.equals(response.get("completed")) || steps.isEmpty();
+        var summary = readable(response.get("summary"), completed ? "任务已经完成" : "正在调整下一步", 240);
+        return new DynamicTurn(completed, summary, List.copyOf(steps));
+    }
+
+    private Map<String, Object> agentRequest(String goal, String page, Selection selection, WorkspaceContext context,
+                                             String sessionId, String executionMode, boolean continuation,
+                                             Map<String, Object> observation, int completedActions) {
+        var request = new LinkedHashMap<String, Object>();
+        request.put("session_id", sessionId == null ? "" : sessionId);
+        request.put("execution_mode", executionMode == null ? "APPROVAL" : executionMode);
+        request.put("goal", goal == null ? "" : goal.trim());
+        request.put("page", page == null ? "project-home" : page);
+        request.put("project_id", context.projectId());
+        request.put("project_name", context.projectName());
+        request.put("selection", selection == null ? Map.of() : mapOf(
+                "type", selection.type(), "resource_id", selection.resourceId(), "range", selection.range()));
+        request.put("resources", context.resources());
+        request.put("recent_messages", context.recentMessages());
+        request.put("capabilities", AssistantCapabilityRegistry.catalog());
+        request.put("continuation", continuation);
+        request.put("observation", observation == null ? Map.of() : observation);
+        request.put("completed_actions", completedActions);
+        return request;
+    }
+
+    private ArrayList<PlanStep> parseAgentSteps(Map<String, Object> response, String goal, String page,
+                                                 WorkspaceContext context) {
+        var selectedSkills = response.get("selected_skills") instanceof List<?> values
+                ? values.stream().map(String::valueOf).filter(value -> !value.isBlank()).limit(4).toList()
+                : List.<String>of();
+        var steps = new ArrayList<PlanStep>();
+        if (!(response.get("steps") instanceof List<?> items)) return steps;
+        for (var item : items) {
+            if (!(item instanceof Map<?, ?> raw)) continue;
+            var tool = String.valueOf(raw.get("tool"));
+            var capability = AssistantCapabilityRegistry.find(tool).orElse(null);
+            if (capability == null) continue;
+            var arguments = new LinkedHashMap<String, Object>();
+            if (raw.get("arguments") instanceof Map<?, ?> values) {
+                values.forEach((key, value) -> arguments.put(String.valueOf(key), value));
+            }
+            enrichArguments(arguments, goal, page, context);
+            secureArguments(tool, arguments, context);
+            if (!selectedSkills.isEmpty()) arguments.put("agent_skills", selectedSkills);
+            steps.add(step(1, tool, capability.mode(),
+                    readable(raw.get("title"), capability.title(), 40),
+                    readable(raw.get("description"), capability.description(), 120), capability.risk(), arguments));
+            break;
+        }
+        return steps;
     }
 
     private void enrichArguments(Map<String, Object> arguments, String goal, String page, WorkspaceContext context) {
@@ -399,5 +425,9 @@ public class AssistantPlanner {
         public static WorkspaceContext empty() { return new WorkspaceContext(null, "当前项目", 0, 0, 0, false, null, null, null, List.of(), List.of()); }
     }
 
-    public record PlannedWork(String summary, List<PlanStep> steps) { }
+    public record PlannedWork(String summary, List<PlanStep> steps, boolean dynamic) {
+        public PlannedWork(String summary, List<PlanStep> steps) { this(summary, steps, false); }
+    }
+
+    public record DynamicTurn(boolean completed, String summary, List<PlanStep> steps) { }
 }

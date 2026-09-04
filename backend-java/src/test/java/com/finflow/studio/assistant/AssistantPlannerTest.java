@@ -141,7 +141,7 @@ class AssistantPlannerTest {
     }
 
     @Test
-    void preservesTheToolsSelectedByTheDeepAgent() {
+    void stagesOnlyTheFirstRealToolSelectedByTheDeepAgent() {
         var worker = new WorkerClient("http://127.0.0.1:9") {
             @Override
             public Map<String, Object> planAgent(Object request) {
@@ -164,8 +164,37 @@ class AssistantPlannerTest {
                         false, null, null, null, List.of(), List.of()));
 
         assertThat(work.steps()).extracting(AssistantModels.PlanStep::tool).containsExactly(
-                "workspace.inspect", "knowledge.discover_external_sources", "assistant.analyze_context",
-                "deliverable.create", "deliverable.create");
+                "workspace.inspect", "knowledge.discover_external_sources");
+        assertThat(work.dynamic()).isTrue();
+    }
+
+    @Test
+    void sendsARealObservationBackForTheNextDynamicDecision() {
+        var captured = new AtomicReference<Map<String, Object>>();
+        var worker = new WorkerClient("http://127.0.0.1:9") {
+            @Override
+            @SuppressWarnings("unchecked")
+            public Map<String, Object> planAgent(Object request) {
+                captured.set((Map<String, Object>) request);
+                return Map.of("summary", "继续重命名目录", "completed", false, "steps", List.of(Map.of(
+                        "tool", "folder.rename", "title", "重命名目录", "description", "使用刚创建的目录继续处理",
+                        "arguments", Map.of("folder_id", "folder-1", "name", "最终名称"))));
+            }
+        };
+        var context = new AssistantPlanner.WorkspaceContext("project-1", "项目", 0, 1, 0,
+                false, null, null, null,
+                List.of(Map.of("id", "folder-1", "name", "临时名称", "type", "FOLDER",
+                        "group", "KNOWLEDGE", "status", "READY")), List.of());
+        var observation = Map.<String, Object>of(
+                "tool", "folder.create", "success", true, "result", "已创建目录“临时名称”");
+
+        var turn = new AssistantPlanner(worker).continueAfterObservation(
+                "创建目录后重命名", "project-home", context, "session-1", "AUTO", observation, 1);
+
+        assertThat(captured.get()).containsEntry("continuation", true).containsEntry("completed_actions", 1);
+        assertThat(captured.get().get("observation")).isEqualTo(observation);
+        assertThat(turn.completed()).isFalse();
+        assertThat(turn.steps()).extracting(AssistantModels.PlanStep::tool).containsExactly("folder.rename");
     }
 
     @Test

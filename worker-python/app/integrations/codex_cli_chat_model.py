@@ -49,7 +49,8 @@ class CodexCliChatModel(BaseChatModel):
 可用工具如下：{tools}
 需要调用工具时只返回 JSON：{{"tool_calls":[{{"name":"工具名","arguments":{{...}}}}]}}。
 可以在一次响应中调用多个互不依赖的工具。看到工具结果后继续选择工具，任务规划完成后只返回
-JSON：{{"final":{{"summary":"面向用户的简短说明","intent":"意图","selected_skills":["skill"]}}}}。
+JSON：{{"final":{{"summary":"面向用户的简短说明","intent":"意图","selected_skills":["skill"],"completed":false}}}}。
+只有根据真实工具结果确认目标完成时 completed 才能为 true。每轮最多选择一个真实工作台工具。
 禁止输出 Markdown，禁止虚构工具名，工具参数必须符合对应 schema。"""
 
     def _conversation(self, messages: list[BaseMessage]) -> str:

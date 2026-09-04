@@ -75,7 +75,7 @@ export const useAssistantStore = defineStore('assistant', {
       this.selection = selection ?? null
     },
     setExecutionMode(mode: 'AUTO' | 'APPROVAL') {
-      if (this.busy || (this.run && ['QUEUED', 'RUNNING'].includes(this.run.status))) return
+      if (this.busy || (this.run && ['QUEUED', 'RUNNING', 'WAITING_CONFIRMATION'].includes(this.run.status))) return
       this.executionMode = mode
       localStorage.setItem('finflow.assistant.executionMode', mode)
     },
@@ -167,10 +167,15 @@ export const useAssistantStore = defineStore('assistant', {
         this.streamLines = this.streamLines.slice(-12)
       }
       if (event.type === 'assistant.request.received' || event.type === 'assistant.run.queued' || event.type === 'assistant.run.started' || event.type === 'assistant.step.started') this.streaming = true
-      if (event.type === 'assistant.confirmation.required') this.streaming = false
+      if (event.type === 'assistant.confirmation.required' || event.type === 'agent.waiting_confirmation') this.streaming = false
+      if (event.type === 'agent.plan_updated' || event.type === 'assistant.confirmation.required' || event.type === 'assistant.run.completed') {
+        const planId = typeof payload.planId === 'string' ? payload.planId : this.plan?.id
+        if (planId) void this.refreshPlan(planId)
+      }
       if (event.type === 'assistant.run.completed') {
         this.streaming = false
         this.progress = 100
+        if (message) this.assistantMessage = message
       }
       if (event.type === 'assistant.run.failed' || event.type === 'assistant.run.canceled') this.streaming = false
       const uiAction = payload.uiAction
@@ -221,6 +226,12 @@ export const useAssistantStore = defineStore('assistant', {
       const latest = this.timeline.at(-1)
       if (latest?.title === title && latest.detail === detail) return
       this.timeline.push({ id, title, detail, tone, time, ...extra })
+    },
+    async refreshPlan(planId: string) {
+      try {
+        const plan = await api.getAssistantPlan(planId)
+        if (this.plan?.id === planId) this.plan = plan
+      } catch { /* the run poll remains authoritative if a refresh races an update */ }
     },
     async send(projectId: string) {
       const text = this.input.trim()
@@ -283,12 +294,19 @@ export const useAssistantStore = defineStore('assistant', {
       if (!this.run) return
       for (let attempt = 0; attempt < 300; attempt += 1) {
         this.run = await api.getRun(this.run.id)
-        if (['SUCCEEDED', 'FAILED', 'CANCELED', 'ROLLED_BACK'].includes(this.run.status)) break
+        if (['SUCCEEDED', 'FAILED', 'CANCELED', 'ROLLED_BACK', 'WAITING_CONFIRMATION'].includes(this.run.status)) break
         await new Promise((resolve) => window.setTimeout(resolve, 1000))
+      }
+      await this.refreshPlan(this.run.planId)
+      if (this.run.status === 'WAITING_CONFIRMATION') {
+        this.streaming = false
+        this.progressLabel = this.run.resultSummary || '等待确认后继续执行'
+        return
       }
       if (this.run.status === 'SUCCEEDED') {
         this.progress = 100
         this.progressLabel = this.run.resultSummary
+        this.assistantMessage = this.run.resultSummary
         this.streaming = false
         this.pushTimeline(`completed-${this.run.id}`, '处理完成', this.run.resultSummary, 'success')
         const assistantResponse = typeof this.run.result?.assistantResponse === 'string' ? this.run.result.assistantResponse : ''

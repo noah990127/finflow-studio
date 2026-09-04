@@ -113,6 +113,7 @@ export const api = {
   getAssistantSession: (sessionId: string) => request<AssistantSession>(`/api/assistant/sessions/${sessionId}`),
   listAssistantMessages: (sessionId: string) => request<AssistantMessage[]>(`/api/assistant/sessions/${sessionId}/messages`),
   sendMessage: (sessionId: string, text: string, page = 'project-home', selection?: Selection, executionMode: 'AUTO' | 'APPROVAL' = 'APPROVAL') => request<MessageResponse>(`/api/assistant/sessions/${sessionId}/messages`, { method: 'POST', body: JSON.stringify({ text, page, route: window.location.pathname, selection, clientContextVersion: 1, executionMode }) }),
+  getAssistantPlan: (planId: string) => request<Plan>(`/api/assistant/plans/${planId}`),
   confirmPlan: (plan: Plan, context: ContextSnapshot) => request<Run>(`/api/assistant/plans/${plan.id}/confirm`, { method: 'POST', body: JSON.stringify({ planVersion: plan.version, planHash: plan.planHash, idempotencyKey: crypto.randomUUID(), expectedResourceVersions: context.resourceVersions }) }),
   getRun: (runId: string) => request<Run>(`/api/assistant/runs/${runId}`),
   cancelAssistantRun: (runId: string) => request<Run>(`/api/assistant/runs/${runId}/cancel`, { method: 'POST' }),

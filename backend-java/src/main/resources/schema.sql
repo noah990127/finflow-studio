@@ -61,6 +61,9 @@ create table if not exists assistant_plan (
     created_at timestamp with time zone not null
 );
 
+alter table assistant_plan add column if not exists execution_mode varchar(20) not null default 'APPROVAL';
+alter table assistant_plan add column if not exists dynamic_agent boolean not null default false;
+
 create table if not exists assistant_plan_step (
     id varchar(64) primary key,
     plan_id varchar(64) not null,

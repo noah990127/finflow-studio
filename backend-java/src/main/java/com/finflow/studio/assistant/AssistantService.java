@@ -164,11 +164,11 @@ public class AssistantService {
             var automaticSteps = plannedWork.steps().stream().map(step -> new PlanStep(
                     step.id(), step.order(), step.tool(), step.mode(), step.title(), step.description(),
                     step.arguments(), step.risk(), false, step.status())).toList();
-            plannedWork = new AssistantPlanner.PlannedWork(plannedWork.summary(), automaticSteps);
+            plannedWork = new AssistantPlanner.PlannedWork(plannedWork.summary(), automaticSteps, plannedWork.dynamic());
         }
         events.publish(sessionId, null, "agent.planning", Map.of(
                 "status", "completed", "progress", 18, "message", plannedWork.summary()));
-        var plan = savePlan(sessionId, context, request.text(), plannedWork);
+        var plan = savePlan(sessionId, context, request.text(), plannedWork, executionPolicy);
         saveMessage(sessionId, "ASSISTANT", plannedWork.summary(), modelName(), traceId);
 
         events.publish(sessionId, null, "assistant.plan.ready", Map.of(
@@ -263,10 +263,21 @@ public class AssistantService {
             throw new IllegalStateException("当前计划不能再次确认");
         }
         verifyResourceVersions(planId, request.expectedResourceVersions());
+        var pausedRunId = jdbc.sql("""
+                        select id from assistant_run
+                        where plan_id = :planId and status = 'WAITING_CONFIRMATION'
+                        order by created_at desc limit 1
+                        """)
+                .param("planId", planId)
+                .query(String.class)
+                .optional();
         jdbc.sql("update assistant_plan set status = 'CONFIRMED', confirmed_at = :now where id = :id")
                 .param("now", Instant.now())
                 .param("id", planId)
                 .update();
+        if (pausedRunId.isPresent()) {
+            return execution.resume(pausedRunId.get());
+        }
         return execution.start(plan.sessionId(), planId, request.idempotencyKey());
     }
 
@@ -307,7 +318,7 @@ public class AssistantService {
     }
 
     private PlanResponse savePlan(String sessionId, ContextSnapshot context, String goal,
-                                  AssistantPlanner.PlannedWork plannedWork) {
+                                  AssistantPlanner.PlannedWork plannedWork, ExecutionPolicy executionPolicy) {
         var id = UUID.randomUUID().toString();
         var steps = plannedWork.steps();
         var risk = steps.stream().map(PlanStep::risk).max(Comparator.comparing(Enum::ordinal))
@@ -324,9 +335,10 @@ public class AssistantService {
         )));
         jdbc.sql("""
                 insert into assistant_plan(id, session_id, context_snapshot_id, goal, summary, version,
-                    plan_hash, risk_level, status, affected_resources_json, expires_at, created_at)
+                    plan_hash, risk_level, status, affected_resources_json, expires_at, created_at,
+                    execution_mode, dynamic_agent)
                 values (:id, :sessionId, :contextId, :goal, :summary, 1, :planHash, :riskLevel,
-                    :status, :affected, :expiresAt, :createdAt)
+                    :status, :affected, :expiresAt, :createdAt, :executionMode, :dynamicAgent)
                 """)
                 .param("id", id)
                 .param("sessionId", sessionId)
@@ -339,6 +351,8 @@ public class AssistantService {
                 .param("affected", writeJson(affected))
                 .param("expiresAt", expiresAt)
                 .param("createdAt", Instant.now())
+                .param("executionMode", executionPolicy.name())
+                .param("dynamicAgent", plannedWork.dynamic())
                 .update();
         for (var step : steps) {
             jdbc.sql("""

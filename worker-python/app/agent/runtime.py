@@ -49,6 +49,9 @@ class AgentMessage(BaseModel):
 class AgentPlanRequest(BaseModel):
     session_id: str = ""
     execution_mode: str = "APPROVAL"
+    continuation: bool = False
+    observation: dict[str, Any] = Field(default_factory=dict)
+    completed_actions: int = 0
     goal: str
     page: str
     project_id: Optional[str] = None
@@ -70,6 +73,7 @@ class AgentDecision(BaseModel):
     summary: str
     intent: str
     selected_skills: list[str] = Field(default_factory=list)
+    completed: bool = False
 
 
 class AgentPlanResponse(BaseModel):
@@ -78,6 +82,7 @@ class AgentPlanResponse(BaseModel):
     selected_skills: list[str] = Field(default_factory=list)
     steps: list[AgentAction]
     mode: str
+    completed: bool = False
 
 
 class OpenTaskPolicy(BaseModel):
@@ -139,8 +144,8 @@ def build_workbench_tools(deps: AgentDependencies):
 
         def make_invoke(item: AgentCapability):
             async def invoke(**arguments: Any) -> str:
-                if len(deps.staged_actions) >= settings.agent_max_steps:
-                    return "计划步骤已达到上限，请结束规划并说明未完成部分"
+                if deps.staged_actions:
+                    return "本轮已经选择了一个真实工作台动作。请等待执行结果，不要继续调用其他工作台工具"
                 clean_arguments = {key: value for key, value in arguments.items() if value is not None}
                 deps.staged_actions.append(AgentAction(
                     tool=item.id,
@@ -218,12 +223,15 @@ async def plan_with_agent(request: AgentPlanRequest, model_override: Any = None)
     instructions = """你是通用的个人工作台 Agent，不是固定的财经工作流模板。
 先理解用户真正想完成的事情和当前上下文，再自主选择 Skill、MCP 工具与工作台能力。
 先调用 inspect_workspace；按需调用 find_skills、search_tools、describe_tool。所有左侧工作区操作都已作为独立工具提供。
-必须亲自调用所需的具体工具来形成执行序列，禁止只描述计划或捏造工具名称。工具结果由 Java 权限网关真实执行。
+采用动态单步执行：每轮最多调用一个真实工作台工具，然后立即结束本轮并等待 Java 返回真实 Observation。
+禁止提前编排整条固定步骤，也禁止只描述计划或捏造工具名称。工具结果由 Java 权限网关真实执行。
 不要因为用户提到分析就自动创建财务报告，也不要在缺少结构化数据时创建数据加工或图表报告。
 根据用户选择的 Auto 或审批策略决定是否等待确认；风险分类由后端最终强制执行。
 当前执行模式可从 inspect_workspace 的 execution_mode 读取。AUTO 模式下不得要求用户再次确认；当工作区快照中能按名称唯一匹配对象时，
 必须自行使用其 ID 调用工具，不得向用户索要 workflow_id、resource_id、folder_id 等内部标识。APPROVAL 模式下也应先形成工具计划，由界面统一请求确认。
-完成工具选择后返回 JSON，包含 summary、intent、selected_skills。summary 描述接下来将执行什么，不得把尚未执行的动作说成已经完成。
+若目标已经完成，不再调用工具，返回 completed=true；否则调用一个最合适的工具并返回 completed=false。
+完成本轮后返回 JSON，包含 summary、intent、selected_skills、completed。summary 描述接下来将执行什么或基于 Observation 得出的最终结果，
+不得把尚未执行的动作说成已经完成。工具失败时先根据错误选择修正参数、替代工具或重试；只有无法继续时才结束并解释原因。
 用业务用户看得懂的中文，不暴露隐藏推理。"""
     workbench_tools = build_workbench_tools(deps)
     agent = create_deep_agent(
@@ -238,8 +246,13 @@ async def plan_with_agent(request: AgentPlanRequest, model_override: Any = None)
     messages = [] if thread_id in _ACTIVE_AGENT_THREADS else [
         message.model_dump() for message in request.recent_messages if message.role in {"user", "assistant"}
     ]
-    if not messages or messages[-1]["role"] != "user" or messages[-1]["content"] != request.goal:
-        messages.append({"role": "user", "content": request.goal})
+    turn_content = request.goal
+    if request.continuation:
+        turn_content = ("原始目标：" + request.goal + "\n真实工具 Observation：" +
+                        json.dumps(request.observation, ensure_ascii=False) +
+                        f"\n已执行真实动作数：{request.completed_actions}。请根据最新工作区和结果决定下一步。")
+    if not messages or messages[-1]["role"] != "user" or messages[-1]["content"] != turn_content:
+        messages.append({"role": "user", "content": turn_content})
     result = await agent.ainvoke(
         {"messages": messages},
         config={"configurable": {"thread_id": thread_id}},
@@ -254,13 +267,14 @@ async def plan_with_agent(request: AgentPlanRequest, model_override: Any = None)
         "summary": raw_decision.get("summary", "已根据当前工作台准备处理计划"),
         "intent": raw_decision.get("intent", "workbench-task"),
         "selected_skills": raw_decision.get("selected_skills", sorted(deps.selected_skills)),
+        "completed": raw_decision.get("completed", request.continuation and not deps.staged_actions),
     })
-    if not deps.staged_actions:
+    if not deps.staged_actions and not request.continuation and not decision.completed:
         deps.staged_actions.append(AgentAction(tool="assistant.respond", title="回答你的问题",
                                                description="结合当前项目和内容给出直接回答", arguments={"goal": request.goal}))
     return AgentPlanResponse(summary=decision.summary, intent=decision.intent,
                              selected_skills=decision.selected_skills or sorted(deps.selected_skills),
-                             steps=deps.staged_actions, mode="deep-agents")
+                             steps=deps.staged_actions, mode="deep-agents", completed=decision.completed)
 
 async def run_open_task_stream(request: OpenTaskRequest, model_override: Any = None):
     """Run one governed open task and expose business-readable activity events."""

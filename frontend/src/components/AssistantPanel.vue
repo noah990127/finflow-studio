@@ -13,13 +13,13 @@ const showEvents = ref(true)
 
 const contextLabel = computed(() => assistant.selection?.range.join('、') || assistant.contextTitle || '项目概览')
 const running = computed(() => ['QUEUED', 'RUNNING'].includes(assistant.run?.status ?? '') || assistant.streaming)
-const controlsLocked = computed(() => assistant.busy || ['QUEUED', 'RUNNING'].includes(assistant.run?.status ?? ''))
+const controlsLocked = computed(() => assistant.busy || ['QUEUED', 'RUNNING', 'WAITING_CONFIRMATION'].includes(assistant.run?.status ?? ''))
 const taskState = computed(() => {
   if (assistant.error || assistant.run?.status === 'FAILED') return { code: 'failed', label: '未完成', detail: assistant.error || assistant.run?.resultSummary || '执行遇到问题' }
   if (assistant.run?.status === 'CANCELED') return { code: 'canceled', label: '已停止', detail: '后续步骤没有继续执行' }
   if (assistant.run?.status === 'ROLLED_BACK') return { code: 'completed', label: '已撤销', detail: '已恢复到执行前状态' }
   if (assistant.run?.status === 'SUCCEEDED') return { code: 'completed', label: '已完成', detail: assistant.run.resultSummary || '任务已经完成' }
-  if (assistant.needsConfirmation && !assistant.run) return { code: 'waiting', label: '等待确认', detail: '确认后会开始修改工作台' }
+  if (assistant.needsConfirmation && (!assistant.run || assistant.run.status === 'WAITING_CONFIRMATION')) return { code: 'waiting', label: '等待确认', detail: assistant.run?.resultSummary || '确认后会继续修改工作台' }
   if (assistant.run?.status === 'QUEUED') return { code: 'running', label: '准备执行', detail: assistant.progressLabel }
   if (assistant.streaming || assistant.busy) return { code: 'running', label: assistant.plan ? '正在执行' : '正在思考', detail: assistant.progressLabel }
   if (assistant.plan) return { code: 'ready', label: '计划就绪', detail: assistant.plan.summary }
@@ -27,11 +27,13 @@ const taskState = computed(() => {
 })
 const completedSteps = computed(() => {
   if (!assistant.plan) return 0
-  if (['SUCCEEDED', 'ROLLED_BACK'].includes(assistant.run?.status ?? '')) return assistant.plan.steps.length
-  const current = assistant.run?.currentStep ?? 0
-  return Math.max(0, current - (running.value || assistant.run?.status === 'FAILED' ? 1 : 0))
+  return assistant.plan.steps.filter(step => step.status === 'SUCCEEDED').length
 })
 function stepState(order: number) {
+  const persisted = assistant.plan?.steps.find(step => step.order === order)?.status
+  if (persisted === 'SUCCEEDED') return 'completed'
+  if (persisted === 'FAILED') return 'failed'
+  if (persisted === 'CANCELED') return 'canceled'
   const status = assistant.run?.status
   const current = assistant.run?.currentStep ?? 0
   if (status === 'SUCCEEDED' || status === 'ROLLED_BACK') return 'completed'
@@ -147,7 +149,7 @@ watch(() => assistant.run?.status, status => {
             </div>
           </section>
 
-          <div v-if="assistant.needsConfirmation && !assistant.run" class="assistant-confirm-inline">
+          <div v-if="assistant.needsConfirmation && (!assistant.run || assistant.run.status === 'WAITING_CONFIRMATION')" class="assistant-confirm-inline">
             <ShieldCheck :size="17" /><p><strong>需要你的确认</strong><span>这些步骤会更新工作台，原内容会保留。</span></p>
             <button class="primary-button" type="button" :disabled="assistant.busy" @click="assistant.confirm">确认执行</button>
           </div>

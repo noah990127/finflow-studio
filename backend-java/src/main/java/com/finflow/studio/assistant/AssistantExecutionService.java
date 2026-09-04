@@ -40,6 +40,7 @@ import tools.jackson.databind.ObjectMapper;
 
 @Service
 public class AssistantExecutionService {
+    private static final int MAX_DYNAMIC_ACTIONS = 12;
 
     private final JdbcClient jdbc;
     private final AssistantEventService events;
@@ -53,6 +54,7 @@ public class AssistantExecutionService {
     private final DeliverableService deliverables;
     private final WorkflowRunService workflowRuns;
     private final AssistantWorkspaceToolGateway workspaceTools;
+    private final AssistantPlanner planner;
 
     public AssistantExecutionService(JdbcClient jdbc, AssistantEventService events,
                                      @Qualifier("applicationTaskExecutor") TaskExecutor taskExecutor,
@@ -60,7 +62,7 @@ public class AssistantExecutionService {
                                      WorkerClient worker, ObjectMapper objectMapper,
                                      WorkspaceResourceService workspace, KnowledgeService knowledge,
                                      DeliverableService deliverables, WorkflowRunService workflowRuns,
-                                     AssistantWorkspaceToolGateway workspaceTools) {
+                                     AssistantWorkspaceToolGateway workspaceTools, AssistantPlanner planner) {
         this.jdbc = jdbc;
         this.events = events;
         this.taskExecutor = taskExecutor;
@@ -73,6 +75,7 @@ public class AssistantExecutionService {
         this.deliverables = deliverables;
         this.workflowRuns = workflowRuns;
         this.workspaceTools = workspaceTools;
+        this.planner = planner;
     }
 
     public RunResponse start(String sessionId, String planId, String idempotencyKey) {
@@ -105,6 +108,17 @@ public class AssistantExecutionService {
         return get(id);
     }
 
+    public RunResponse resume(String runId) {
+        var run = get(runId);
+        var updated = jdbc.sql("update assistant_run set status = 'QUEUED' where id = :id and status = 'WAITING_CONFIRMATION'")
+                .param("id", runId).update();
+        if (updated == 0) return run;
+        events.publish(run.sessionId(), runId, "assistant.run.queued", Map.of(
+                "runId", runId, "progress", 22, "message", "确认已收到，继续执行动态计划"));
+        scheduleAfterCommit(runId);
+        return get(runId);
+    }
+
     private void scheduleAfterCommit(String runId) {
         if (TransactionSynchronizationManager.isActualTransactionActive()) {
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
@@ -120,108 +134,286 @@ public class AssistantExecutionService {
 
     private void execute(String runId) {
         var run = get(runId);
-        var startedAt = Instant.now();
-        var started = jdbc.sql("update assistant_run set status = 'RUNNING', started_at = :startedAt where id = :id and status = 'QUEUED'")
-                .param("startedAt", startedAt)
-                .param("id", runId)
-                .update();
+        var started = jdbc.sql("""
+                        update assistant_run set status = 'RUNNING', started_at = coalesce(started_at, :startedAt)
+                        where id = :id and status = 'QUEUED'
+                        """)
+                .param("startedAt", Instant.now()).param("id", runId).update();
         if (started == 0) return;
-        var steps = loadSteps(run.planId());
+        var runtime = loadRuntime(run.planId());
+        var effects = new LinkedHashMap<String, Object>(run.result());
         events.publish(run.sessionId(), runId, "assistant.run.started", Map.of(
-                "runId", runId, "progress", 25, "message", "开始执行，共 " + steps.size() + " 个步骤",
-                "totalSteps", steps.size()));
-        var effects = new LinkedHashMap<String, Object>();
+                "runId", runId, "progress", 25,
+                "message", runtime.dynamic() ? "开始动态执行，Agent 会根据每一步结果继续决策" : "开始执行计划"));
         try {
-            for (var step : steps) {
+            while (true) {
                 if (isCanceled(runId)) return;
-                jdbc.sql("update assistant_run set current_step = :step where id = :id")
-                        .param("step", step.order())
-                        .param("id", runId)
-                        .update();
-                jdbc.sql("update assistant_plan_step set status = 'RUNNING' where id = :id")
-                        .param("id", step.id())
-                        .update();
-                var startedProgress = 25 + Math.max(0, step.order() - 1) * 70 / Math.max(1, steps.size());
-                events.publish(run.sessionId(), runId, "assistant.step.started", Map.of(
-                        "step", step.order(), "totalSteps", steps.size(), "title", step.title(),
-                        "message", step.description(), "progress", startedProgress, "tool", step.tool()));
-                events.publish(run.sessionId(), runId, "agent.tool_call", Map.of(
-                        "status", "running", "step", step.order(), "totalSteps", steps.size(),
-                        "toolName", step.tool(), "argumentSummary", summarizeArguments(step.arguments()),
-                        "message", step.title(), "progress", startedProgress));
-                events.publish(run.sessionId(), runId, "agent.executing", Map.of(
-                        "status", "running", "step", step.order(), "toolName", step.tool(),
-                        "message", step.description(), "progress", startedProgress));
-
-                var result = executeStep(step, effects);
-                if (isCanceled(runId)) {
-                    jdbc.sql("update assistant_plan_step set status = 'CANCELED' where id = :id")
-                            .param("id", step.id()).update();
+                var pending = loadSteps(run.planId()).stream().filter(step -> "PENDING".equals(step.status())).toList();
+                if (pending.isEmpty()) {
+                    finishRun(run, finalSummary(loadSteps(run.planId()), effects), effects);
                     return;
                 }
-                jdbc.sql("update assistant_run set effects_json = :effects where id = :id")
-                        .param("effects", writeJson(effects)).param("id", runId).update();
-                jdbc.sql("update assistant_plan_step set status = 'SUCCEEDED' where id = :id")
-                        .param("id", step.id())
-                        .update();
-                var completedProgress = 25 + step.order() * 70 / Math.max(1, steps.size());
-                var completedPayload = new LinkedHashMap<String, Object>();
-                completedPayload.put("step", step.order());
-                completedPayload.put("totalSteps", steps.size());
-                completedPayload.put("title", step.title());
-                completedPayload.put("message", result);
-                completedPayload.put("progress", completedProgress);
-                completedPayload.put("result", result);
-                completedPayload.put("tool", step.tool());
-                completedPayload.put("provenance", provenance(step, effects));
-                if (effects.get("uiAction") instanceof Map<?, ?> action) {
-                    completedPayload.put("uiAction", action);
+                var extended = false;
+                for (var step : pending) {
+                    var observation = executeAndObserve(run, step, effects);
+                    if (isCanceled(runId)) return;
+                    if (!runtime.dynamic() && !Boolean.TRUE.equals(observation.get("success"))) {
+                        throw new IllegalStateException(Objects.toString(observation.get("error"), "工具执行失败"));
+                    }
+                    if (!runtime.dynamic() || "workspace.inspect".equals(step.tool())) continue;
+                    var completedActions = completedActionCount(run.planId());
+                    events.publish(run.sessionId(), runId, "agent.thinking_summary", Map.of(
+                            "status", "running", "progress", dynamicProgress(completedActions),
+                            "message", "正在根据刚才的真实执行结果判断下一步"));
+                    events.publish(run.sessionId(), runId, "agent.planning", Map.of(
+                            "status", "running", "progress", dynamicProgress(completedActions),
+                            "message", "正在动态更新计划"));
+                    var turn = planner.continueAfterObservation(runtime.goal(), runtime.page(),
+                            workspaceContext(activeProjectId(runtime, step, effects)), run.sessionId(), runtime.executionMode(),
+                            observation, completedActions);
+                    if (turn.completed() || turn.steps().isEmpty()) {
+                        if (!Boolean.TRUE.equals(observation.get("success"))) {
+                            throw new IllegalStateException(turn.summary());
+                        }
+                        finishRun(run, turn.summary(), effects);
+                        return;
+                    }
+                    if (completedActions >= MAX_DYNAMIC_ACTIONS) {
+                        throw new IllegalStateException("动态 Agent 已达到 " + MAX_DYNAMIC_ACTIONS + " 个真实动作上限");
+                    }
+                    var next = appendDynamicStep(run.planId(), turn.steps().getFirst(), runtime.executionMode(), turn.summary());
+                    events.publish(run.sessionId(), runId, "agent.plan_updated", Map.of(
+                            "status", "completed", "planId", run.planId(), "step", next.order(),
+                            "toolName", next.tool(), "message", "已根据 Observation 增加下一步：“" + next.title() + "”",
+                            "progress", dynamicProgress(completedActions)));
+                    if (next.requiresConfirmation()) {
+                        pauseForConfirmation(run, next);
+                        return;
+                    }
+                    extended = true;
+                    break;
                 }
-                events.publish(run.sessionId(), runId, "assistant.step.completed", completedPayload);
-                events.publish(run.sessionId(), runId, "agent.observation", Map.of(
-                        "status", "completed", "step", step.order(), "toolName", step.tool(),
-                        "resultSummary", result, "message", result, "progress", completedProgress,
-                        "provenance", provenance(step, effects)));
+                if (!runtime.dynamic()) {
+                    finishRun(run, finalSummary(loadSteps(run.planId()), effects), effects);
+                    return;
+                }
+                if (!extended && loadSteps(run.planId()).stream().noneMatch(step -> "PENDING".equals(step.status()))) {
+                    finishRun(run, finalSummary(loadSteps(run.planId()), effects), effects);
+                    return;
+                }
             }
-            if (isCanceled(runId)) return;
-            var summary = finalSummary(steps, effects);
-            var finishedAt = Instant.now();
-            jdbc.sql("""
-                    update assistant_run
-                    set status = 'SUCCEEDED', result_summary = :summary, finished_at = :finishedAt
-                    where id = :id
-                    """)
-                    .param("summary", summary)
-                    .param("finishedAt", finishedAt)
-                    .param("id", runId)
-                    .update();
-            saveAssistantMessage(run.sessionId(), summary, runId);
-            events.publish(run.sessionId(), runId, "assistant.run.completed", Map.of(
-                    "runId", runId, "summary", summary, "message", summary, "progress", 100,
-                    "canRollback", effects.containsKey("createdProjectId")));
-            events.publish(run.sessionId(), runId, "agent.generating", Map.of(
-                    "status", "completed", "message", "正在整理最终结果和执行轨迹", "progress", 98));
-            events.publish(run.sessionId(), runId, "agent.completed", Map.of(
-                    "status", "completed", "summary", summary, "message", summary, "progress", 100,
-                    "provenance", Map.of("traceId", runId, "toolCount", steps.size())));
         } catch (RuntimeException ex) {
-            var failure = ex.getMessage() == null ? "执行失败" : ex.getMessage();
-            jdbc.sql("update assistant_run set status = 'FAILED', result_summary = :message, finished_at = :finishedAt where id = :id")
-                    .param("message", failure)
-                    .param("finishedAt", Instant.now())
-                    .param("id", runId)
-                    .update();
-            saveAssistantMessage(run.sessionId(), "本次任务未完成：" + failure, runId);
-            events.publish(run.sessionId(), runId, "assistant.run.failed", Map.of(
-                    "runId", runId, "progress", 100,
-                    "message", "当前步骤没有完成，可以从这里重试",
-                    "error", ex.getMessage() == null ? "" : ex.getMessage()));
-            events.publish(run.sessionId(), runId, "agent.failed", Map.of(
-                    "status", "failed", "progress", 100,
-                    "message", "当前步骤没有完成，可以展开查看错误",
-                    "error", ex.getMessage() == null ? "" : ex.getMessage()));
+            failRun(run, ex);
         }
     }
+
+    private Map<String, Object> executeAndObserve(RunResponse run, PlanStep step, Map<String, Object> effects) {
+        if (isCanceled(run.id())) return Map.of("success", false, "error", "任务已停止");
+        var total = loadSteps(run.planId()).size();
+        var progress = dynamicProgress(completedActionCount(run.planId()));
+        jdbc.sql("update assistant_run set current_step = :step where id = :id")
+                .param("step", step.order()).param("id", run.id()).update();
+        jdbc.sql("update assistant_plan_step set status = 'RUNNING' where id = :id")
+                .param("id", step.id()).update();
+        events.publish(run.sessionId(), run.id(), "assistant.step.started", Map.of(
+                "step", step.order(), "totalSteps", total, "title", step.title(),
+                "message", step.description(), "progress", progress, "tool", step.tool()));
+        events.publish(run.sessionId(), run.id(), "agent.tool_call", Map.of(
+                "status", "running", "step", step.order(), "totalSteps", total,
+                "toolName", step.tool(), "argumentSummary", summarizeArguments(step.arguments()),
+                "message", step.title(), "progress", progress));
+        events.publish(run.sessionId(), run.id(), "agent.executing", Map.of(
+                "status", "running", "step", step.order(), "toolName", step.tool(),
+                "message", step.description(), "progress", progress));
+        effects.remove("uiAction");
+        var effectsBefore = new LinkedHashMap<String, Object>(effects);
+        var observation = new LinkedHashMap<String, Object>();
+        observation.put("tool", step.tool());
+        observation.put("arguments", step.arguments());
+        try {
+            var result = executeStep(step, effects);
+            jdbc.sql("update assistant_plan_step set status = 'SUCCEEDED' where id = :id")
+                    .param("id", step.id()).update();
+            observation.put("success", true);
+            observation.put("result", result);
+            observation.put("output", observationOutput(effectsBefore, effects));
+            observation.put("provenance", provenance(step, effects));
+            var payload = new LinkedHashMap<String, Object>();
+            payload.put("step", step.order()); payload.put("totalSteps", total); payload.put("title", step.title());
+            payload.put("message", result); payload.put("result", result); payload.put("progress", progress);
+            payload.put("tool", step.tool()); payload.put("output", observationOutput(effectsBefore, effects));
+            payload.put("provenance", provenance(step, effects));
+            if (effects.get("uiAction") instanceof Map<?, ?> action) payload.put("uiAction", action);
+            events.publish(run.sessionId(), run.id(), "assistant.step.completed", payload);
+            events.publish(run.sessionId(), run.id(), "agent.observation", Map.of(
+                    "status", "completed", "step", step.order(), "toolName", step.tool(),
+                    "resultSummary", result, "message", result, "progress", progress,
+                    "provenance", provenance(step, effects)));
+        } catch (RuntimeException exception) {
+            var error = exception.getMessage() == null ? "工具执行失败" : exception.getMessage();
+            jdbc.sql("update assistant_plan_step set status = 'FAILED' where id = :id")
+                    .param("id", step.id()).update();
+            observation.put("success", false);
+            observation.put("error", error);
+            observation.put("provenance", provenance(step, effects));
+            events.publish(run.sessionId(), run.id(), "agent.observation", Map.of(
+                    "status", "failed", "step", step.order(), "toolName", step.tool(),
+                    "resultSummary", error, "message", "工具没有完成，Agent 正在调整方案",
+                    "error", error, "progress", progress, "provenance", provenance(step, effects)));
+            events.publish(run.sessionId(), run.id(), "agent.retrying", Map.of(
+                    "status", "running", "toolName", step.tool(), "message", "正在根据错误选择修正参数或替代工具",
+                    "progress", progress));
+        }
+        jdbc.sql("update assistant_run set effects_json = :effects where id = :id")
+                .param("effects", writeJson(effects)).param("id", run.id()).update();
+        return observation;
+    }
+
+    private PlanStep appendDynamicStep(String planId, PlanStep proposed, String executionMode, String summary) {
+        var current = loadSteps(planId);
+        var order = current.stream().mapToInt(PlanStep::order).max().orElse(0) + 1;
+        var requiresConfirmation = !"AUTO".equalsIgnoreCase(executionMode) && proposed.risk().requiresConfirmation();
+        var step = new PlanStep(UUID.randomUUID().toString(), order, proposed.tool(), proposed.mode(),
+                proposed.title(), proposed.description(), proposed.arguments(), proposed.risk(), requiresConfirmation, "PENDING");
+        var risk = loadSteps(planId).stream().map(PlanStep::risk)
+                .max(java.util.Comparator.comparing(Enum::ordinal)).orElse(proposed.risk());
+        jdbc.sql("""
+                        insert into assistant_plan_step(id, plan_id, step_order, tool_name, tool_mode, title,
+                            description, arguments_json, risk_level, requires_confirmation, status)
+                        values (:id, :planId, :stepOrder, :toolName, :toolMode, :title, :description,
+                            :arguments, :riskLevel, :requiresConfirmation, 'PENDING')
+                        """)
+                .param("id", step.id()).param("planId", planId).param("stepOrder", order)
+                .param("toolName", step.tool()).param("toolMode", step.mode()).param("title", step.title())
+                .param("description", step.description()).param("arguments", writeJson(step.arguments()))
+                .param("riskLevel", step.risk().name()).param("requiresConfirmation", requiresConfirmation).update();
+        var version = jdbc.sql("select version from assistant_plan where id = :id")
+                .param("id", planId).query(Integer.class).single() + 1;
+        var hash = HashSupport.sha256(writeJson(Map.of("planId", planId, "version", version,
+                "steps", loadSteps(planId), "summary", summary)));
+        jdbc.sql("""
+                        update assistant_plan set version = :version, plan_hash = :hash, summary = :summary,
+                            risk_level = :risk, status = :status, expires_at = :expiresAt
+                        where id = :id
+                        """)
+                .param("version", version).param("hash", hash).param("summary", summary)
+                .param("risk", risk.name())
+                .param("status", requiresConfirmation ? "WAITING_CONFIRMATION" : "RUNNING")
+                .param("expiresAt", Instant.now().plusSeconds(1800)).param("id", planId).update();
+        return step;
+    }
+
+    private void pauseForConfirmation(RunResponse run, PlanStep next) {
+        jdbc.sql("update assistant_run set status = 'WAITING_CONFIRMATION', result_summary = :summary where id = :id")
+                .param("summary", "等待确认下一步：“" + next.title() + "”").param("id", run.id()).update();
+        var plan = jdbc.sql("select version, plan_hash from assistant_plan where id = :id")
+                .param("id", run.planId()).query((rs, row) -> Map.of(
+                        "version", rs.getInt("version"), "hash", rs.getString("plan_hash"))).single();
+        events.publish(run.sessionId(), run.id(), "assistant.confirmation.required", Map.of(
+                "planId", run.planId(), "planVersion", plan.get("version"), "planHash", plan.get("hash"),
+                "progress", dynamicProgress(completedActionCount(run.planId())),
+                "message", "Agent 根据执行结果提出了新的修改，需要确认后继续"));
+        events.publish(run.sessionId(), run.id(), "agent.waiting_confirmation", Map.of(
+                "status", "waiting", "planId", run.planId(), "toolName", next.tool(),
+                "message", "等待确认动态追加的步骤：“" + next.title() + "”"));
+    }
+
+    private void finishRun(RunResponse run, String summary, Map<String, Object> effects) {
+        var safeSummary = summary == null || summary.isBlank() ? "已完成工作台操作。" : summary;
+        jdbc.sql("update assistant_plan set status = 'COMPLETED', summary = :summary where id = :id")
+                .param("summary", safeSummary).param("id", run.planId()).update();
+        jdbc.sql("update assistant_run set status = 'SUCCEEDED', result_summary = :summary, finished_at = :now where id = :id")
+                .param("summary", safeSummary).param("now", Instant.now()).param("id", run.id()).update();
+        saveAssistantMessage(run.sessionId(), safeSummary, run.id());
+        events.publish(run.sessionId(), run.id(), "agent.generating", Map.of(
+                "status", "completed", "message", "正在整理最终结果和执行轨迹", "progress", 98));
+        events.publish(run.sessionId(), run.id(), "assistant.run.completed", Map.of(
+                "runId", run.id(), "summary", safeSummary, "message", safeSummary, "progress", 100,
+                "canRollback", effects.containsKey("createdProjectId")));
+        events.publish(run.sessionId(), run.id(), "agent.completed", Map.of(
+                "status", "completed", "summary", safeSummary, "message", safeSummary, "progress", 100,
+                "provenance", Map.of("traceId", run.id(), "toolCount", completedActionCount(run.planId()))));
+    }
+
+    private void failRun(RunResponse run, RuntimeException exception) {
+        var failure = exception.getMessage() == null ? "执行失败" : exception.getMessage();
+        jdbc.sql("update assistant_run set status = 'FAILED', result_summary = :message, finished_at = :now where id = :id")
+                .param("message", failure).param("now", Instant.now()).param("id", run.id()).update();
+        jdbc.sql("update assistant_plan set status = 'FAILED' where id = :id")
+                .param("id", run.planId()).update();
+        saveAssistantMessage(run.sessionId(), "本次任务未完成：" + failure, run.id());
+        events.publish(run.sessionId(), run.id(), "assistant.run.failed", Map.of(
+                "runId", run.id(), "progress", 100, "message", "当前步骤没有完成，可以从这里重试", "error", failure));
+        events.publish(run.sessionId(), run.id(), "agent.failed", Map.of(
+                "status", "failed", "progress", 100, "message", "当前步骤没有完成，可以展开查看错误", "error", failure));
+    }
+
+    private int completedActionCount(String planId) {
+        return jdbc.sql("""
+                        select count(*) from assistant_plan_step
+                        where plan_id = :planId and tool_name <> 'workspace.inspect' and status in ('SUCCEEDED', 'FAILED')
+                        """).param("planId", planId).query(Integer.class).single();
+    }
+
+    private int dynamicProgress(int completedActions) {
+        return Math.min(94, 25 + completedActions * 6);
+    }
+
+    private String activeProjectId(PlanRuntime runtime, PlanStep completedStep, Map<String, Object> effects) {
+        if ("project.delete".equals(completedStep.tool())) return null;
+        return Objects.toString(effects.get("createdProjectId"), runtime.projectId());
+    }
+
+    private Map<String, Object> observationOutput(Map<String, Object> before, Map<String, Object> after) {
+        var output = new LinkedHashMap<String, Object>();
+        after.forEach((key, value) -> {
+            if (!"uiAction".equals(key) && !Objects.equals(before.get(key), value)) output.put(key, value);
+        });
+        return output;
+    }
+
+    private PlanRuntime loadRuntime(String planId) {
+        return jdbc.sql("""
+                        select p.goal, p.execution_mode, p.dynamic_agent, c.page, c.project_id
+                        from assistant_plan p join assistant_context_snapshot c on c.id = p.context_snapshot_id
+                        where p.id = :id
+                        """).param("id", planId).query((rs, row) -> new PlanRuntime(
+                        rs.getString("goal"), rs.getString("page"), rs.getString("project_id"),
+                        rs.getString("execution_mode"), rs.getBoolean("dynamic_agent"))).single();
+    }
+
+    private AssistantPlanner.WorkspaceContext workspaceContext(String projectId) {
+        if (projectId == null || projectId.isBlank()) {
+            var items = projects.list().stream().map(project -> Map.<String, Object>of(
+                    "id", project.id(), "name", project.name(), "type", "PROJECT",
+                    "group", "PROJECT", "status", project.status())).toList();
+            return new AssistantPlanner.WorkspaceContext(null, "个人工作台", 0, 0, 0,
+                    false, null, null, null, items, List.of());
+        }
+        var snapshot = workspace.get(projectId);
+        var items = new ArrayList<Map<String, Object>>();
+        snapshot.folders().forEach(folder -> {
+            var item = new LinkedHashMap<String, Object>();
+            item.put("id", folder.id()); item.put("name", folder.name()); item.put("type", "FOLDER");
+            item.put("group", folder.rootKind()); item.put("status", "READY");
+            if (folder.parentId() != null) item.put("parent_id", folder.parentId());
+            items.add(item);
+        });
+        snapshot.workflows().forEach(workflow -> items.add(Map.of(
+                "id", workflow.id(), "name", workflow.name(), "type", "WORKFLOW",
+                "group", "WORKFLOW", "status", workflow.status())));
+        snapshot.resources().forEach(resource -> items.add(Map.of(
+                "id", resource.id(), "name", resource.name(), "type", resource.resourceType(),
+                "group", resource.group(), "status", resource.status())));
+        return new AssistantPlanner.WorkspaceContext(projectId, snapshot.project().name(),
+                (int) snapshot.resources().stream().filter(item -> "DATA".equals(item.group())).count(),
+                (int) snapshot.resources().stream().filter(item -> "KNOWLEDGE".equals(item.group())).count(),
+                (int) snapshot.resources().stream().filter(item -> "OUTPUT".equals(item.group())).count(),
+                snapshot.resources().stream().anyMatch(item -> "DATA".equals(item.group())),
+                null, null, null, List.copyOf(items), List.of());
+    }
+
+    private record PlanRuntime(String goal, String page, String projectId, String executionMode, boolean dynamic) { }
 
     private void saveAssistantMessage(String sessionId, String content, String traceId) {
         jdbc.sql("""

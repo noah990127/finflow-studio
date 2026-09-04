@@ -112,3 +112,51 @@ async def test_deep_agent_selects_workspace_tools_in_a_session(monkeypatch) -> N
     assert result.mode == "deep-agents"
     assert result.steps[0].tool == "project.rename"
     assert result.steps[0].arguments["new_name"] == "新项目"
+
+
+@pytest.mark.asyncio
+async def test_deep_agent_replans_after_a_real_observation(monkeypatch) -> None:
+    runtime._ACTIVE_AGENT_THREADS.clear()
+    runtime._AGENT_CHECKPOINTER = None
+    responses = iter([
+        '{"tool_calls":[{"name":"inspect_workspace","arguments":{}}]}',
+        '{"tool_calls":[{"name":"folder_create","arguments":{"project_id":"p1","name":"临时目录","group":"knowledge"}}]}',
+        '{"final":{"summary":"先创建目录","intent":"organize","completed":false}}',
+        '{"tool_calls":[{"name":"folder_rename","arguments":{"project_id":"p1","folder_id":"f1","name":"最终目录"}}]}',
+        '{"final":{"summary":"继续重命名目录","intent":"organize","completed":false}}',
+        '{"final":{"summary":"目录已经创建并重命名","intent":"organize","completed":true}}',
+    ])
+
+    async def complete(_system: str, _user: str) -> str:
+        return next(responses)
+
+    monkeypatch.setattr(runtime.llm, "complete", complete)
+    capabilities = [
+        AgentCapability(id="folder.create", title="创建目录", description="创建工作区目录",
+                        mode="WRITE", risk="CREATE_VERSION", arguments=["project_id", "name", "group"]),
+        AgentCapability(id="folder.rename", title="重命名目录", description="修改目录名称",
+                        mode="WRITE", risk="CREATE_VERSION", arguments=["project_id", "folder_id", "name"]),
+    ]
+    first = await plan_with_agent(AgentPlanRequest(
+        session_id="dynamic-observation-test", goal="创建目录后改名", page="project-home",
+        project_id="p1", capabilities=capabilities,
+    ), model_override=CodexCliChatModel())
+    second = await plan_with_agent(AgentPlanRequest(
+        session_id="dynamic-observation-test", goal="创建目录后改名", page="project-home",
+        project_id="p1", continuation=True, completed_actions=1,
+        observation={"tool": "folder.create", "success": True, "result": "已创建", "folder_id": "f1"},
+        resources=[{"id": "f1", "name": "临时目录", "type": "FOLDER", "group": "KNOWLEDGE"}],
+        capabilities=capabilities,
+    ), model_override=CodexCliChatModel())
+    final = await plan_with_agent(AgentPlanRequest(
+        session_id="dynamic-observation-test", goal="创建目录后改名", page="project-home",
+        project_id="p1", continuation=True, completed_actions=2,
+        observation={"tool": "folder.rename", "success": True, "result": "已重命名"},
+        resources=[{"id": "f1", "name": "最终目录", "type": "FOLDER", "group": "KNOWLEDGE"}],
+        capabilities=capabilities,
+    ), model_override=CodexCliChatModel())
+
+    assert first and [step.tool for step in first.steps] == ["folder.create"]
+    assert second and [step.tool for step in second.steps] == ["folder.rename"]
+    assert second.steps[0].arguments["folder_id"] == "f1"
+    assert final and final.completed is True and final.steps == []
