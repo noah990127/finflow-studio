@@ -28,7 +28,7 @@ const catalog: Array<{ type: WorkflowNodeType; label: string; detail: string; ic
   { type: 'DATA_TRANSFORM', label: '加工数据', detail: '关联、清洗、计算结构化数据', icon: Combine },
   { type: 'REF_SEARCH', label: '查找参考', detail: '从项目资料中查找内容', icon: BookOpen },
   { type: 'AGENT_TASK', label: '开放任务', detail: '让 Agent 自主组合资料、数据与工具', icon: Sparkles },
-  { type: 'AI_ANALYSIS', label: '智能分析', detail: '归纳变化、原因和风险', icon: Sparkles },
+  { type: 'AI_ANALYSIS', label: '智能分析', detail: '按要求分析已连接资料', icon: Sparkles },
   { type: 'DELIVERABLE', label: '生成成果', detail: '生成演示、文档或图表', icon: FileOutput },
 ]
 const removedNodeTypes = new Set<WorkflowNodeType>(['SPREADSHEET_TRANSFORM', 'REVIEW'])
@@ -80,7 +80,7 @@ function initialConfig(type: WorkflowNodeType): Record<string, unknown> {
   if (type === 'DATA_EXTRACT') return { connectionId: '', sql: 'select * from your_table', outputName: 'data.csv', fetchSize: 5000 }
   if (type === 'DATA_TRANSFORM') return { requirements: '根据已连接的数据完成清洗、关联和计算，保留可核对的关键字段。', script: '', outputName: '数据加工结果.csv', inputAliases: {}, sheetNames: {}, scriptSummary: '', scriptMode: '', assumptions: [], qualityRules: [], sampleReport: null }
   if (type === 'REF_SEARCH') return { query: '', limit: 10 }
-  if (type === 'AI_ANALYSIS') return { prompt: '结合已有数据和参考资料，归纳关键变化、原因与风险。', maxPoints: 6 }
+  if (type === 'AI_ANALYSIS') return { prompt: '结合已连接的资料进行分析，给出有证据支持的结论。' }
   if (type === 'AGENT_TASK') return { instruction: '结合已连接的内容完成任务，区分事实、计算、推断和不确定项。', externalResearch: 'OFF', domainAllowlist: [], skills: [], maxToolCalls: 40, timeoutSeconds: 600, maxPoints: 10 }
   if (type === 'DELIVERABLE') return { title: '分析结果', subtitle: '由工作流自动生成', format: 'PPTX', pptSkill: 'guizang-huawei-style-c', heading: '核心发现', targetAudience: '业务负责人', lengthHint: '5-8 页', includeCitations: true, citationStyle: 'IEEE', generationPrompt: '先给出核心结论，再说明变化原因、风险和下一步行动。语言简洁，所有结论仅基于工作流中的数据和参考资料。' }
   return { resourceId: '' }
@@ -103,6 +103,7 @@ function openWorkflow(item: Workflow) {
   const visibleNodeIds = new Set(visibleNodes.map(node => node.id))
   nodes.value = visibleNodes.map(node => {
     const config = structuredClone(node.config ?? {})
+    if (node.type === 'AI_ANALYSIS') delete config.maxPoints
     if (node.type === 'DELIVERABLE') {
       if (!Object.prototype.hasOwnProperty.call(config, 'includeCitations')) config.includeCitations = true
       if (!config.citationStyle) config.citationStyle = 'IEEE'
@@ -373,7 +374,7 @@ watch(() => [props.project?.id, props.workflowId], () => { activeId.value = ''; 
           <label><span>输出文件名</span><input v-model="selectedNode.data.config.outputName" placeholder="数据加工结果.csv"></label>
         </template>
         <template v-else-if="selectedNode.data.nodeType === 'REF_SEARCH'"><label><span>查找内容</span><textarea v-model="selectedNode.data.config.query" rows="4"></textarea></label><label><span>最多使用</span><input v-model.number="selectedNode.data.config.limit" type="number" min="1" max="50"></label></template>
-        <template v-else-if="selectedNode.data.nodeType === 'AI_ANALYSIS'"><label><span>分析要求</span><textarea v-model="selectedNode.data.config.prompt" rows="7"></textarea></label><label><span>最多归纳要点</span><input v-model.number="selectedNode.data.config.maxPoints" type="number" min="1" max="20"></label></template>
+        <template v-else-if="selectedNode.data.nodeType === 'AI_ANALYSIS'"><label><span>分析要求</span><textarea v-model="selectedNode.data.config.prompt" rows="9" placeholder="直接描述希望大模型如何分析已连接的资料"></textarea></label></template>
         <template v-else-if="selectedNode.data.nodeType === 'AGENT_TASK'">
           <label><span>希望 Agent 完成什么</span><textarea v-model="selectedNode.data.config.instruction" rows="8" placeholder="例如：研究目标市场变化，结合项目资料找出关键风险，并给出有来源的结论。"></textarea></label>
           <label><span>联网范围</span><select v-model="selectedNode.data.config.externalResearch"><option value="OFF">只使用项目内容</option><option value="PUBLIC_READ">可搜索公开网页</option><option value="DOMAIN_ALLOWLIST">只访问指定网站</option><option value="CONNECTED_SOURCES">只使用已连接来源</option></select></label>

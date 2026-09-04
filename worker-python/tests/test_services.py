@@ -143,6 +143,15 @@ def test_financial_report_requests_structured_sections_and_charts() -> None:
     assert "至少 3 个章节" in system
 
 
+def test_analysis_uses_requirements_as_user_prompt_and_connected_material_as_context() -> None:
+    system, user = _generation_prompt(GenerateContentRequest(
+        format="ANALYSIS", requirements="比较三家公司现金流并解释差异", source_text="公司A经营现金流为100"
+    ))
+
+    assert "只分析连接到当前节点的资料" in system
+    assert user == "用户的分析要求：\n比较三家公司现金流并解释差异\n\n连接到节点的资料：\n公司A经营现金流为100"
+
+
 def test_slide_prompt_honors_requested_page_range_and_richer_evidence() -> None:
     system, _ = _generation_prompt(GenerateContentRequest(
         format="PPTX", requirements="期望篇幅：12-14 页", source_text="这里是可核对的财务与政策数据"

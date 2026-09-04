@@ -155,6 +155,17 @@ def _generation_prompt(request: GenerateContentRequest) -> tuple[str, str]:
     else:
         citation_rules = ("每个事实、数字、判断和图表必须使用顺序编码引用 [1]、[2]；"
                           "chart.source_ref 使用相同编号，禁止输出 [Ref N] 字样。")
+    if output_format == "ANALYSIS":
+        system = (
+            "你是 FinBTP Studio 的智能分析模型。严格执行用户的分析要求，只分析连接到当前节点的资料。"
+            "区分资料中的事实、计算结果、推断和不确定信息，不得使用未提供的外部事实，不得编造数据。"
+            "输出完整分析结果，结构和篇幅由用户要求及资料内容决定。"
+        )
+        user = "用户的分析要求：\n%s\n\n连接到节点的资料：\n%s" % (
+            request.requirements[:MAX_GENERATION_REQUIREMENTS_CHARS],
+            request.source_text[:MAX_GENERATION_SOURCE_CHARS],
+        )
+        return system, user
     if output_format in {"MERMAID", "EXCALIDRAW"}:
         system = (
             "你是 FinBTP Studio 的业务图表生成助手。只返回可执行的 Mermaid flowchart 源码，"

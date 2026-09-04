@@ -196,6 +196,9 @@ public class WorkflowDefinitionService {
             if (node.type() == NodeType.DATA_TRANSFORM && !incoming.contains(node.id())) {
                 issues.add(new ValidationIssue(node.id(), "请至少连接一份结构化数据"));
             }
+            if (node.type() == NodeType.AI_ANALYSIS && !incoming.contains(node.id())) {
+                issues.add(new ValidationIssue(node.id(), "请连接需要分析的资料或数据"));
+            }
             if (node.type() == NodeType.DELIVERABLE && !incoming.contains(node.id()) && blank(node.config(), "body")) {
                 issues.add(new ValidationIssue(node.id(), "请连接一个上游步骤，或直接填写内容"));
             }
@@ -306,8 +309,18 @@ public class WorkflowDefinitionService {
     private WorkflowDocument normalize(SaveRequest request) {
         var mode = request.executionMode() == null ? ExecutionMode.MANUAL : request.executionMode();
         return new WorkflowDocument(request.name().trim(), request.description() == null ? "" : request.description().trim(),
-                List.copyOf(request.nodes()), request.edges() == null ? List.of() : List.copyOf(request.edges()),
+                request.nodes().stream().map(this::normalizeNode).toList(),
+                request.edges() == null ? List.of() : List.copyOf(request.edges()),
                 mode, mode == ExecutionMode.SCHEDULED ? request.schedule() : null);
+    }
+
+    private NodeDefinition normalizeNode(NodeDefinition node) {
+        if (node.type() != NodeType.AI_ANALYSIS || node.config() == null || !node.config().containsKey("maxPoints")) {
+            return node;
+        }
+        var config = new LinkedHashMap<>(node.config());
+        config.remove("maxPoints");
+        return new NodeDefinition(node.id(), node.type(), node.name(), node.x(), node.y(), Map.copyOf(config));
     }
 
     private void insertVersion(String id, int version, WorkflowDocument document, Instant now) {

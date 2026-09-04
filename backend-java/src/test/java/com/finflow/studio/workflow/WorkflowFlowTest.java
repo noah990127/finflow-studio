@@ -68,6 +68,12 @@ class WorkflowFlowTest {
         assertThat(cycle.issues()).extracting(WorkflowModels.ValidationIssue::message)
                 .contains("步骤之间形成了循环，请调整连线");
 
+        var disconnectedAnalysis = definitions.validate(project.id(), new WorkflowDocument("分析", "",
+                List.of(new NodeDefinition("analysis", NodeType.AI_ANALYSIS, "智能分析", 100, 100,
+                        Map.of("prompt", "分析经营情况"))), List.of()));
+        assertThat(disconnectedAnalysis.issues()).extracting(WorkflowModels.ValidationIssue::message)
+                .contains("请连接需要分析的资料或数据");
+
         var ready = definitions.update(draft.id(), new SaveRequest("月度分析", "可运行版本",
                 List.of(new NodeDefinition("ref", NodeType.REF_SEARCH, "查找参考", 100, 100,
                         Map.of("query", "收入变化", "limit", 5))), List.of()));
@@ -98,10 +104,11 @@ class WorkflowFlowTest {
         assertThat(same.status()).isEqualTo("DRAFT");
 
         var node = new NodeDefinition("analysis", NodeType.AI_ANALYSIS, "分析", 100, 100,
-                Map.of("prompt", "分析数据变化"));
+                Map.of("prompt", "分析数据变化", "maxPoints", 6));
         var saved = definitions.saveProjectWorkflow(project.id(), new SaveRequest("主工作流", "",
                 List.of(node), List.of(), first.currentVersion()));
         assertThat(saved.currentVersion()).isEqualTo(2);
+        assertThat(saved.nodes().getFirst().config()).doesNotContainKey("maxPoints");
 
         assertThatThrownBy(() -> definitions.saveProjectWorkflow(project.id(), new SaveRequest("旧版本", "",
                 List.of(node), List.of(), first.currentVersion())))

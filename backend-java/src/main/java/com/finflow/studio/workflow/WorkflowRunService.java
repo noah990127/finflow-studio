@@ -306,7 +306,7 @@ public class WorkflowRunService {
             case PROCESS -> transformData(run, runId, node, config, upstream, startProgress, endProgress);
             case SPREADSHEET_TRANSFORM -> transformSpreadsheet(config, upstream);
             case REF_SEARCH -> searchRefs(run.projectId(), config);
-            case AI_ANALYSIS -> analyze(run.projectId(), runId, node, config, upstream, context,
+            case AI_ANALYSIS -> analyze(runId, node, config, upstream,
                     startProgress, endProgress);
             case AGENT_TASK -> agentTask(run.projectId(), runId, node, config, upstream, context,
                     startProgress, endProgress);
@@ -562,19 +562,13 @@ public class WorkflowRunService {
         return Map.of("count", items.size(), "refs", items, "refIds", refs.stream().map(ref -> ref.id()).toList());
     }
 
-    private Map<String, Object> analyze(String projectId, String runId, NodeDefinition node, Map<String, Object> config,
+    private Map<String, Object> analyze(String runId, NodeDefinition node, Map<String, Object> config,
                                         Map<String, Map<String, Object>> upstream,
-                                        Map<String, Map<String, Object>> context,
                                         int startProgress, int endProgress) {
         var prompt = text(config, "prompt");
         var sourceText = collectText(upstream);
-        var refIds = collectRefIds(context);
-        if (sourceText.isBlank()) {
-            var refs = knowledge.search(projectId, prompt, 8);
-            sourceText = refs.stream().map(ref -> ref.text()).reduce("", (left, right) -> left + "\n" + right).trim();
-            refIds = refs.stream().map(ref -> ref.id()).toList();
-        }
-        if (sourceText.isBlank()) sourceText = prompt;
+        var refIds = collectRefIds(upstream);
+        if (sourceText.isBlank()) throw new IllegalStateException("智能分析没有可读取的上游资料，请先连接资料或数据节点");
         var span = Math.max(1, endProgress - startProgress);
         var result = worker.generateContentStreaming("ANALYSIS", prompt, sourceText, event -> {
             var type = Objects.toString(event.get("type"), "status");
@@ -589,12 +583,13 @@ public class WorkflowRunService {
             }
         });
         var analysis = Objects.toString(result.get("content"), "");
-        var maxPoints = integer(config, "maxPoints", 6);
+        var mode = Objects.toString(result.get("mode"), "");
+        if (mode.contains("fallback")) throw new IllegalStateException("大模型当前不可用，智能分析未执行");
         var points = Arrays.stream(analysis.split("\\R"))
-                .map(String::trim).filter(line -> !line.isBlank()).limit(maxPoints).toList();
+                .map(String::trim).filter(line -> !line.isBlank()).toList();
         if (points.isEmpty() && !analysis.isBlank()) points = List.of(analysis);
         return Map.of("analysis", analysis, "points", points, "refIds", refIds,
-                "analysisMode", Objects.toString(result.get("mode"), ""));
+                "analysisMode", mode);
     }
 
     @SuppressWarnings("unchecked")
