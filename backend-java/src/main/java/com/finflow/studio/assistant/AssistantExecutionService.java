@@ -19,6 +19,7 @@ import com.finflow.studio.workflow.WorkflowModels.SaveRequest;
 import com.finflow.studio.workspace.WorkspaceResourceService;
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -40,8 +41,6 @@ import tools.jackson.databind.ObjectMapper;
 
 @Service
 public class AssistantExecutionService {
-    private static final int MAX_DYNAMIC_ACTIONS = 12;
-
     private final JdbcClient jdbc;
     private final AssistantEventService events;
     private final TaskExecutor taskExecutor;
@@ -55,6 +54,7 @@ public class AssistantExecutionService {
     private final WorkflowRunService workflowRuns;
     private final AssistantWorkspaceToolGateway workspaceTools;
     private final AssistantPlanner planner;
+    private final int maxDynamicActions;
 
     public AssistantExecutionService(JdbcClient jdbc, AssistantEventService events,
                                      @Qualifier("applicationTaskExecutor") TaskExecutor taskExecutor,
@@ -62,7 +62,8 @@ public class AssistantExecutionService {
                                      WorkerClient worker, ObjectMapper objectMapper,
                                      WorkspaceResourceService workspace, KnowledgeService knowledge,
                                      DeliverableService deliverables, WorkflowRunService workflowRuns,
-                                     AssistantWorkspaceToolGateway workspaceTools, AssistantPlanner planner) {
+                                     AssistantWorkspaceToolGateway workspaceTools, AssistantPlanner planner,
+                                     @Value("${finflow.agent.max-dynamic-actions:80}") int maxDynamicActions) {
         this.jdbc = jdbc;
         this.events = events;
         this.taskExecutor = taskExecutor;
@@ -76,6 +77,7 @@ public class AssistantExecutionService {
         this.workflowRuns = workflowRuns;
         this.workspaceTools = workspaceTools;
         this.planner = planner;
+        this.maxDynamicActions = Math.max(12, maxDynamicActions);
     }
 
     public RunResponse start(String sessionId, String planId, String idempotencyKey) {
@@ -178,8 +180,9 @@ public class AssistantExecutionService {
                         finishRun(run, turn.summary(), effects);
                         return;
                     }
-                    if (completedActions >= MAX_DYNAMIC_ACTIONS) {
-                        throw new IllegalStateException("动态 Agent 已达到 " + MAX_DYNAMIC_ACTIONS + " 个真实动作上限");
+                    if (completedActions >= maxDynamicActions) {
+                        throw new IllegalStateException("任务在完成前已用完本次 " + maxDynamicActions
+                                + " 次执行预算；中间结果已经保留，请继续当前对话以恢复执行");
                     }
                     var next = appendDynamicStep(run.planId(), turn.steps().getFirst(), runtime.executionMode(), turn.summary());
                     events.publish(run.sessionId(), runId, "agent.plan_updated", Map.of(
@@ -535,6 +538,7 @@ public class AssistantExecutionService {
         if (effects.containsKey("createdProjectId")) value.put("createdProjectId", effects.get("createdProjectId"));
         if (effects.containsKey("knowledgeCitations")) value.put("citations", effects.get("knowledgeCitations"));
         if (effects.containsKey("deliverables")) value.put("deliverables", effects.get("deliverables"));
+        if (effects.containsKey("datasetProvenance")) value.put("dataset", effects.get("datasetProvenance"));
         return value;
     }
 

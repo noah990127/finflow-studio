@@ -176,6 +176,11 @@ export const useAssistantStore = defineStore('assistant', {
         this.streaming = false
         this.progress = 100
         if (message) this.assistantMessage = message
+        this.publishWorkbenchAction({
+          type: 'REFRESH_WORKSPACE',
+          projectId: this.sessionProjectId,
+          refreshWorkspace: true,
+        })
       }
       if (event.type === 'assistant.run.failed' || event.type === 'assistant.run.canceled') this.streaming = false
       const uiAction = payload.uiAction

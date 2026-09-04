@@ -139,6 +139,9 @@ public class WorkerClient {
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(Map.of("url", url, "domain_allowlist", List.of()))
                 .retrieve()
+                .onStatus(status -> status.isError(), response -> response.bodyToMono(String.class)
+                        .defaultIfEmpty("")
+                        .map(body -> new IllegalStateException(workerError(response.statusCode().value(), body))))
                 .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {})
                 .timeout(Duration.ofSeconds(40))
                 .block();
@@ -291,6 +294,9 @@ public class WorkerClient {
         var result = client.post().uri("/v1/data-transforms/sample")
                 .contentType(MediaType.MULTIPART_FORM_DATA)
                 .body(BodyInserters.fromMultipartData(parts.build())).retrieve()
+                .onStatus(status -> status.isError(), response -> response.bodyToMono(String.class)
+                        .defaultIfEmpty("")
+                        .map(body -> new IllegalStateException(workerError(response.statusCode().value(), body))))
                 .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {})
                 .timeout(Duration.ofMinutes(30)).block();
         if (result == null) throw new IllegalStateException("数据样本试跑失败");

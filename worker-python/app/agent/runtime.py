@@ -232,6 +232,9 @@ async def plan_with_agent(request: AgentPlanRequest, model_override: Any = None)
 若目标已经完成，不再调用工具，返回 completed=true；否则调用一个最合适的工具并返回 completed=false。
 完成本轮后返回 JSON，包含 summary、intent、selected_skills、completed。summary 描述接下来将执行什么或基于 Observation 得出的最终结果，
 不得把尚未执行的动作说成已经完成。工具失败时先根据错误选择修正参数、替代工具或重试；只有无法继续时才结束并解释原因。
+dataset.extract 会把网页 JSON/HTML 真正落为数据文件；后续 dataset.query、dataset.transform 和 dataset.open 必须使用 Observation 返回的新 datasetId，
+不得继续使用原网页 resource_id。长任务应依据已执行动作数持续收敛，优先复用已有结果，避免重复读取或重复创建同一资源。
+dataset.transform 的 script 只能是单条只读 DuckDB SELECT/WITH SQL，输入表名固定为 source；不确定 SQL 时省略 script，只提供明确 requirements 让系统生成。
 用业务用户看得懂的中文，不暴露隐藏推理。"""
     workbench_tools = build_workbench_tools(deps)
     agent = create_deep_agent(

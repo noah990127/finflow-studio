@@ -87,6 +87,22 @@ class DynamicAssistantFlowTest {
         assertThat(folders.list(project.id())).extracting(item -> item.name()).contains("审批目录");
     }
 
+    @Test
+    void longDynamicTaskCanContinuePastTheFormerTwelveActionLimit() throws Exception {
+        var project = projects.create("动态长任务", "验证执行预算不会过早终止");
+        var session = json(postJson("/api/projects/" + project.id() + "/assistant/sessions", Map.of("title", "长任务")));
+
+        var response = json(postJson("/api/assistant/sessions/" + session.get("id").asText() + "/messages", Map.of(
+                "text", "长任务：连续检查多个工作区状态后完成", "page", "project-home",
+                "clientContextVersion", 1, "executionMode", "AUTO")));
+        var run = awaitStatus(response.get("run").get("id").asText(), "SUCCEEDED");
+        var plan = json(getJson("/api/assistant/plans/" + response.get("plan").get("id").asText()));
+
+        assertThat(run.get("status").asText()).isEqualTo("SUCCEEDED");
+        assertThat(plan.get("steps")).hasSize(15);
+        assertThat(plan.get("steps")).filteredOn(step -> "project.list".equals(step.get("tool").asText())).hasSize(14);
+    }
+
     private JsonNode awaitStatus(String runId, String expected) throws Exception {
         var deadline = Instant.now().plus(Duration.ofSeconds(10));
         JsonNode run;
@@ -129,6 +145,11 @@ class DynamicAssistantFlowTest {
                     var continuation = Boolean.TRUE.equals(request.get("continuation"));
                     var goal = String.valueOf(request.get("goal"));
                     var completed = ((Number) request.getOrDefault("completed_actions", 0)).intValue();
+                    if (goal.contains("长任务")) {
+                        if (completed < 14) return action("project.list", "检查工作区 " + (completed + 1),
+                                "读取当前项目状态", Map.of());
+                        return Map.of("summary", "长任务已经完成", "completed", true, "steps", List.of());
+                    }
                     if (!continuation && goal.contains("审批场景")) {
                         return action("project.list", "检查项目", "先读取项目列表", Map.of());
                     }

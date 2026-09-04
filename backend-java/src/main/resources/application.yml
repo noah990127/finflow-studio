@@ -27,6 +27,8 @@ management:
         include: health,info,metrics
 
 finflow:
+  agent:
+    max-dynamic-actions: ${FINFLOW_AGENT_MAX_DYNAMIC_ACTIONS:80}
   transform:
     max-output-bytes: ${FINFLOW_TRANSFORM_MAX_OUTPUT_BYTES:107374182400}
   storage:

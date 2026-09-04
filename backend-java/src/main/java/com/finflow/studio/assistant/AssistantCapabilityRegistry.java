@@ -77,11 +77,11 @@ public final class AssistantCapabilityRegistry {
                 List.of("source_id", "query", "target_name"));
         register("dataset.query", "dataset", "查询数据", "使用只读 SQL 或分析请求查询数据集", "READ", RiskLevel.READ_ONLY, "never",
                 List.of("dataset_id", "sql", "analysis_request"));
-        register("dataset.extract", "dataset", "抽取数据", "从资源或知识表格中抽取数据集", "WRITE", RiskLevel.CREATE_VERSION, "always",
+        register("dataset.extract", "dataset", "抽取数据", "从文件、网页 JSON 或 HTML 表格中抽取并创建真实可计算的数据文件；返回的新 dataset_id 才能用于后续转换", "WRITE", RiskLevel.CREATE_VERSION, "always",
                 List.of("resource_id", "schema", "target_name"));
         register("dataset.create", "dataset", "创建数据集", "创建新的结构化数据集", "WRITE", RiskLevel.CREATE_VERSION, "always",
                 List.of("project_id", "name", "schema", "rows"));
-        register("dataset.transform", "dataset", "转换数据", "生成并执行透明可复核的数据加工", "WRITE", RiskLevel.CREATE_VERSION, "always",
+        register("dataset.transform", "dataset", "转换数据", "生成并执行透明可复核的数据加工；script 必须是只读 DuckDB SQL，输入表固定名为 source，不传 SQL 时由系统根据 requirements 生成", "WRITE", RiskLevel.CREATE_VERSION, "always",
                 List.of("dataset_id", "requirements", "script", "target_name"));
         register("dataset.open", "dataset", "打开数据集", "在数据面板打开指定数据集", "READ", RiskLevel.READ_ONLY, "never",
                 List.of("dataset_id"));

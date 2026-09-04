@@ -7,6 +7,7 @@ import com.finflow.studio.data.DataModels.CreateExtractRequest;
 import com.finflow.studio.data.DataModels.PreviewConnectionRequest;
 import com.finflow.studio.data.DataModels.SourceType;
 import com.finflow.studio.data.DataTransformService;
+import com.finflow.studio.data.StructuredDataMaterializer;
 import com.finflow.studio.deliverable.DeliverableModels.CreateRequest;
 import com.finflow.studio.deliverable.DeliverableModels.SectionRequest;
 import com.finflow.studio.deliverable.DeliverableService;
@@ -444,6 +445,25 @@ public class AssistantWorkspaceToolGateway {
         if (sourceId.isBlank()) sourceId = argument(step, "resource_id", "");
         var projectId = required(step, "project_id", "项目");
         var item = resource(projectId, sourceId);
+        if ("WEB_URL".equals(item.resourceType())) {
+            var fetched = fetchedResource(item, effects);
+            var materialized = StructuredDataMaterializer.materialize(fetched, step.arguments().get("schema"), objectMapper);
+            var name = argument(step, "target_name", item.name() + "-数据集");
+            if (!name.toLowerCase(Locale.ROOT).endsWith(".json")) name += ".json";
+            var created = knowledge.importBytes(projectId, name, "application/json", writeBytes(materialized.rows()));
+            var provenance = new LinkedHashMap<String, Object>();
+            provenance.put("sourceResourceId", item.id());
+            provenance.put("sourceUrl", item.url());
+            provenance.put("finalUrl", Objects.toString(fetched.get("final_url"), item.url()));
+            provenance.put("contentHash", Objects.toString(fetched.get("content_hash"), ""));
+            provenance.put("sourcePath", materialized.sourcePath());
+            provenance.put("rowCount", materialized.rows().size());
+            effects.put("datasetId", created.id());
+            effects.put("datasetProvenance", provenance);
+            effects.put("provenance", provenance);
+            effects.put("uiAction", resourceAction(projectId, created.id(), true));
+            return "已从网页资源抽取 " + materialized.rows().size() + " 行数据并创建数据集“" + created.name() + "”";
+        }
         if (!Set.of("DATABASE_CONNECTION", "API_CONNECTION").contains(item.resourceType())) {
             effects.put("datasetId", sourceId);
             return "现有数据文件已可作为数据集使用";
@@ -491,15 +511,16 @@ public class AssistantWorkspaceToolGateway {
         var id = required(step, "dataset_id", "数据集");
         var item = resource(projectId, id);
         var input = new DataTransformService.SourceRequest("DATASET".equals(item.resourceType()) ? "EXTRACT" : "FILE",
-                id, "input_1", item.name(), null, null);
+                id, "source", item.name(), null, null);
         var requirements = required(step, "requirements", "加工要求");
         var script = argument(step, "script", "");
-        if (script.isBlank()) {
+        if (!looksLikeSqlQuery(script)) {
             var generated = transforms.generate(projectId, new DataTransformService.GenerateRequest(requirements, List.of(input)));
             script = Objects.toString(generated.get("script"), "");
         }
         if (script.isBlank()) throw new IllegalStateException("数据加工没有生成可执行脚本");
         var config = Map.<String, Object>of("script", script, "requirements", requirements,
+                "inputAliases", Map.of("input", "source"),
                 "outputName", argument(step, "target_name", "transformed_data.csv"));
         var upstream = "DATASET".equals(item.resourceType()) ? Map.of("input", Map.<String, Object>of("extractJobId", id))
                 : Map.of("input", Map.<String, Object>of("fileId", id));
@@ -507,6 +528,10 @@ public class AssistantWorkspaceToolGateway {
         effects.put("datasetId", result.resource().id());
         effects.put("qualityReport", result.qualityReport());
         return "已生成加工数据集“" + result.resource().name() + "”";
+    }
+
+    private boolean looksLikeSqlQuery(String value) {
+        return value != null && value.strip().toLowerCase(Locale.ROOT).matches("(?s)^(select|with)\\b.*");
     }
 
     private String openDataset(PlanStep step, Map<String, Object> effects) {
@@ -681,6 +706,23 @@ public class AssistantWorkspaceToolGateway {
         } catch (RuntimeException exception) {
             throw new IllegalStateException("网页资源“" + item.name() + "”读取失败：" + exception.getMessage(), exception);
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> fetchedResource(Resource item, Map<String, Object> effects) {
+        if (effects.get("resource") instanceof Map<?, ?> existing
+                && item.id().equals(Objects.toString(existing.get("id"), ""))
+                && !Objects.toString(existing.get("content"), "").isBlank()) {
+            var fetched = new LinkedHashMap<String, Object>();
+            fetched.put("title", existing.get("title"));
+            fetched.put("text", existing.get("content"));
+            fetched.put("content_type", existing.get("contentType"));
+            fetched.put("final_url", existing.get("finalUrl"));
+            fetched.put("content_hash", existing.get("contentHash"));
+            fetched.put("tables", existing.containsKey("tables") ? existing.get("tables") : List.of());
+            return fetched;
+        }
+        return fetchWebResource(item);
     }
 
     private Map<String, Object> webRef(Resource item, Map<String, Object> fetched) {
