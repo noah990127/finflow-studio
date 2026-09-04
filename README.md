@@ -108,6 +108,23 @@ cd worker-python && .venv/bin/python -m pytest
 cd frontend && npm run build
 ```
 
+Agent 验收不围绕某几个演示问题写固定流程。启动 Java API 后，可以直接从实时 Tool Manifest 生成覆盖全部能力域的隐藏自然语言场景：
+
+```bash
+worker-python/.venv312/bin/python scripts/generate-agent-eval-suite.py \
+  --count 180 --seed 20260904 --output /tmp/finflow-agent-evals.jsonl
+```
+
+生成集会轮换用户角色、表达风格、模糊指代、多步骤目标、多轮补充、Auto/审批和失败恢复条件。`worker-python/app/evals` 根据真实工具事件、Observation、审批时序和工作区状态变化评分，不把 Agent 回复中的“已完成”当作成功依据。固定场景只承担基础回归，版本质量以未向 Agent 暴露的生成场景为主。
+
+模型意图与工具发现可以独立抽样运行，避免把模型选择正确误算为工作区任务已经完成：
+
+```bash
+worker-python/.venv312/bin/python scripts/run-agent-intent-evals.py \
+  /tmp/finflow-agent-evals.jsonl --limit 20 --timeout 60 \
+  --output /tmp/finflow-agent-intent-report.json
+```
+
 ## Docker Compose
 
 仓库包含 `docker-compose.yml`。平台全部服务、ONLYOFFICE、MinIO、环境变量、两套案例初始化和离线镜像部署步骤见 [`docs/Docker 部署指南.md`](docs/Docker%20部署指南.md)。

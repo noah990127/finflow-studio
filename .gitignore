@@ -33,6 +33,7 @@ docs/*
 *.log
 *.pid
 .run/
+scripts/__pycache__/
 
 **/.env
 !.env.example

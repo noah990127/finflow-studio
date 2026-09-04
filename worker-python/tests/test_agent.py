@@ -97,6 +97,17 @@ def test_research_cooldown_does_not_disable_agent_planning(monkeypatch) -> None:
     assert gateway._codex_cli_research_available() is False
 
 
+def test_codex_cli_gateway_allows_virtual_agent_tool_selection() -> None:
+    prompt = LlmGateway()._codex_cli_prompt(
+        "Return a FinFlow tool call as JSON.",
+        "Open the selected workspace item.",
+    )
+
+    assert "virtual FinFlow or DeepAgents tool-call JSON" in prompt
+    assert "emitting a tool-call object is allowed" in prompt
+    assert "Do not use tools" not in prompt
+
+
 @pytest.mark.asyncio
 async def test_deep_agent_selects_workspace_tools_in_a_session(monkeypatch) -> None:
     responses = iter([
