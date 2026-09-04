@@ -177,6 +177,11 @@ public class AssistantPlanner {
                             current.description(), current.arguments(), current.risk(), current.requiresConfirmation(), current.status()));
                 }
             }
+            if (steps.size() == 1 && "workspace.inspect".equals(steps.getFirst().tool())) {
+                steps.add(step(2, "assistant.respond", "READ", "回答并给出建议",
+                        "结合真实工作区摘要回答用户，不自行修改内容", RiskLevel.READ_ONLY,
+                        mapOf("goal", goal)));
+            }
             var summary = readable(response.get("summary"), modelSummary(goal, steps, context), 240);
             return new PlannedWork(summary, List.copyOf(steps), true);
         } catch (RuntimeException exception) {

@@ -7,6 +7,8 @@ import '@vue-flow/core/dist/theme-default.css'
 import '@vue-flow/controls/dist/style.css'
 import '@vue-flow/minimap/dist/style.css'
 import './style.css'
+import './styles/foundation.css'
+import './styles/assistant.css'
 import App from './App.vue'
 
 createApp(App).use(createPinia()).use(ElementPlus).mount('#app')

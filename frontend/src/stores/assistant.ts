@@ -7,12 +7,16 @@ type TimelineItem = {
   title: string
   detail: string
   tone: 'info' | 'success' | 'warning'
+  kind: 'thinking' | 'planning' | 'skill' | 'tool' | 'observation' | 'confirmation' | 'generation' | 'result'
   time: string
+  eventType?: string
   toolName?: string
   argumentSummary?: string
   resultSummary?: string
+  provenanceSummary?: string
   error?: string
   status?: string
+  progress?: number
 }
 
 const eventTypes = [
@@ -49,6 +53,7 @@ export const useAssistantStore = defineStore('assistant', {
     progress: 0,
     progressLabel: '',
     streaming: false,
+    eventConnection: 'idle' as 'idle' | 'connecting' | 'live' | 'reconnecting',
     streamLines: [] as string[],
     lastEventSequence: 0,
     workbenchAction: null as Record<string, unknown> | null,
@@ -75,7 +80,7 @@ export const useAssistantStore = defineStore('assistant', {
       this.selection = selection ?? null
     },
     setExecutionMode(mode: 'AUTO' | 'APPROVAL') {
-      if (this.busy || (this.run && ['QUEUED', 'RUNNING', 'WAITING_CONFIRMATION'].includes(this.run.status))) return
+      if (this.busy || (this.run && ['QUEUED', 'RUNNING'].includes(this.run.status))) return
       this.executionMode = mode
       localStorage.setItem('finflow.assistant.executionMode', mode)
     },
@@ -92,8 +97,8 @@ export const useAssistantStore = defineStore('assistant', {
         if (!this.sessions.some(item => item.id === session.id)) this.sessions.unshift(session)
         await this.activateSession(session)
       }
+      if (this.historySessionId !== this.sessionId) await this.loadHistory(true)
       this.connectEvents()
-      if (this.historySessionId !== this.sessionId) await this.loadHistory()
     },
     async createNewSession(projectId: string) {
       if (this.busy || (this.run && ['QUEUED', 'RUNNING'].includes(this.run.status))) return
@@ -128,32 +133,75 @@ export const useAssistantStore = defineStore('assistant', {
       this.lastEventSequence = 0
       this.history = []
       this.historySessionId = ''
-      await this.loadHistory()
+      await this.loadHistory(true)
       this.connectEvents()
     },
-    async loadHistory() {
+    async loadHistory(restoreLatestRun = true) {
       if (!this.sessionId) return
-      this.history = await api.listAssistantMessages(this.sessionId)
+      const [messages, events] = await Promise.all([
+        api.listAssistantMessages(this.sessionId),
+        restoreLatestRun ? api.listAssistantEvents(this.sessionId) : Promise.resolve([]),
+      ])
+      this.history = messages
       this.historySessionId = this.sessionId
+      if (!restoreLatestRun || !events.length) return
+
+      const lastRequestIndex = events.findLastIndex(event => event.type === 'assistant.request.received')
+      const latestEvents = lastRequestIndex >= 0 ? events.slice(lastRequestIndex) : []
+      const lastUserIndex = messages.findLastIndex(message => message.role === 'USER')
+      if (!latestEvents.length || lastUserIndex < 0) return
+
+      this.currentRequest = messages[lastUserIndex].content
+      const latestAssistant = messages.slice(lastUserIndex + 1).filter(message => message.role === 'ASSISTANT').at(-1)
+      this.assistantMessage = latestAssistant?.content ?? ''
+      this.history = messages.slice(0, lastUserIndex)
+      this.timeline = []
+      this.progress = 0
+      this.progressLabel = ''
+      this.lastEventSequence = 0
+      for (const event of latestEvents) this.handleEvent(event, true)
+
+      const planId = latestEvents.map(event => event.payload?.planId).findLast(value => typeof value === 'string')
+      const runId = latestEvents.map(event => event.runId).findLast(value => typeof value === 'string')
+      if (typeof planId === 'string') {
+        try { this.plan = await api.getAssistantPlan(planId) } catch { /* history still remains readable */ }
+      }
+      if (typeof runId === 'string') {
+        try { this.run = await api.getRun(runId) } catch { /* history still remains readable */ }
+      }
+      this.streaming = Boolean(this.run && ['QUEUED', 'RUNNING'].includes(this.run.status))
+      if (!this.assistantMessage && this.run?.resultSummary) this.assistantMessage = this.run.resultSummary
     },
     connectEvents() {
       if (!this.sessionId || (eventSource && eventSessionId === this.sessionId)) return
       eventSource?.close()
       eventSessionId = this.sessionId
+      this.eventConnection = 'connecting'
       eventSource = new EventSource(`/api/assistant/sessions/${this.sessionId}/events`)
+      eventSource.onopen = () => { this.eventConnection = 'live' }
       for (const type of eventTypes) {
         eventSource.addEventListener(type, (raw) => {
           try { this.handleEvent(JSON.parse((raw as MessageEvent).data) as AssistantEvent) } catch { /* polling remains as fallback */ }
         })
       }
-      eventSource.onerror = () => { this.streaming = Boolean(this.run && ['QUEUED', 'RUNNING'].includes(this.run.status)) }
+      eventSource.onerror = () => {
+        this.eventConnection = 'reconnecting'
+        this.streaming = Boolean(this.run && ['QUEUED', 'RUNNING'].includes(this.run.status))
+      }
+    },
+    async syncEvents() {
+      if (!this.sessionId) return
+      try {
+        const events = await api.listAssistantEvents(this.sessionId, this.lastEventSequence)
+        for (const event of events) this.handleEvent(event)
+      } catch { /* SSE remains primary; run polling will try again */ }
     },
     publishWorkbenchAction(action: Record<string, unknown>) {
       this.workbenchAction = action
       this.workbenchActionSequence += 1
       window.dispatchEvent(new CustomEvent('finflow:assistant-action', { detail: action }))
     },
-    handleEvent(event: AssistantEvent) {
+    handleEvent(event: AssistantEvent, replay = false) {
       if (event.sessionId !== this.sessionId || event.eventSeq <= this.lastEventSequence) return
       this.lastEventSequence = event.eventSeq
       const payload = event.payload ?? {}
@@ -176,27 +224,59 @@ export const useAssistantStore = defineStore('assistant', {
         this.streaming = false
         this.progress = 100
         if (message) this.assistantMessage = message
-        this.publishWorkbenchAction({
-          type: 'REFRESH_WORKSPACE',
-          projectId: this.sessionProjectId,
-          refreshWorkspace: true,
-        })
+        if (!replay) {
+          this.publishWorkbenchAction({
+            type: 'REFRESH_WORKSPACE',
+            projectId: this.sessionProjectId,
+            refreshWorkspace: true,
+          })
+        }
       }
-      if (event.type === 'assistant.run.failed' || event.type === 'assistant.run.canceled') this.streaming = false
+      if (event.type === 'assistant.run.failed' || event.type === 'agent.failed') {
+        this.streaming = false
+        this.error = String(payload.error ?? payload.message ?? 'Agent 未能完成这次任务')
+      }
+      if (event.type === 'assistant.run.canceled' || event.type === 'agent.cancelled') this.streaming = false
       const uiAction = payload.uiAction
-      if (event.type === 'assistant.step.completed' && uiAction && typeof uiAction === 'object') {
+      if (!replay && event.type === 'assistant.step.completed' && uiAction && typeof uiAction === 'object') {
         this.pushTimeline(`action-${event.eventSeq}`, '同步工作台', '正在把这一步的结果呈现在左侧工作区', 'info', event.createdAt)
         this.publishWorkbenchAction(uiAction as Record<string, unknown>)
       }
-      if (title && message) this.pushTimeline(`event-${event.eventSeq}`, title, message,
-        event.type.endsWith('completed') || event.type === 'agent.observation' || event.type === 'agent.completed' ? 'success' : event.type.includes('failed') || event.type.includes('confirmation') ? 'warning' : 'info',
-        event.createdAt, {
-          toolName: typeof payload.toolName === 'string' ? payload.toolName : typeof payload.tool === 'string' ? payload.tool : undefined,
-          argumentSummary: typeof payload.argumentSummary === 'string' ? payload.argumentSummary : undefined,
-          resultSummary: typeof payload.resultSummary === 'string' ? payload.resultSummary : typeof payload.result === 'string' ? payload.result : undefined,
-          error: typeof payload.error === 'string' ? payload.error : undefined,
-          status: typeof payload.status === 'string' ? payload.status : undefined,
-        })
+      const isPublicActivity = event.type.startsWith('agent.')
+        || event.type === 'assistant.request.received'
+        || event.type === 'assistant.context.started'
+      if (isPublicActivity && title && message) this.pushTimeline(`event-${event.eventSeq}`, title, message,
+          event.type.endsWith('completed') || event.type === 'agent.observation' || event.type === 'agent.completed' ? 'success' : event.type.includes('failed') || event.type.includes('confirmation') ? 'warning' : 'info',
+          event.createdAt, {
+            kind: this.eventKind(event.type),
+            eventType: event.type,
+            toolName: typeof payload.toolName === 'string' ? payload.toolName : typeof payload.tool === 'string' ? payload.tool : undefined,
+            argumentSummary: typeof payload.argumentSummary === 'string' ? payload.argumentSummary : undefined,
+            resultSummary: typeof payload.resultSummary === 'string' ? payload.resultSummary : typeof payload.result === 'string' ? payload.result : undefined,
+            provenanceSummary: this.summarizeProvenance(payload.provenance),
+            error: typeof payload.error === 'string' ? payload.error : undefined,
+            status: typeof payload.status === 'string' ? payload.status : undefined,
+            progress: Number.isFinite(value) ? value : undefined,
+          })
+    },
+    eventKind(type: string): TimelineItem['kind'] {
+      if (type.includes('thinking')) return 'thinking'
+      if (type.includes('planning') || type.includes('plan_updated')) return 'planning'
+      if (type.includes('skill')) return 'skill'
+      if (type.includes('tool_search') || type.includes('tool_call') || type.includes('executing')) return 'tool'
+      if (type.includes('observation')) return 'observation'
+      if (type.includes('confirmation')) return 'confirmation'
+      if (type.includes('generating')) return 'generation'
+      if (type.includes('completed') || type.includes('failed') || type.includes('cancel')) return 'result'
+      return 'thinking'
+    },
+    summarizeProvenance(value: unknown) {
+      if (!value || typeof value !== 'object') return undefined
+      const provenance = value as Record<string, unknown>
+      const parts = [provenance.sourceName, provenance.url, provenance.resourceId,
+        typeof provenance.toolCount === 'number' ? `${provenance.toolCount} 次工具调用` : undefined]
+        .filter(item => typeof item === 'string' && item.trim()) as string[]
+      return parts.length ? parts.join(' · ') : undefined
     },
     eventTitle(type: string) {
       if (type === 'agent.thinking_summary') return '正在思考'
@@ -230,7 +310,8 @@ export const useAssistantStore = defineStore('assistant', {
       if (this.timeline.some(item => item.id === id)) return
       const latest = this.timeline.at(-1)
       if (latest?.title === title && latest.detail === detail) return
-      this.timeline.push({ id, title, detail, tone, time, ...extra })
+      this.timeline.push({ id, title, detail, tone, time, kind: 'thinking', ...extra })
+      this.timeline.sort((left, right) => new Date(left.time).getTime() - new Date(right.time).getTime())
     },
     async refreshPlan(planId: string) {
       try {
@@ -238,11 +319,14 @@ export const useAssistantStore = defineStore('assistant', {
         if (this.plan?.id === planId) this.plan = plan
       } catch { /* the run poll remains authoritative if a refresh races an update */ }
     },
-    async send(projectId: string) {
-      const text = this.input.trim()
+    async send(projectId: string, requestText = this.input) {
+      const text = requestText.trim()
       if (!text || this.busy) return
+      const hadCurrentRequest = Boolean(this.currentRequest)
+      this.input = ''
       this.busy = true
       this.error = ''
+      this.assistantMessage = ''
       this.plan = null
       this.run = null
       this.timeline = []
@@ -252,14 +336,14 @@ export const useAssistantStore = defineStore('assistant', {
       this.streamLines = ['正在接收你的需求']
       try {
         await this.ensureSession(projectId)
-        if (this.currentRequest) await this.loadHistory()
+        if (hadCurrentRequest) await this.loadHistory(false)
         this.currentRequest = text
         const response = await api.sendMessage(this.sessionId, text, this.pageContext, this.selection ?? undefined, this.executionMode)
         this.assistantMessage = response.assistantMessage
         this.plan = response.plan
         this.context = response.context
         this.run = response.run ?? null
-        this.input = ''
+        await this.syncEvents()
         if (!this.timeline.some(item => item.title === '计划已准备好')) this.pushTimeline(
           `plan-${response.plan.id}`, '计划已准备好',
           this.needsConfirmation ? '请检查会修改的内容' : '只读取和生成草稿，可直接进行',
@@ -299,9 +383,11 @@ export const useAssistantStore = defineStore('assistant', {
       if (!this.run) return
       for (let attempt = 0; attempt < 300; attempt += 1) {
         this.run = await api.getRun(this.run.id)
+        await this.syncEvents()
         if (['SUCCEEDED', 'FAILED', 'CANCELED', 'ROLLED_BACK', 'WAITING_CONFIRMATION'].includes(this.run.status)) break
         await new Promise((resolve) => window.setTimeout(resolve, 1000))
       }
+      await this.syncEvents()
       await this.refreshPlan(this.run.planId)
       if (this.run.status === 'WAITING_CONFIRMATION') {
         this.streaming = false

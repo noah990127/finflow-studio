@@ -112,6 +112,7 @@ export const api = {
   listAssistantSessions: (projectId: string) => request<AssistantSession[]>(`/api/projects/${projectId}/assistant/sessions`),
   getAssistantSession: (sessionId: string) => request<AssistantSession>(`/api/assistant/sessions/${sessionId}`),
   listAssistantMessages: (sessionId: string) => request<AssistantMessage[]>(`/api/assistant/sessions/${sessionId}/messages`),
+  listAssistantEvents: (sessionId: string, after = 0) => request<AssistantEvent[]>(`/api/assistant/sessions/${sessionId}/event-history?after=${after}`),
   sendMessage: (sessionId: string, text: string, page = 'project-home', selection?: Selection, executionMode: 'AUTO' | 'APPROVAL' = 'APPROVAL') => request<MessageResponse>(`/api/assistant/sessions/${sessionId}/messages`, { method: 'POST', body: JSON.stringify({ text, page, route: window.location.pathname, selection, clientContextVersion: 1, executionMode }) }),
   getAssistantPlan: (planId: string) => request<Plan>(`/api/assistant/plans/${planId}`),
   confirmPlan: (plan: Plan, context: ContextSnapshot) => request<Run>(`/api/assistant/plans/${plan.id}/confirm`, { method: 'POST', body: JSON.stringify({ planVersion: plan.version, planHash: plan.planHash, idempotencyKey: crypto.randomUUID(), expectedResourceVersions: context.resourceVersions }) }),

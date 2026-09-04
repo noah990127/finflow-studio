@@ -169,6 +169,26 @@ class AssistantPlannerTest {
     }
 
     @Test
+    void followsAWorkspaceInspectionWithAUserVisibleAnswer() {
+        var worker = new WorkerClient("http://127.0.0.1:9") {
+            @Override
+            public Map<String, Object> planAgent(Object request) {
+                return Map.of("summary", "先查看当前项目", "steps", List.of(Map.of(
+                        "tool", "workspace.inspect", "title", "检查项目", "description", "读取工作区摘要",
+                        "arguments", Map.of())));
+            }
+        };
+
+        var work = new AssistantPlanner(worker).plan("梳理当前项目并给出一项建议", "project-home", null,
+                new AssistantPlanner.WorkspaceContext("project-1", "项目", 0, 1, 2,
+                        false, null, null, null, List.of(), List.of()));
+
+        assertThat(work.steps()).extracting(AssistantModels.PlanStep::tool)
+                .containsExactly("workspace.inspect", "assistant.respond");
+        assertThat(work.dynamic()).isTrue();
+    }
+
+    @Test
     void sendsARealObservationBackForTheNextDynamicDecision() {
         var captured = new AtomicReference<Map<String, Object>>();
         var worker = new WorkerClient("http://127.0.0.1:9") {

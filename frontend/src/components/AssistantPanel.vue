@@ -1,41 +1,50 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { Activity, AlertCircle, ArrowDown, ArrowUp, Bot, Check, CheckCircle2, ChevronDown, ChevronRight, Circle, Clock3, LoaderCircle, MessageSquarePlus, PanelRightClose, RotateCcw, ShieldCheck, Sparkles, Square, Wrench, Zap } from 'lucide-vue-next'
+import {
+  Activity, AlertCircle, ArrowDown, ArrowUp, Bot, BrainCircuit, Check, CheckCircle2,
+  ChevronDown, ChevronRight, Circle, Clock3, FileOutput, History, ListChecks, LoaderCircle,
+  MessageSquarePlus, PanelRightClose, Radio, RotateCcw, Search, ShieldCheck,
+  Sparkles, Square, Wrench, Zap,
+} from 'lucide-vue-next'
 import { useAssistantStore } from '../stores/assistant'
-import type { Project } from '../api/client'
+import type { AssistantMessage, Project } from '../api/client'
 
 const props = defineProps<{ project: Project | null }>()
 const emit = defineEmits<{ workbenchAction: [action: Record<string, unknown>] }>()
 const assistant = useAssistantStore()
 const conversation = ref<HTMLElement | null>(null)
+const composer = ref<HTMLTextAreaElement | null>(null)
 const showSteps = ref(false)
 const showEvents = ref(false)
 const followingLatest = ref(true)
+const unseenActivityCount = ref(0)
 const now = ref(Date.now())
 let clockTimer: number | undefined
 let conversationObserver: MutationObserver | undefined
 
+type HistoryTurn = { id: string; user?: AssistantMessage; assistant: AssistantMessage[] }
+
 const contextLabel = computed(() => assistant.selection?.range.join('、') || assistant.contextTitle || '项目概览')
 const running = computed(() => ['QUEUED', 'RUNNING'].includes(assistant.run?.status ?? '') || assistant.streaming)
-const controlsLocked = computed(() => assistant.busy || ['QUEUED', 'RUNNING', 'WAITING_CONFIRMATION'].includes(assistant.run?.status ?? ''))
+const controlsLocked = computed(() => assistant.busy || ['QUEUED', 'RUNNING'].includes(assistant.run?.status ?? ''))
+const waitingConfirmation = computed(() => assistant.needsConfirmation && (!assistant.run || assistant.run.status === 'WAITING_CONFIRMATION'))
 const taskState = computed(() => {
   if (assistant.error || assistant.run?.status === 'FAILED') return { code: 'failed', label: '未完成', detail: assistant.error || assistant.run?.resultSummary || '执行遇到问题' }
   if (assistant.run?.status === 'CANCELED') return { code: 'canceled', label: '已停止', detail: '后续步骤没有继续执行' }
   if (assistant.run?.status === 'ROLLED_BACK') return { code: 'completed', label: '已撤销', detail: '已恢复到执行前状态' }
-  if (assistant.run?.status === 'SUCCEEDED') return { code: 'completed', label: '已完成', detail: assistant.run.resultSummary || '任务已经完成' }
-  if (assistant.needsConfirmation && (!assistant.run || assistant.run.status === 'WAITING_CONFIRMATION')) return { code: 'waiting', label: '等待确认', detail: assistant.run?.resultSummary || '确认后会继续修改工作台' }
+  if (assistant.run?.status === 'SUCCEEDED') return { code: 'completed', label: '已完成', detail: '' }
+  if (waitingConfirmation.value) return { code: 'waiting', label: '等待确认', detail: assistant.run?.resultSummary || '确认后会继续修改工作台' }
   if (assistant.run?.status === 'QUEUED') return { code: 'running', label: '准备执行', detail: assistant.progressLabel }
-  if (assistant.streaming || assistant.busy) return { code: 'running', label: assistant.plan ? '正在执行' : '正在思考', detail: assistant.progressLabel }
+  if (assistant.streaming || assistant.busy) return { code: 'running', label: assistant.plan ? '正在执行' : '正在分析', detail: assistant.progressLabel }
   if (assistant.plan) return { code: 'ready', label: '计划就绪', detail: assistant.plan.summary }
   return { code: 'idle', label: '就绪', detail: '' }
 })
-const completedSteps = computed(() => {
-  if (!assistant.plan) return 0
-  return assistant.plan.steps.filter(step => step.status === 'SUCCEEDED').length
-})
+const completedSteps = computed(() => assistant.plan?.steps.filter(step => step.status === 'SUCCEEDED').length ?? 0)
 const latestActivity = computed(() => assistant.timeline.at(-1))
-const showJumpToLatest = computed(() => !followingLatest.value && (running.value || assistant.timeline.length > 0))
+const liveActivities = computed(() => assistant.timeline.slice(-4))
+const showJumpToLatest = computed(() => !followingLatest.value && (running.value || unseenActivityCount.value > 0))
 const activeStep = computed(() => assistant.plan?.steps.find(step => stepState(step.order) === 'running'))
+const streamHealthLabel = computed(() => assistant.eventConnection === 'live' ? '实时' : assistant.eventConnection === 'reconnecting' ? '正在重连' : '连接中')
 const elapsedLabel = computed(() => {
   const starts = [assistant.timeline[0]?.time, assistant.run?.createdAt, assistant.run?.startedAt]
     .filter((value): value is string => Boolean(value))
@@ -46,11 +55,27 @@ const elapsedLabel = computed(() => {
   const finished = assistant.run?.finishedAt
   const end = finished ? new Date(finished).getTime() : now.value
   const seconds = Math.max(0, Math.floor((end - started) / 1000))
-  if (seconds < 60) return `已处理 ${seconds} 秒`
+  const prefix = finished ? '耗时' : '已处理'
+  if (seconds < 60) return `${prefix} ${seconds} 秒`
   const minutes = Math.floor(seconds / 60)
   const remainder = seconds % 60
-  return remainder ? `已处理 ${minutes} 分 ${remainder} 秒` : `已处理 ${minutes} 分钟`
+  return remainder ? `${prefix} ${minutes} 分 ${remainder} 秒` : `${prefix} ${minutes} 分钟`
 })
+const historyTurns = computed<HistoryTurn[]>(() => {
+  const turns: HistoryTurn[] = []
+  for (const message of assistant.history) {
+    if (message.role === 'USER') {
+      turns.push({ id: message.id, user: message, assistant: [] })
+      continue
+    }
+    if (message.role !== 'ASSISTANT') continue
+    const current = turns.at(-1)
+    if (current) current.assistant.push(message)
+    else turns.push({ id: message.id, assistant: [message] })
+  }
+  return turns
+})
+
 function stepState(order: number) {
   const persisted = assistant.plan?.steps.find(step => step.order === order)?.status
   if (persisted === 'SUCCEEDED') return 'completed'
@@ -68,20 +93,52 @@ function stepState(order: number) {
 function stepLabel(order: number) {
   return { completed: '完成', running: '进行中', failed: '失败', canceled: '停止', pending: '等待' }[stepState(order)]
 }
-function send() { if (props.project) assistant.send(props.project.id) }
+function activityIcon(kind: string) {
+  if (kind === 'planning') return ListChecks
+  if (kind === 'skill') return History
+  if (kind === 'tool') return Search
+  if (kind === 'observation') return CheckCircle2
+  if (kind === 'confirmation') return ShieldCheck
+  if (kind === 'generation') return FileOutput
+  if (kind === 'result') return CheckCircle2
+  return BrainCircuit
+}
+function activityStatus(item: (typeof assistant.timeline)[number]) {
+  if (item.error || item.status === 'failed') return '失败'
+  if (item.status === 'waiting') return '待确认'
+  if (item.status === 'completed' || item.tone === 'success') return '完成'
+  return '进行中'
+}
+function lastAssistant(turn: HistoryTurn) { return turn.assistant.at(-1) }
+function earlierAssistant(turn: HistoryTurn) { return turn.assistant.slice(0, -1) }
+function send() {
+  if (!props.project) return
+  const text = assistant.input.trim()
+  if (!text) return
+  assistant.input = ''
+  void assistant.send(props.project.id, text)
+}
 function switchSession(event: Event) { void assistant.switchSession((event.target as HTMLSelectElement).value) }
 function clock(value: string) {
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? '' : date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
 }
+function handleComposerKeydown(event: KeyboardEvent) {
+  if (event.isComposing || event.key !== 'Enter' || event.shiftKey) return
+  event.preventDefault()
+  send()
+}
+function resizeComposer() {
+  const element = composer.value
+  if (!element) return
+  element.style.height = 'auto'
+  element.style.height = `${Math.min(element.scrollHeight, 160)}px`
+}
 function handleConversationScroll(event: Event) {
   const element = conversation.value
-  if (!element) return
-  if (event.target !== element) {
-    followingLatest.value = false
-    return
-  }
-  followingLatest.value = element.scrollHeight - element.clientHeight - element.scrollTop <= 48
+  if (!element || event.target !== element) return
+  followingLatest.value = element.scrollHeight - element.clientHeight - element.scrollTop <= 56
+  if (followingLatest.value) unseenActivityCount.value = 0
 }
 function handleConversationWheel(event: WheelEvent) {
   if (event.deltaY < 0) followingLatest.value = false
@@ -94,19 +151,25 @@ async function scrollToLatest(force = false) {
     if (!element || (!force && !followingLatest.value)) return
     element.scrollTop = element.scrollHeight
     followingLatest.value = true
+    unseenActivityCount.value = 0
   })
 }
 function jumpToLatest() {
   followingLatest.value = true
   void scrollToLatest(true)
 }
+
+watch(() => assistant.input, () => nextTick(resizeComposer))
+watch(() => assistant.timeline.at(-1)?.id, (id, previous) => {
+  if (id && previous && !followingLatest.value) unseenActivityCount.value += 1
+})
 watch(() => [assistant.timeline.at(-1)?.id, assistant.timeline.at(-1)?.detail, assistant.assistantMessage,
   assistant.history.length, assistant.run?.status, assistant.run?.currentStep,
-  assistant.plan?.steps.length], scrollToLatest,
-{ flush: 'post' })
+  assistant.plan?.steps.length], () => scrollToLatest(), { flush: 'post' })
 watch(() => assistant.currentRequest, (request, previous) => {
   showSteps.value = false
   showEvents.value = false
+  unseenActivityCount.value = 0
   if (request && request !== previous) {
     followingLatest.value = true
     void scrollToLatest(true)
@@ -114,6 +177,7 @@ watch(() => assistant.currentRequest, (request, previous) => {
 })
 watch(() => assistant.sessionId, () => {
   followingLatest.value = true
+  unseenActivityCount.value = 0
   void scrollToLatest(true)
 })
 watch(() => [assistant.open, props.project?.id] as const, ([open, projectId]) => {
@@ -130,10 +194,11 @@ onMounted(() => {
   clockTimer = window.setInterval(() => { now.value = Date.now() }, 1000)
   if (conversation.value) {
     conversationObserver = new MutationObserver(() => {
-      if (running.value || assistant.needsConfirmation) void scrollToLatest()
+      if ((running.value || waitingConfirmation.value) && followingLatest.value) void scrollToLatest()
     })
     conversationObserver.observe(conversation.value, { childList: true, subtree: true, characterData: true })
   }
+  resizeComposer()
   void scrollToLatest(true)
 })
 onBeforeUnmount(() => {
@@ -147,30 +212,33 @@ onBeforeUnmount(() => {
 
   <aside v-else class="assistant-drawer assistant-codex-panel" aria-label="AI 助手">
     <header class="assistant-header">
-      <div>
-        <div class="assistant-title"><Bot :size="18" /> AI 助手</div>
-        <p><span></span>{{ props.project?.name ?? '个人工作台' }} · {{ contextLabel }}</p>
-        <div class="assistant-session-switcher">
-          <select :value="assistant.sessionId" :disabled="controlsLocked" aria-label="历史对话" @change="switchSession">
-            <option v-for="session in assistant.sessions" :key="session.id" :value="session.id">{{ session.title }} · {{ clock(session.updatedAt) }}</option>
-          </select>
-          <button type="button" title="新对话" :disabled="controlsLocked || !props.project" @click="props.project && assistant.createNewSession(props.project.id)"><MessageSquarePlus :size="14" /></button>
-        </div>
-      </div>
-      <div class="assistant-header-actions">
-        <div class="assistant-mode-switch" role="group" aria-label="Agent 执行模式">
-          <button type="button" :class="{ active: assistant.executionMode === 'AUTO' }" :disabled="controlsLocked" title="自动执行 LLM 选择的工具" @click="assistant.setExecutionMode('AUTO')"><Zap :size="12" />Auto</button>
-          <button type="button" :class="{ active: assistant.executionMode === 'APPROVAL' }" :disabled="controlsLocked" title="修改前需要确认" @click="assistant.setExecutionMode('APPROVAL')"><ShieldCheck :size="12" />审批</button>
+      <div class="assistant-heading-row">
+        <div>
+          <div class="assistant-title"><Bot :size="18" /> Agent</div>
+          <p><span></span>{{ props.project?.name ?? '个人工作台' }}<i>/</i>{{ contextLabel }}</p>
         </div>
         <button class="icon-button" type="button" title="收起助手" @click="assistant.open = false"><PanelRightClose :size="18" /></button>
       </div>
+      <div class="assistant-control-row">
+        <label class="assistant-session-switcher">
+          <History :size="14" />
+          <select :value="assistant.sessionId" :disabled="controlsLocked" aria-label="历史对话" @change="switchSession">
+            <option v-for="session in assistant.sessions" :key="session.id" :value="session.id">{{ session.title }} · {{ clock(session.updatedAt) }}</option>
+          </select>
+          <button type="button" title="新对话" :disabled="controlsLocked || !props.project" @click="props.project && assistant.createNewSession(props.project.id)"><MessageSquarePlus :size="15" /></button>
+        </label>
+        <div class="assistant-mode-switch" role="group" aria-label="Agent 执行模式">
+          <button type="button" :class="{ active: assistant.executionMode === 'AUTO' }" :disabled="controlsLocked" title="自动执行 LLM 选择的工具" @click="assistant.setExecutionMode('AUTO')"><Zap :size="13" />Auto</button>
+          <button type="button" :class="{ active: assistant.executionMode === 'APPROVAL' }" :disabled="controlsLocked" title="修改前需要确认" @click="assistant.setExecutionMode('APPROVAL')"><ShieldCheck :size="13" />审批</button>
+        </div>
+      </div>
     </header>
 
-    <div ref="conversation" class="assistant-body assistant-conversation" @scroll.capture.passive="handleConversationScroll" @wheel.passive="handleConversationWheel">
+    <div ref="conversation" class="assistant-body assistant-conversation" @scroll.passive="handleConversationScroll" @wheel.passive="handleConversationWheel">
       <section v-if="!assistant.currentRequest && !assistant.history.length" class="assistant-empty">
         <span><Sparkles :size="21" /></span>
-        <strong>让 Agent 直接处理当前工作</strong>
-        <p>它会理解当前项目和你正在查看的内容，选择所需能力，并把操作实时呈现在工作台。</p>
+        <strong>今天想完成什么？</strong>
+        <p>Agent 会结合当前项目选择能力，执行过程会实时出现在这里。</p>
         <div class="prompt-suggestions">
           <button type="button" @click="assistant.input = '梳理当前项目的内容，并告诉我还缺什么'">梳理当前项目</button>
           <button type="button" @click="assistant.input = '根据当前项目的资料编排一条分析工作流'">编排分析流程</button>
@@ -178,10 +246,20 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
-      <section v-for="message in assistant.history" :key="message.id" class="assistant-history-turn" :data-role="message.role.toLowerCase()">
-        <div class="assistant-turn-label">{{ message.role === 'USER' ? '你' : 'Agent' }}</div>
-        <p>{{ message.content }}</p>
-        <time>{{ clock(message.createdAt) }}</time>
+      <section v-for="turn in historyTurns" :key="turn.id" class="assistant-history-group">
+        <article v-if="turn.user" class="assistant-history-turn" data-role="user">
+          <div class="assistant-turn-label">你 <time>{{ clock(turn.user.createdAt) }}</time></div>
+          <p>{{ turn.user.content }}</p>
+        </article>
+        <article v-if="lastAssistant(turn)" class="assistant-history-turn" data-role="assistant">
+          <div class="assistant-agent-avatar"><Sparkles :size="13" /></div>
+          <div class="assistant-turn-label">Agent <time>{{ clock(lastAssistant(turn)!.createdAt) }}</time></div>
+          <details v-if="earlierAssistant(turn).length" class="assistant-history-plan">
+            <summary>查看当时计划</summary>
+            <p v-for="message in earlierAssistant(turn)" :key="message.id">{{ message.content }}</p>
+          </details>
+          <p>{{ lastAssistant(turn)!.content }}</p>
+        </article>
       </section>
 
       <template v-if="assistant.currentRequest">
@@ -191,65 +269,83 @@ onBeforeUnmount(() => {
         </article>
 
         <article class="assistant-agent-turn" :data-state="taskState.code">
-          <div class="assistant-turn-label"><span><Sparkles :size="13" /></span>Agent <time class="assistant-elapsed"><Clock3 :size="11" />{{ elapsedLabel }}</time></div>
+          <div class="assistant-agent-avatar"><Sparkles :size="13" /></div>
+          <div class="assistant-turn-label">
+            Agent
+            <span class="assistant-stream-health" :data-state="assistant.eventConnection"><Radio :size="10" />{{ streamHealthLabel }}</span>
+            <time class="assistant-elapsed"><Clock3 :size="12" />{{ elapsedLabel }}</time>
+          </div>
+
           <div class="assistant-run-state" aria-live="polite">
-            <LoaderCircle v-if="taskState.code === 'running'" :size="15" class="assistant-spinner" />
-            <CheckCircle2 v-else-if="taskState.code === 'completed'" :size="15" />
-            <AlertCircle v-else-if="taskState.code === 'failed' || taskState.code === 'canceled'" :size="15" />
-            <Circle v-else :size="13" />
-            <strong>{{ taskState.label }}</strong><span>{{ taskState.detail }}</span>
+            <LoaderCircle v-if="taskState.code === 'running'" :size="16" class="assistant-spinner" />
+            <CheckCircle2 v-else-if="taskState.code === 'completed'" :size="16" />
+            <AlertCircle v-else-if="taskState.code === 'failed' || taskState.code === 'canceled'" :size="16" />
+            <Circle v-else :size="14" />
+            <strong>{{ taskState.label }}</strong>
+            <span v-if="taskState.detail">{{ taskState.detail }}</span>
           </div>
 
           <div v-if="assistant.plan" class="assistant-inline-progress">
             <i><span :style="{ width: `${assistant.progress}%` }"></span></i><small>{{ completedSteps }}/{{ assistant.plan.steps.length }} 步</small>
           </div>
 
-          <section v-if="running || assistant.needsConfirmation" class="assistant-current-activity" aria-live="polite" aria-atomic="true">
-            <header><span><Activity :size="13" />当前进展</span><small>{{ elapsedLabel }}</small></header>
-            <strong>{{ latestActivity?.title || activeStep?.title || taskState.label }}</strong>
-            <p>{{ latestActivity?.detail || activeStep?.description || taskState.detail }}</p>
-            <small v-if="latestActivity?.toolName">{{ latestActivity.toolName }}<template v-if="latestActivity.argumentSummary"> · {{ latestActivity.argumentSummary }}</template></small>
+          <section v-if="running || waitingConfirmation" class="assistant-live-stream" aria-live="polite" aria-label="Agent 实时工作过程">
+            <header>
+              <span><Activity :size="14" />工作过程 <small>公开摘要</small></span>
+              <span class="assistant-live-badge"><i></i>{{ streamHealthLabel }}</span>
+            </header>
+            <div class="assistant-live-list">
+              <article v-for="item in liveActivities" :key="item.id" :data-tone="item.tone">
+                <span><component :is="activityIcon(item.kind)" :size="13" /></span>
+                <div><strong>{{ item.title }}</strong><p>{{ item.detail }}</p><code v-if="item.toolName">{{ item.toolName }}<template v-if="item.argumentSummary"> · {{ item.argumentSummary }}</template></code></div>
+                <small>{{ activityStatus(item) }}</small>
+              </article>
+              <article v-if="!liveActivities.length" class="assistant-live-placeholder">
+                <span><LoaderCircle :size="13" class="assistant-spinner" /></span>
+                <div><strong>{{ latestActivity?.title || activeStep?.title || taskState.label }}</strong><p>{{ latestActivity?.detail || activeStep?.description || taskState.detail }}</p></div>
+              </article>
+            </div>
           </section>
 
           <p v-if="assistant.assistantMessage && assistant.run?.status === 'SUCCEEDED'" class="assistant-final-answer">{{ assistant.assistantMessage }}</p>
-          <p v-if="assistant.error" class="assistant-error">{{ assistant.error }}</p>
+          <div v-if="assistant.error" class="assistant-error"><AlertCircle :size="15" /><span>{{ assistant.error }}</span></div>
 
           <section v-if="assistant.plan" class="assistant-tool-group">
             <button type="button" @click="showSteps = !showSteps">
-              <span><Wrench :size="14" /><strong>执行步骤</strong><small>{{ completedSteps }}/{{ assistant.plan.steps.length }} 已完成</small></span>
-              <ChevronDown v-if="showSteps" :size="15" /><ChevronRight v-else :size="15" />
+              <span><ListChecks :size="15" /><strong>执行步骤</strong><small>{{ completedSteps }}/{{ assistant.plan.steps.length }} 已完成</small></span>
+              <ChevronDown v-if="showSteps" :size="16" /><ChevronRight v-else :size="16" />
             </button>
             <div v-if="showSteps" class="assistant-tool-list">
               <div v-for="step in assistant.plan.steps" :key="step.id" class="assistant-tool-row" :data-state="stepState(step.order)">
                 <span class="assistant-tool-status">
-                  <Check v-if="stepState(step.order) === 'completed'" :size="12" />
-                  <LoaderCircle v-else-if="stepState(step.order) === 'running'" :size="13" class="assistant-spinner" />
-                  <AlertCircle v-else-if="stepState(step.order) === 'failed' || stepState(step.order) === 'canceled'" :size="13" />
-                  <Circle v-else :size="9" />
+                  <Check v-if="stepState(step.order) === 'completed'" :size="13" />
+                  <LoaderCircle v-else-if="stepState(step.order) === 'running'" :size="14" class="assistant-spinner" />
+                  <AlertCircle v-else-if="stepState(step.order) === 'failed' || stepState(step.order) === 'canceled'" :size="14" />
+                  <Circle v-else :size="10" />
                 </span>
-                <div><strong>{{ step.title }}</strong><p>{{ step.description }}</p></div><small>{{ stepLabel(step.order) }}</small>
+                <div><strong>{{ step.title }}</strong><p>{{ step.description }}</p><code>{{ step.tool }}</code></div><small>{{ stepLabel(step.order) }}</small>
               </div>
             </div>
           </section>
 
-          <div v-if="assistant.needsConfirmation && (!assistant.run || assistant.run.status === 'WAITING_CONFIRMATION')" class="assistant-confirm-inline">
-            <ShieldCheck :size="17" /><p><strong>需要你的确认</strong><span>这些步骤会更新工作台，原内容会保留。</span></p>
+          <div v-if="waitingConfirmation" class="assistant-confirm-inline">
+            <ShieldCheck :size="18" /><p><strong>需要你的确认</strong><span>将执行上方列出的工作台修改。</span></p>
             <button class="primary-button" type="button" :disabled="assistant.busy" @click="assistant.confirm">确认执行</button>
           </div>
 
           <details v-if="assistant.timeline.length" class="assistant-event-details assistant-activity-stream" :open="showEvents" @toggle="showEvents = ($event.target as HTMLDetailsElement).open">
-            <summary>详细活动 · {{ assistant.timeline.length }} 条</summary>
+            <summary><span><Wrench :size="14" />完整活动记录 · {{ assistant.timeline.length }}</span><ChevronDown :size="15" /></summary>
             <div>
               <article v-for="item in assistant.timeline" :key="item.id" class="assistant-activity-item" :data-tone="item.tone">
-                <time>{{ clock(item.time) }}</time>
-                <span>{{ item.title }}</span>
-                <p>{{ item.detail }}</p>
-                <small v-if="item.toolName">{{ item.toolName }}<template v-if="item.argumentSummary"> · {{ item.argumentSummary }}</template></small>
-                <small v-if="item.resultSummary && item.resultSummary !== item.detail">结果：{{ item.resultSummary }}</small>
-                <details v-if="item.error" class="assistant-error-detail">
-                  <summary>错误详情</summary>
-                  <pre>{{ item.error }}</pre>
-                </details>
+                <span class="assistant-activity-icon"><component :is="activityIcon(item.kind)" :size="13" /></span>
+                <div>
+                  <header><strong>{{ item.title }}</strong><time>{{ clock(item.time) }}</time></header>
+                  <p>{{ item.detail }}</p>
+                  <code v-if="item.toolName">{{ item.toolName }}<template v-if="item.argumentSummary"> · {{ item.argumentSummary }}</template></code>
+                  <small v-if="item.resultSummary && item.resultSummary !== item.detail">结果：{{ item.resultSummary }}</small>
+                  <small v-if="item.provenanceSummary">来源：{{ item.provenanceSummary }}</small>
+                  <details v-if="item.error" class="assistant-error-detail"><summary>错误详情</summary><pre>{{ item.error }}</pre></details>
+                </div>
               </article>
             </div>
           </details>
@@ -262,17 +358,17 @@ onBeforeUnmount(() => {
     </div>
 
     <button v-if="showJumpToLatest" class="assistant-jump-latest" type="button" title="恢复自动跟随" @click="jumpToLatest">
-      <ArrowDown :size="14" />查看最新进展
+      <ArrowDown :size="15" />{{ unseenActivityCount ? `${unseenActivityCount} 条新进展` : '回到最新' }}
     </button>
 
     <footer class="assistant-composer">
-      <div class="assistant-context-chip">正在使用：{{ contextLabel }}</div>
-      <div>
-        <textarea v-model="assistant.input" rows="2" placeholder="安排一项工作，或继续追问..." @keydown.meta.enter.prevent="send" @keydown.ctrl.enter.prevent="send"></textarea>
+      <div class="assistant-context-chip"><span></span>{{ contextLabel }}</div>
+      <div class="assistant-composer-box">
+        <textarea ref="composer" v-model="assistant.input" rows="1" placeholder="向 Agent 交代任务或继续追问" @keydown="handleComposerKeydown"></textarea>
         <button v-if="running && assistant.run" class="send-button stop" type="button" title="停止" @click="assistant.cancel"><Square :size="14" /></button>
         <button v-else class="send-button" type="button" title="发送" :disabled="assistant.busy || !assistant.input.trim()" @click="send"><ArrowUp :size="18" /></button>
       </div>
-      <p>{{ assistant.executionMode === 'AUTO' ? 'Auto 模式会直接执行 Agent 选择的工具' : '审批模式会在修改工作台前请求确认' }}</p>
+      <p><span>{{ assistant.executionMode === 'AUTO' ? 'Auto 执行' : '审批执行' }}</span><i>·</i> Enter 发送 <i>·</i> Shift+Enter 换行</p>
     </footer>
   </aside>
 </template>
