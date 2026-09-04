@@ -202,10 +202,16 @@ class AssistantFlowTest {
         execution.executeStep(step("workflow.prepare", Map.of(
                 "project_id", project.id(), "goal", "分析资料并输出12页PPT和HTML网页报告")), prepareEffects);
         var prepared = workflows.get(prepareEffects.get("workflowId").toString());
-        assertThat(prepared.nodes().stream()
+        var outputNodes = prepared.nodes().stream()
                 .filter(node -> node.type() == NodeType.DELIVERABLE)
-                .map(node -> node.config().get("format")))
-                .containsExactlyInAnyOrder("PPTX", "HTML_SLIDES");
+                .toList();
+        assertThat(outputNodes).hasSize(2);
+        assertThat(outputNodes).allSatisfy(node ->
+                assertThat(node.config()).containsOnlyKeys("generationPrompt"));
+        assertThat(outputNodes.stream()
+                .map(node -> node.config().get("generationPrompt").toString()))
+                .anySatisfy(prompt -> assertThat(prompt).contains("输出形式：PPTX"))
+                .anySatisfy(prompt -> assertThat(prompt).contains("输出形式：HTML_SLIDES"));
 
         var disposable = workflows.create(project.id(), new SaveRequest(
                 "待删除工作流", "验证 Agent 删除工具", List.of(), List.of()));

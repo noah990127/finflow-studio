@@ -4,14 +4,13 @@ import { addEdge, MarkerType, useVueFlow, VueFlow, type Connection, type Edge, t
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
 import { MiniMap } from '@vue-flow/minimap'
-import { Activity, BarChart3, BookOpen, Braces, CalendarClock, CheckCircle2, ChevronRight, CircleStop, CircleUserRound, Clock3, Code2, Combine, Database, File, FileOutput, FileSpreadsheet, FileText, FileUp, History, Network, Play, Plus, RotateCcw, Save, Search, Sparkles, Trash2, X } from 'lucide-vue-next'
+import { Activity, BookOpen, Braces, CalendarClock, CheckCircle2, ChevronRight, CircleStop, CircleUserRound, Clock3, Code2, Combine, Database, File, FileOutput, FileSpreadsheet, FileText, FileUp, History, Network, Play, Plus, RotateCcw, Save, Search, Sparkles, Trash2, X } from 'lucide-vue-next'
 import WorkflowNode from '../components/WorkflowNode.vue'
-import { api, type DataConnection, type DataTransformSource, type FileResource, type PptSkill, type Project, type Workflow, type WorkflowNodeType, type WorkflowProgressEvent, type WorkflowRun, type WorkflowSave, type WorkspaceResource } from '../api/client'
+import { api, type DataConnection, type DataTransformSource, type FileResource, type Project, type Workflow, type WorkflowNodeType, type WorkflowProgressEvent, type WorkflowRun, type WorkflowSave, type WorkspaceResource } from '../api/client'
 
 const props = defineProps<{ project: Project | null; resources: WorkspaceResource[]; workflowId?: string }>()
 const emit = defineEmits<{ resourcesChanged: []; workflowChanged: [workflow: Workflow]; openDeliverable: [deliverableId: string]; openResource: [resourceId: string] }>()
 const files = ref<FileResource[]>([]), connections = ref<DataConnection[]>([]), runs = ref<WorkflowRun[]>([])
-const pptSkills = ref<PptSkill[]>([])
 const activeId = ref(''), currentVersion = ref(0), name = ref(''), description = ref(''), nodes = ref<Node[]>([]), edges = ref<Edge[]>([]), selectedNodeId = ref(''), selectedEdgeId = ref('')
 const executionMode = ref<'MANUAL' | 'SCHEDULED'>('MANUAL'), frequency = ref<'HOURLY' | 'DAILY' | 'WEEKLY' | 'MONTHLY'>('DAILY'), scheduleTime = ref('09:00'), dayOfWeek = ref(1), dayOfMonth = ref(1), timezone = ref('Asia/Shanghai'), nextRunAt = ref('')
 const busy = ref(false), message = ref(''), validation = ref<{ valid: boolean; issues: Array<{ nodeId: string; message: string }> } | null>(null), currentRun = ref<WorkflowRun | null>(null)
@@ -32,15 +31,6 @@ const catalog: Array<{ type: WorkflowNodeType; label: string; detail: string; ic
   { type: 'DELIVERABLE', label: '生成成果', detail: '生成演示、文档或图表', icon: FileOutput },
 ]
 const removedNodeTypes = new Set<WorkflowNodeType>(['SPREADSHEET_TRANSFORM', 'REVIEW'])
-const deliverableFormats = [
-  { value: 'PPTX', label: 'PPT', detail: '演示文稿' },
-  { value: 'HTML_SLIDES', label: '网页演示', detail: 'HTML + JS（非 PPT）' },
-  { value: 'DOCX', label: 'Word', detail: '正式文档' },
-  { value: 'PDF', label: 'PDF', detail: '阅读报告' },
-  { value: 'FINANCIAL_REPORT', label: '财务报告', detail: '交互分析' },
-  { value: 'MERMAID', label: 'Mermaid', detail: '结构图' },
-  { value: 'EXCALIDRAW', label: 'Excalidraw', detail: '手绘图' },
-]
 const selectedNode = computed(() => nodes.value.find(node => node.id === selectedNodeId.value))
 const selectedEdge = computed(() => edges.value.find(edge => edge.id === selectedEdgeId.value))
 const selectedEdgeSource = computed(() => nodes.value.find(node => node.id === selectedEdge.value?.source)?.data.label ?? '起点')
@@ -69,11 +59,6 @@ const selectedIncoming = computed(() => {
   const sourceIds = edges.value.filter(edge => edge.target === selectedNode.value?.id).map(edge => edge.source)
   return sourceIds.map(id => nodes.value.find(node => node.id === id)).filter((node): node is Node => !!node)
 })
-const selectedPresentationSkills = computed(() => {
-  const format = String(selectedNode.value?.data.config.format ?? '').toLowerCase()
-  return pptSkills.value.filter(skill => skill.formats.map(item => item.toLowerCase()).includes(format))
-})
-
 function initialConfig(type: WorkflowNodeType): Record<string, unknown> {
   if (type === 'LINK_INPUT') return { url: '', title: '' }
   if (type === 'DATASET_INPUT') return { extractJobId: '' }
@@ -82,7 +67,7 @@ function initialConfig(type: WorkflowNodeType): Record<string, unknown> {
   if (type === 'REF_SEARCH') return { query: '', limit: 10 }
   if (type === 'AI_ANALYSIS') return { prompt: '结合已连接的资料进行分析，给出有证据支持的结论。' }
   if (type === 'AGENT_TASK') return { instruction: '结合已连接的内容完成任务，区分事实、计算、推断和不确定项。', externalResearch: 'OFF', domainAllowlist: [], skills: [], maxToolCalls: 40, timeoutSeconds: 600, maxPoints: 10 }
-  if (type === 'DELIVERABLE') return { title: '分析结果', subtitle: '由工作流自动生成', format: 'PPTX', pptSkill: 'guizang-huawei-style-c', heading: '核心发现', targetAudience: '业务负责人', lengthHint: '5-8 页', includeCitations: true, citationStyle: 'IEEE', generationPrompt: '先给出核心结论，再说明变化原因、风险和下一步行动。语言简洁，所有结论仅基于工作流中的数据和参考资料。' }
+  if (type === 'DELIVERABLE') return { generationPrompt: '根据已连接的内容生成一份可以直接使用的成果。' }
   return { resourceId: '' }
 }
 function makeNode(type: WorkflowNodeType, x: number, y: number, label?: string, config?: Record<string, unknown>): Node {
@@ -92,7 +77,7 @@ function makeNode(type: WorkflowNodeType, x: number, y: number, label?: string, 
 }
 function resourceNode(resource: WorkspaceResource, x: number, y: number): Node {
   if (['DATABASE_CONNECTION', 'API_CONNECTION'].includes(resource.resourceType)) return makeNode('DATA_EXTRACT', x, y, resource.name, { connectionId: resource.id, sql: resource.resourceType === 'API_CONNECTION' ? 'GET /' : 'select * from your_table', outputName: `${resource.name}.csv`, fetchSize: 5000 })
-  if (resource.resourceType === 'DELIVERABLE') { const format = (resource.mediaType || 'PPTX').toUpperCase(); return makeNode('DELIVERABLE', x, y, resource.name, { outputResourceId: resource.id, title: resource.name, subtitle: '由工作流自动生成', format, pptSkill: format === 'HTML_SLIDES' ? 'frontend-slides' : format === 'PPTX' ? 'guizang-huawei-style-c' : '', heading: '分析结果', targetAudience: '业务负责人', lengthHint: '适中', includeCitations: true, citationStyle: 'IEEE', generationPrompt: '根据上游数据和参考资料生成结论清晰、可直接使用的业务成果。' }) }
+  if (resource.resourceType === 'DELIVERABLE') return makeNode('DELIVERABLE', x, y, resource.name, { outputResourceId: resource.id, generationPrompt: `根据已连接的内容更新“${resource.name}”，保持适合当前内容的成果形式。` })
   if (resource.resourceType === 'DATASET') return makeNode('DATASET_INPUT', x, y, resource.name, { extractJobId: resource.id })
   return makeNode('FILE_INPUT', x, y, resource.name, { resourceId: resource.id })
 }
@@ -104,10 +89,7 @@ function openWorkflow(item: Workflow) {
   nodes.value = visibleNodes.map(node => {
     const config = structuredClone(node.config ?? {})
     if (node.type === 'AI_ANALYSIS') delete config.maxPoints
-    if (node.type === 'DELIVERABLE') {
-      if (!Object.prototype.hasOwnProperty.call(config, 'includeCitations')) config.includeCitations = true
-      if (!config.citationStyle) config.citationStyle = 'IEEE'
-    }
+    if (node.type === 'DELIVERABLE') Object.keys(config).filter(key => !['generationPrompt', 'outputResourceId'].includes(key)).forEach(key => delete config[key])
     return { id: node.id, type: 'business', position: { x: node.x, y: node.y }, data: { label: node.name, nodeType: node.type, config } }
   })
   edges.value = item.edges.filter(edge => visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target)).map(decorateEdge); selectedNodeId.value = ''; loadRuns(item.id)
@@ -116,16 +98,9 @@ function payload(): WorkflowSave {
   const schedule = executionMode.value === 'SCHEDULED' ? { frequency: frequency.value, time: scheduleTime.value, dayOfWeek: dayOfWeek.value, dayOfMonth: dayOfMonth.value, timezone: timezone.value } : undefined
   return { name: name.value.trim() || '主工作流', description: description.value.trim(), executionMode: executionMode.value, schedule, nodes: nodes.value.map(node => ({ id: node.id, type: node.data.nodeType, name: node.data.label, x: node.position.x, y: node.position.y, config: node.data.config ?? {} })), edges: edges.value.map(edge => ({ id: edge.id, source: edge.source, target: edge.target })), expectedVersion: currentVersion.value || undefined }
 }
-async function load() { if (!props.project) return; panel.value = 'none'; message.value = ''; try { const [workflow, loadedFiles, loadedConnections, loadedPptSkills] = await Promise.all([props.workflowId ? api.getWorkflow(props.workflowId) : api.getProjectWorkflow(props.project.id), api.listFiles(props.project.id), api.listConnections(props.project.id), api.listPptSkills()]); files.value = loadedFiles; connections.value = loadedConnections; pptSkills.value = loadedPptSkills; openWorkflow(workflow); emit('workflowChanged', workflow) } catch (error) { message.value = error instanceof Error ? error.message : '工作流没有加载' } }
+async function load() { if (!props.project) return; panel.value = 'none'; message.value = ''; try { const [workflow, loadedFiles, loadedConnections] = await Promise.all([props.workflowId ? api.getWorkflow(props.workflowId) : api.getProjectWorkflow(props.project.id), api.listFiles(props.project.id), api.listConnections(props.project.id)]); files.value = loadedFiles; connections.value = loadedConnections; openWorkflow(workflow); emit('workflowChanged', workflow) } catch (error) { message.value = error instanceof Error ? error.message : '工作流没有加载' } }
 async function save(silent = false) { if (!props.project) return null; busy.value = true; try { const saved = activeId.value ? await api.updateWorkflow(activeId.value, payload()) : await api.createWorkflow(props.project.id, payload()); activeId.value = saved.id; currentVersion.value = saved.currentVersion; nextRunAt.value = saved.nextRunAt ?? ''; emit('workflowChanged', saved); if (!silent) message.value = saved.status === 'READY' ? `已保存第 ${saved.currentVersion} 版` : `草稿已保存为第 ${saved.currentVersion} 版，还有内容需要补充`; return saved } catch (error) { message.value = error instanceof Error ? error.message : '工作流没有保存'; return null } finally { busy.value = false } }
 async function saveNodeSettings() { if (!selectedNode.value) return; const saved = await save(true); if (saved) message.value = `节点设置已保存到第 ${saved.currentVersion} 版` }
-function selectDeliverableFormat(format: string) {
-  if (!selectedNode.value) return
-  selectedNode.value.data.config.format = format
-  if (format === 'HTML_SLIDES') selectedNode.value.data.config.pptSkill = 'frontend-slides'
-  else if (format === 'PPTX' && selectedNode.value.data.config.pptSkill === 'frontend-slides') selectedNode.value.data.config.pptSkill = 'guizang-huawei-style-c'
-  else if (!['PPTX', 'HTML_SLIDES'].includes(format)) selectedNode.value.data.config.pptSkill = ''
-}
 function inputAlias(sourceId: string, index: number) {
   if (!selectedNode.value) return `data_${index + 1}`
   const aliases = selectedNode.value.data.config.inputAliases as Record<string, string> | undefined
@@ -319,13 +294,6 @@ function triggerText(trigger?: string) { return ({ MANUAL: '手工执行', SCHED
 function analysisMode(step: WorkflowRun['nodes'][number]) { const mode = String(step.output?.analysisMode ?? ''); return ['codex', 'codex-cli'].includes(mode) ? ' · Codex 生成' : mode === 'local-extractive' ? ' · 本地分析' : mode ? ` · ${mode}` : '' }
 function formatTime(value?: string) { return value ? new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(value)) : '尚未执行' }
 function formatEventTime(value: string) { return new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(value)) }
-function requirementPlaceholder(format: unknown) {
-  const value = String(format).toUpperCase()
-  if (['MERMAID', 'EXCALIDRAW'].includes(value)) return '例如：生成从左到右的业务流程图，主链路不超过 8 个节点，标出关键判断和异常分支。'
-  if (value === 'FINANCIAL_REPORT') return '例如：按业务板块展示收入、毛利和费用的本期、预算及同比差异，突出异常项目，并给出管理层可执行的改进建议。'
-  return '例如：先给结论，对比本期与预算，突出风险和下一步行动，语言简洁。'
-}
-
 watch([issuesByNode, runByNode], () => nodes.value.forEach(node => { node.data.issue = issuesByNode.value.has(node.id); node.data.status = runByNode.value.get(node.id) ?? '' }), { immediate: true })
 watch(() => [props.project?.id, props.workflowId], () => { activeId.value = ''; eventSource?.close(); liveRunId.value = ''; liveEvents.value = []; liveContent.value = ''; liveContentNode.value = ''; load() }); onMounted(() => { load(); window.addEventListener('keydown', handleDeleteKey) }); onBeforeUnmount(() => { window.clearTimeout(pollTimer); eventSource?.close(); window.removeEventListener('keydown', handleDeleteKey) })
 </script>
@@ -382,19 +350,7 @@ watch(() => [props.project?.id, props.workflowId], () => { activeId.value = ''; 
           <div class="agent-budget-grid"><label><span>最多调用次数</span><input v-model.number="selectedNode.data.config.maxToolCalls" type="number" min="1" max="80"></label><label><span>最长运行时间（秒）</span><input v-model.number="selectedNode.data.config.timeoutSeconds" type="number" min="30" max="900"></label></div>
           <p class="field-help">任务步骤不需要预先写死。采用的网页会自动保存到项目资料，并进入来源链路。</p>
         </template>
-        <template v-else-if="selectedNode.data.nodeType === 'DELIVERABLE'">
-          <fieldset class="deliverable-format"><legend>成果形式</legend><button v-for="item in deliverableFormats" :key="item.value" type="button" :class="{ active: selectedNode.data.config.format === item.value }" @click="selectDeliverableFormat(item.value)"><strong>{{ item.label }}</strong><small>{{ item.detail }}</small></button></fieldset>
-          <section v-if="selectedNode.data.config.format === 'FINANCIAL_REPORT'" class="financial-report-card"><BarChart3 :size="21"/><div><strong>内置财务报告</strong><p>运行后直接在当前工作区查看完整报告，无需打开其他页面；仍可从查看工具栏下载文件。</p></div></section>
-          <section v-if="selectedNode.data.config.format === 'HTML_SLIDES'" class="web-slides-notice"><FileOutput :size="21"/><div><strong>网页演示，不是 PPT 文件</strong><p>生成单个 HTML + JavaScript 文件，可在浏览器中播放、翻页和全屏展示；不能使用 PowerPoint 或 OnlyOffice 原生编辑。</p></div></section>
-          <fieldset v-if="['PPTX','HTML_SLIDES'].includes(String(selectedNode.data.config.format))" class="ppt-skill-picker"><legend>演示风格技能</legend><button v-if="selectedNode.data.config.format === 'PPTX'" type="button" :class="{ active: !selectedNode.data.config.pptSkill }" @click="selectedNode.data.config.pptSkill = ''"><span class="skill-swatch default"></span><span><strong>FinBTP Studio 简约蓝白</strong><small>通用 PowerPoint 汇报</small></span></button><button v-for="skill in selectedPresentationSkills" :key="skill.id" type="button" :class="{ active: selectedNode.data.config.pptSkill === skill.id }" @click="selectedNode.data.config.pptSkill = skill.id"><span class="skill-swatch" :class="skill.id === 'frontend-slides' ? 'web' : 'huawei'"></span><span><strong>{{ skill.name }}</strong><small>{{ skill.description }}</small></span></button></fieldset>
-          <section v-if="['PPTX','HTML_SLIDES','DOCX','PDF','FINANCIAL_REPORT'].includes(String(selectedNode.data.config.format))" class="citation-settings">
-            <label class="toggle-field"><input v-model="selectedNode.data.config.includeCitations" type="checkbox"><span>标注信息来源</span></label>
-            <label v-if="selectedNode.data.config.includeCitations"><span>引用格式</span><select v-model="selectedNode.data.config.citationStyle"><option value="IEEE">IEEE</option><option value="APA_7">APA 第 7 版</option><option value="GB_T_7714">GB/T 7714-2015</option></select></label>
-            <p v-if="selectedNode.data.config.includeCitations">正文使用规范短标记，完整条目集中放在参考文献部分。</p><p v-else>成果中不显示来源编号、页脚来源或参考文献。</p>
-          </section>
-          <label v-if="selectedNode.data.config.format === 'MERMAID'" class="toggle-field"><input v-model="selectedNode.data.config.handDrawn" type="checkbox"><span>生成可编辑的 Excalidraw 手绘版</span></label>
-          <label><span>成果标题</span><input v-model="selectedNode.data.config.title"></label><label><span>副标题</span><input v-model="selectedNode.data.config.subtitle"></label><label><span>{{ ['MERMAID','EXCALIDRAW'].includes(String(selectedNode.data.config.format)) ? '中心主题' : '主章节' }}</span><input v-model="selectedNode.data.config.heading"></label><label><span>使用对象</span><input v-model="selectedNode.data.config.targetAudience" placeholder="例如：管理层、业务经理、客户"></label><label><span>{{ ['MERMAID','EXCALIDRAW'].includes(String(selectedNode.data.config.format)) ? '图的规模' : selectedNode.data.config.format === 'FINANCIAL_REPORT' ? '报告范围' : '期望篇幅' }}</span><input v-model="selectedNode.data.config.lengthHint" :placeholder="['MERMAID','EXCALIDRAW'].includes(String(selectedNode.data.config.format)) ? '例如：不超过 12 个节点' : selectedNode.data.config.format === 'FINANCIAL_REPORT' ? '例如：月度经营总览、利润与现金流专题' : '例如：5-8 页、2000 字左右'"></label><label><span>生成要求</span><textarea v-model="selectedNode.data.config.generationPrompt" rows="8" :placeholder="requirementPlaceholder(selectedNode.data.config.format)"></textarea></label>
-        </template>
+        <template v-else-if="selectedNode.data.nodeType === 'DELIVERABLE'"><label><span>生成要求</span><textarea v-model="selectedNode.data.config.generationPrompt" rows="12" placeholder="例如：为管理层生成一份12页中文PPT，突出核心结论、关键数据、主要风险和下一步行动，并标注资料来源。"></textarea></label></template>
       </div><p v-for="issue in validation?.issues.filter(item => item.nodeId === selectedNode?.id)" :key="issue.message" class="inspector-error">{{ issue.message }}</p><footer><button class="primary-button" type="button" :disabled="busy" @click="saveNodeSettings"><Save :size="15"/>{{ busy ? '正在保存' : '保存节点设置' }}</button></footer></aside>
       <aside v-if="panel === 'schedule'" class="canvas-drawer schedule-drawer"><header><div><span>执行设置</span><strong>选择工作流如何启动</strong></div><button class="icon-button" type="button" title="关闭" @click="panel = 'none'"><X :size="17"/></button></header><div class="execution-mode"><button type="button" :class="{ active: executionMode === 'MANUAL' }" @click="executionMode = 'MANUAL'"><Play :size="17"/><span><strong>手工执行</strong><small>需要时点击立即运行</small></span></button><button type="button" :class="{ active: executionMode === 'SCHEDULED' }" @click="executionMode = 'SCHEDULED'"><Clock3 :size="17"/><span><strong>定时执行</strong><small>按设定时间自动运行</small></span></button></div><div v-if="executionMode === 'SCHEDULED'" class="form-stack schedule-fields"><label><span>执行频率</span><select v-model="frequency"><option value="HOURLY">每小时</option><option value="DAILY">每天</option><option value="WEEKLY">每周</option><option value="MONTHLY">每月</option></select></label><label v-if="frequency === 'WEEKLY'"><span>星期</span><select v-model.number="dayOfWeek"><option v-for="(day, i) in ['一','二','三','四','五','六','日']" :key="day" :value="i + 1">星期{{ day }}</option></select></label><label v-if="frequency === 'MONTHLY'"><span>每月日期</span><input v-model.number="dayOfMonth" type="number" min="1" max="31"></label><label><span>{{ frequency === 'HOURLY' ? '每小时的分钟' : '执行时间' }}</span><input v-model="scheduleTime" type="time"></label><label><span>时区</span><select v-model="timezone"><option value="Asia/Shanghai">中国标准时间</option><option value="UTC">协调世界时</option><option value="Asia/Hong_Kong">香港时间</option><option value="Asia/Singapore">新加坡时间</option></select></label><p v-if="nextRunAt" class="next-run"><CalendarClock :size="15"/>下次执行：{{ formatTime(nextRunAt) }}</p></div><footer><button class="primary-button" type="button" @click="save(); panel = 'none'">保存执行设置</button></footer></aside>
       <aside v-if="panel === 'progress'" class="canvas-drawer progress-drawer">

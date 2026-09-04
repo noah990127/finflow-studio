@@ -66,20 +66,6 @@
 .canvas-drawer > header strong, .canvas-drawer > header input { min-width: 0; color: #1b2b40; border: 0; outline: 0; background: transparent; font-size: 13px; font-weight: 700; }
 .node-drawer .form-stack, .schedule-fields { padding: 14px; }
 .node-drawer > footer { position: sticky; bottom: 0; display: flex; justify-content: flex-end; padding: 12px 14px; border-top: 1px solid var(--line); background: #fff; }
-.deliverable-format { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin: 0; padding: 0; border: 0; }
-.deliverable-format legend { grid-column: 1 / -1; margin-bottom: 6px; color: #596b82; font-size: 10px; font-weight: 700; }
-.deliverable-format button { min-width: 0; min-height: 52px; display: grid; align-content: center; gap: 3px; padding: 7px 9px; border: 1px solid #d4dfeb; border-radius: 6px; color: #455a72; background: #fff; text-align: left; }
-.deliverable-format button.active { color: #145fb9; border-color: #79a9df; background: #edf5ff; box-shadow: inset 0 0 0 1px #b9d5f2; }
-.deliverable-format strong { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.deliverable-format small { color: #7b8a9e; font-size: 9px; }
-.financial-report-card { display: flex; gap: 10px; padding: 12px; border: 1px solid #cfe0f3; border-radius: 6px; color: #175fae; background: #f4f9ff; }
-.financial-report-card > div { min-width: 0; }
-.financial-report-card strong { display: block; color: #24415f; font-size: 12px; }
-.financial-report-card p { margin: 5px 0 10px; color: #61758c; font-size: 10px; line-height: 1.55; }
-.web-slides-notice { display: flex; gap: 10px; padding: 12px; border: 1px solid #a9c9ef; border-left: 4px solid #1769e0; border-radius: 6px; color: #1769e0; background: #f3f8ff; }
-.web-slides-notice > div { min-width: 0; }
-.web-slides-notice strong { display: block; color: #203b5d; font-size: 12px; }
-.web-slides-notice p { margin: 5px 0 0; color: #5c7088; font-size: 10px; line-height: 1.55; }
 .web-url-work-area { position: relative; min-height: 0; height: 100%; display: grid; grid-template-rows: 44px minmax(0,1fr); background: #fff; }
 .web-url-work-area > header { display: grid; grid-template-columns: 20px minmax(0,1fr) auto; align-items: center; gap: 8px; padding: 0 14px; border-bottom: 1px solid #dce5ef; color: #55708b; background: #f8fbff; }
 .web-url-work-area > header span { overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
@@ -117,21 +103,6 @@
 .html-slides-badge { position: absolute; z-index: 2; top: 10px; left: 10px; padding: 5px 8px; border: 1px solid #ffffff26; background: #101a28d9; color: #dce8f7; font-size: 10px; pointer-events: none; }
 .assistant-side-host { position: fixed; z-index: 900; width: min(390px, calc(100vw - 28px)); height: min(720px, calc(100vh - 32px)); pointer-events: none; }
 .assistant-side-host .assistant-drawer { position: absolute; inset: 0; width: 100%; max-width: none; height: 100%; overflow: hidden; border: 1px solid #c7d8ea; border-radius: 8px; pointer-events: auto; box-shadow: 0 18px 48px rgb(31 68 104 / 22%); }
-.ppt-skill-picker { display: grid; gap: 7px; margin: 2px 0 0; padding: 0; border: 0; }
-.ppt-skill-picker legend { margin-bottom: 1px; color: #596b82; font-size: 10px; font-weight: 700; }
-.ppt-skill-picker button { display: grid; grid-template-columns: 34px minmax(0, 1fr); align-items: center; gap: 10px; min-height: 54px; padding: 8px; border: 1px solid #d4dfeb; border-radius: 6px; background: #fff; color: #33465d; text-align: left; }
-.ppt-skill-picker button.active { border-color: #79a9df; background: #edf5ff; box-shadow: inset 0 0 0 1px #b9d5f2; }
-.ppt-skill-picker button > span:last-child { display: grid; gap: 3px; min-width: 0; }
-.ppt-skill-picker strong { font-size: 11px; }
-.ppt-skill-picker small { overflow: hidden; color: #7b8a9e; font-size: 9px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
-.skill-swatch.web { background: linear-gradient(135deg, #1769e0 0 52%, #f05a47 52% 72%, #f2bd42 72%); }
-.citation-settings { display: grid; gap: 10px; padding: 11px; border: 1px solid #d4e1ee; border-radius: 6px; background: #f8fbff; }
-.citation-settings > label:not(.toggle-field) { display: grid; gap: 6px; }
-.citation-settings > label > span { color: #536980; font-size: 10px; font-weight: 700; }
-.citation-settings select { width: 100%; }
-.citation-settings p { margin: 0; color: #71849a; font-size: 9px; line-height: 1.5; }
-.skill-swatch { width: 34px; height: 34px; border: 1px solid #d9dee5; border-radius: 4px; background: linear-gradient(90deg, #2f6bca 0 18%, #fff 18%); }
-.skill-swatch.huawei { border-color: #e4c8cb; background: linear-gradient(90deg, #c7000b 0 18%, #f7f8fa 18%); }
 .transform-inputs { display: grid; gap: 7px; padding: 10px; border: 1px solid #d8e3ef; border-radius: 6px; background: #f8fbff; }
 .field-section-title { display: flex; align-items: center; justify-content: space-between; color: #52667d; }
 .field-section-title span { font-size: 10px; font-weight: 700; }

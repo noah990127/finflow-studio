@@ -152,6 +152,17 @@ def test_analysis_uses_requirements_as_user_prompt_and_connected_material_as_con
     assert user == "用户的分析要求：\n比较三家公司现金流并解释差异\n\n连接到节点的资料：\n公司A经营现金流为100"
 
 
+def test_deliverable_plan_lets_model_choose_all_output_details() -> None:
+    system, user = _generation_prompt(GenerateContentRequest(
+        format="DELIVERABLE_PLAN", requirements="给董事会做一份简洁汇报", source_text="收入同比增长25%"
+    ))
+
+    assert "决定最合适的成果规格" in system
+    assert "format（PPTX、HTML_SLIDES、DOCX、PDF、FINANCIAL_REPORT、MERMAID、EXCALIDRAW 之一）" in system
+    assert "include_citations（布尔值）" in system
+    assert user == "用户的生成要求：\n给董事会做一份简洁汇报\n\n上游内容：\n收入同比增长25%"
+
+
 def test_slide_prompt_honors_requested_page_range_and_richer_evidence() -> None:
     system, _ = _generation_prompt(GenerateContentRequest(
         format="PPTX", requirements="期望篇幅：12-14 页", source_text="这里是可核对的财务与政策数据"

@@ -271,13 +271,7 @@ public class WorkflowDefinitionService {
                 case AGENT_TASK -> require(node, config, issues, "instruction", "请填写希望 Agent 完成的任务");
                 case REVIEW -> require(node, config, issues, "instructions", "请填写复核要求");
                 case DELIVERABLE -> {
-                    require(node, config, issues, "title", "请填写输出标题");
-                    require(node, config, issues, "format", "请选择输出格式");
                     require(node, config, issues, "generationPrompt", "请填写成果生成要求");
-                    if (Boolean.TRUE.equals(config.get("includeCitations")) &&
-                            !List.of("IEEE", "APA_7", "GB_T_7714").contains(string(config, "citationStyle"))) {
-                        issues.add(new ValidationIssue(node.id(), "请选择有效的引用格式"));
-                    }
                 }
                 case OUTPUT -> {
                     require(node, config, issues, "title", "请填写输出标题");
@@ -315,6 +309,14 @@ public class WorkflowDefinitionService {
     }
 
     private NodeDefinition normalizeNode(NodeDefinition node) {
+        if (node.type() == NodeType.DELIVERABLE) {
+            var config = new LinkedHashMap<String, Object>();
+            var source = node.config() == null ? Map.<String, Object>of() : node.config();
+            config.put("generationPrompt", Objects.toString(source.get("generationPrompt"), ""));
+            var outputResourceId = Objects.toString(source.get("outputResourceId"), "");
+            if (!outputResourceId.isBlank()) config.put("outputResourceId", outputResourceId);
+            return new NodeDefinition(node.id(), node.type(), node.name(), node.x(), node.y(), Map.copyOf(config));
+        }
         if (node.type() != NodeType.AI_ANALYSIS || node.config() == null || !node.config().containsKey("maxPoints")) {
             return node;
         }

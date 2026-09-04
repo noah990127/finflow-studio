@@ -105,10 +105,16 @@ class WorkflowFlowTest {
 
         var node = new NodeDefinition("analysis", NodeType.AI_ANALYSIS, "分析", 100, 100,
                 Map.of("prompt", "分析数据变化", "maxPoints", 6));
+        var resultNode = new NodeDefinition("result", NodeType.DELIVERABLE, "生成成果", 400, 100,
+                Map.of("generationPrompt", "生成董事会汇报", "title", "旧标题", "format", "PPTX",
+                        "targetAudience", "董事会", "includeCitations", true));
         var saved = definitions.saveProjectWorkflow(project.id(), new SaveRequest("主工作流", "",
-                List.of(node), List.of(), first.currentVersion()));
+                List.of(node, resultNode), List.of(new EdgeDefinition("analysis-result", "analysis", "result")),
+                first.currentVersion()));
         assertThat(saved.currentVersion()).isEqualTo(2);
         assertThat(saved.nodes().getFirst().config()).doesNotContainKey("maxPoints");
+        assertThat(saved.nodes().get(1).config()).containsOnlyKeys("generationPrompt")
+                .containsEntry("generationPrompt", "生成董事会汇报");
 
         assertThatThrownBy(() -> definitions.saveProjectWorkflow(project.id(), new SaveRequest("旧版本", "",
                 List.of(node), List.of(), first.currentVersion())))

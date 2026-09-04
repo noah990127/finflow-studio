@@ -1,6 +1,7 @@
 package com.finflow.studio.workflow;
 
 import org.junit.jupiter.api.Test;
+import tools.jackson.databind.ObjectMapper;
 
 import java.util.List;
 import java.util.Map;
@@ -10,7 +11,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class WorkflowTextAssemblyTest {
 
     private final WorkflowRunService service = new WorkflowRunService(
-            null, null, null, null, null, null, null, null, null, null, null, null);
+            null, new ObjectMapper(), null, null, null, null, null, null, null, null, null, null);
 
     @Test
     void parsedReferencesPreventRawFileBytesFromBeingReadAgain() {
@@ -33,5 +34,19 @@ class WorkflowTextAssemblyTest {
 
         assertThat(result).hasSizeLessThan(200_000)
                 .endsWith("[工作流上下文较长，已按安全上限截断]");
+    }
+
+    @Test
+    void parsesModelSelectedDeliverablePlanWithoutMarkdownWrapper() {
+        var plan = service.parseDeliverablePlan("""
+                ```json
+                {"format":"PPTX","title":"经营复盘","subtitle":"2026年","heading":"核心结论",
+                 "include_citations":true,"citation_style":"IEEE","ppt_skill":"guizang-huawei-style-c"}
+                ```
+                """);
+
+        assertThat(plan).containsEntry("format", "PPTX")
+                .containsEntry("title", "经营复盘")
+                .containsEntry("include_citations", true);
     }
 }

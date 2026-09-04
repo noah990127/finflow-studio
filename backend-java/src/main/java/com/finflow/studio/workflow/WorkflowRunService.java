@@ -311,9 +311,9 @@ public class WorkflowRunService {
             case AGENT_TASK -> agentTask(run.projectId(), runId, node, config, upstream, context,
                     startProgress, endProgress);
             case REVIEW -> throw new IllegalStateException("复核步骤应由运行器暂停处理");
-            case DELIVERABLE -> createDeliverable(run.projectId(), runId, node, config, upstream, context,
+            case DELIVERABLE -> createDeliverable(run.projectId(), runId, node, config, upstream,
                     startProgress, endProgress);
-            case OUTPUT -> createDeliverable(run.projectId(), runId, node, config, upstream, context,
+            case OUTPUT -> createDeliverable(run.projectId(), runId, node, config, upstream,
                     startProgress, endProgress);
             case SUB_WORKFLOW -> runSubWorkflow(run, config, upstream);
             case RESOURCE, ACQUIRE, TOOL, CONTROL -> passThrough(upstream);
@@ -678,18 +678,24 @@ public class WorkflowRunService {
     private Map<String, Object> createDeliverable(String projectId, String runId, NodeDefinition node,
                                                   Map<String, Object> config,
                                                   Map<String, Map<String, Object>> upstream,
-                                                  Map<String, Map<String, Object>> context,
                                                   int startProgress, int endProgress) {
-        var body = optional(config, "body", findString(upstream, "analysis"));
-        if (body.isBlank()) body = collectText(upstream);
-        var configuredFormat = text(config, "format");
-        var format = configuredFormat.equalsIgnoreCase("MERMAID") && bool(config, "handDrawn")
-                ? "EXCALIDRAW" : configuredFormat;
         var requirements = text(config, "generationPrompt");
-        var pptSkill = List.of("PPTX", "HTML_SLIDES").contains(format.toUpperCase(Locale.ROOT))
-                ? optional(config, "pptSkill", "") : "";
-        var includeCitations = !config.containsKey("includeCitations") || bool(config, "includeCitations");
-        var citationStyle = optional(config, "citationStyle", "IEEE").toUpperCase(Locale.ROOT);
+        var sourceText = collectText(upstream);
+        if (sourceText.isBlank()) throw new IllegalStateException("生成成果没有可读取的上游内容，请先连接资料、数据或分析节点");
+        events.publish(runId, "MODEL_STATUS", node.id(), node.name(), "RUNNING", startProgress,
+                "正在理解生成要求并决定成果形式", "");
+        var planning = worker.generateContent("DELIVERABLE_PLAN", requirements,
+                sourceText.substring(0, Math.min(sourceText.length(), 30_000)));
+        var planningMode = Objects.toString(planning.get("mode"), "");
+        if (planningMode.contains("fallback")) throw new IllegalStateException("大模型当前不可用，无法规划生成成果");
+        var plan = parseDeliverablePlan(Objects.toString(planning.get("content"), ""));
+        var format = plannedFormat(plan);
+        var title = plannedText(plan, "title", "成果标题", 280);
+        var subtitle = optional(plan, "subtitle", "");
+        var heading = plannedText(plan, "heading", "主章节", 300);
+        var includeCitations = bool(plan, "include_citations");
+        var citationStyle = plannedCitationStyle(plan);
+        var pptSkill = plannedPptSkill(plan, format);
         var skillRequirement = "guizang-huawei-style-c".equals(pptSkill)
                 ? "\nPPT 技能：华为企业汇报 Style C。采用结论先行的管理层叙事，避免模板化堆框。"
                   + "每页只表达一个判断；标题必须单行且不超过22个汉字，摘要不超过64个汉字，"
@@ -702,20 +708,16 @@ public class WorkflowRunService {
                   + "每页只表达一个判断，标题不超过22个汉字，每页2至3条要点，有可靠数值时优先使用图表。"
                 : "";
         var citationRequirement = citationRequirement(includeCitations, citationStyle);
-        var completeRequirements = "使用对象：%s\n期望篇幅或规模：%s\n%s%s\n%s\n"
-                + "图表规则：仅使用输入中存在且口径明确的数值，不得估算或编造。";
-        completeRequirements = completeRequirements.formatted(
-                optional(config, "targetAudience", "业务用户"), optional(config, "lengthHint", "适中"),
-                requirements, skillRequirement, citationRequirement);
-        var fullContext = collectText(context);
-        var referenceCatalog = collectReferenceCatalog(context);
-        var generationSource = body;
-        if (!fullContext.isBlank() && !fullContext.equals(body)) {
-            generationSource += "\n\n--- 上游数据与资料 ---\n" + fullContext;
-        }
+        var completeRequirements = requirements + "\n\n模型选择的成果规格：\n成果形式：" + format
+                + "\n标题：" + title + "\n副标题：" + subtitle + "\n主章节：" + heading
+                + skillRequirement + "\n" + citationRequirement;
+        var referenceCatalog = collectReferenceCatalog(upstream);
+        var generationSource = sourceText;
         if (includeCitations && !referenceCatalog.isBlank()) {
             generationSource += "\n\n--- 可用参考来源（正文必须使用对应编号） ---\n" + referenceCatalog;
         }
+        events.publish(runId, "MODEL_STATUS", node.id(), node.name(), "RUNNING", startProgress + 1,
+                "已选择 " + format + "，正在生成“" + title + "”", "");
         var span = Math.max(1, endProgress - startProgress);
         var generation = worker.generateContentStreaming(format, completeRequirements, generationSource, event -> {
             var type = Objects.toString(event.get("type"), "status");
@@ -726,22 +728,71 @@ public class WorkflowRunService {
                         "正在生成成果内容", Objects.toString(event.get("content"), ""));
             } else if (!"complete".equals(type)) {
                 events.publish(runId, "MODEL_STATUS", node.id(), node.name(), "RUNNING", progress,
-                        Objects.toString(event.get("message"), "正在生成成果"), "");
+                Objects.toString(event.get("message"), "正在生成成果"), "");
             }
         });
-        var generatedBody = Objects.toString(generation.get("content"), body);
-        var refIds = includeCitations ? collectRefIds(context) : List.<String>of();
-        var section = new SectionRequest(optional(config, "heading", "分析结果"), List.of(generatedBody),
+        var generationMode = Objects.toString(generation.get("mode"), "");
+        if (generationMode.contains("fallback")) throw new IllegalStateException("大模型当前不可用，成果内容未生成");
+        var generatedBody = Objects.toString(generation.get("content"), sourceText);
+        var refIds = includeCitations ? collectRefIds(upstream) : List.<String>of();
+        var section = new SectionRequest(heading, List.of(generatedBody),
                 stringList(findValue(upstream, "points")), refIds,
-                includeCitations ? collectCitations(context) : List.of());
+                includeCitations ? collectCitations(upstream) : List.of());
         events.publish(runId, "STEP_PROGRESS", node.id(), node.name(), "RUNNING", Math.max(startProgress, endProgress - 1),
                 "正在写入 " + format + " 文件", "");
-        var item = deliverables.create(new CreateRequest(projectId, optional(config, "outputResourceId", null), text(config, "title"),
-                optional(config, "subtitle", "由工作流自动生成"), format, pptSkill,
+        var outputResourceId = compatibleOutputResource(config, format);
+        var item = deliverables.create(new CreateRequest(projectId, outputResourceId, title,
+                subtitle, format, pptSkill,
                 includeCitations, citationStyle, List.of(section)));
-        return Map.of("deliverableId", item.id(), "name", item.name(), "format", item.format(),
+        return Map.of("deliverableId", item.id(), "name", item.name(), "format", item.format(), "outputPlan", plan,
                 "version", item.currentVersion(), "downloadUrl", "/api/deliverables/" + item.id() + "/download",
-                "analysisMode", Objects.toString(generation.get("mode"), "local-extractive"));
+                "analysisMode", generationMode, "planningMode", planningMode);
+    }
+
+    Map<String, Object> parseDeliverablePlan(String value) {
+        var clean = value == null ? "" : value.trim();
+        if (clean.startsWith("```")) {
+            clean = clean.replaceFirst("^```(?:json)?\\s*", "").replaceFirst("\\s*```$", "").trim();
+        }
+        var objectStart = clean.indexOf('{');
+        var objectEnd = clean.lastIndexOf('}');
+        if (objectStart >= 0 && objectEnd > objectStart) clean = clean.substring(objectStart, objectEnd + 1);
+        var plan = readMap(clean);
+        if (plan.isEmpty()) throw new IllegalStateException("大模型没有返回有效的成果规格");
+        return plan;
+    }
+
+    private String plannedFormat(Map<String, Object> plan) {
+        var format = optional(plan, "format", "").toUpperCase(Locale.ROOT);
+        if (!Set.of("PPTX", "HTML_SLIDES", "DOCX", "PDF", "FINANCIAL_REPORT", "MERMAID", "EXCALIDRAW").contains(format)) {
+            throw new IllegalStateException("大模型返回了不支持的成果形式");
+        }
+        return format;
+    }
+
+    private String plannedText(Map<String, Object> plan, String key, String label, int maxLength) {
+        var value = optional(plan, key, "").trim();
+        if (value.isBlank()) throw new IllegalStateException("大模型没有给出" + label);
+        return value.substring(0, Math.min(value.length(), maxLength));
+    }
+
+    private String plannedCitationStyle(Map<String, Object> plan) {
+        var style = optional(plan, "citation_style", "IEEE").toUpperCase(Locale.ROOT);
+        return Set.of("IEEE", "APA_7", "GB_T_7714").contains(style) ? style : "IEEE";
+    }
+
+    private String plannedPptSkill(Map<String, Object> plan, String format) {
+        if (!List.of("PPTX", "HTML_SLIDES").contains(format)) return "";
+        var skill = optional(plan, "ppt_skill", "");
+        if ("PPTX".equals(format) && "guizang-huawei-style-c".equals(skill)) return skill;
+        if ("HTML_SLIDES".equals(format) && "frontend-slides".equals(skill)) return skill;
+        return "";
+    }
+
+    private String compatibleOutputResource(Map<String, Object> config, String format) {
+        var resourceId = optional(config, "outputResourceId", "");
+        if (resourceId.isBlank()) return null;
+        return deliverables.get(resourceId).format().equalsIgnoreCase(format) ? resourceId : null;
     }
 
     private Map<String, Map<String, Object>> upstream(WorkflowDocument document, String nodeId,

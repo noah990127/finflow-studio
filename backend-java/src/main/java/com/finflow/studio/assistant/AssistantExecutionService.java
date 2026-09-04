@@ -991,7 +991,7 @@ public class AssistantExecutionService {
                 .filter(node -> node.type() == NodeType.DELIVERABLE || node.type() == NodeType.OUTPUT)
                 .map(NodeDefinition::config)
                 .filter(Objects::nonNull)
-                .map(config -> Objects.toString(config.get("format"), ""))
+                .map(this::configuredOutputFormat)
                 .filter(format -> !format.isBlank())
                 .collect(java.util.stream.Collectors.toSet());
         var formats = requestedFormats(step).stream()
@@ -1073,7 +1073,7 @@ public class AssistantExecutionService {
                 .filter(node -> node.type() == NodeType.DELIVERABLE || node.type() == NodeType.OUTPUT)
                 .map(NodeDefinition::config)
                 .filter(Objects::nonNull)
-                .map(config -> Objects.toString(config.get("format"), ""))
+                .map(this::configuredOutputFormat)
                 .collect(java.util.stream.Collectors.toSet());
         var missing = formats.stream().filter(format -> !existing.contains(format)).toList();
         if (missing.isEmpty()) return;
@@ -1137,21 +1137,22 @@ public class AssistantExecutionService {
         for (var index = 0; index < formats.size(); index++) {
             var format = formats.get(index);
             var id = "output_" + shortId();
-            var title = topic + " - " + outputLabel(format);
             var config = new LinkedHashMap<String, Object>();
-            config.put("title", title);
-            config.put("format", format);
-            config.put("heading", "工作结果");
-            config.put("targetAudience", "使用者");
-            config.put("lengthHint", "适中");
-            config.put("includeCitations", false);
-            config.put("citationStyle", "IEEE");
-            config.put("generationPrompt", goal.isBlank() ? "根据上游内容生成结构清晰、可编辑的成果。" : goal);
-            if ("PPTX".equals(format)) config.put("pptSkill", "guizang-huawei-style-c");
-            if ("HTML_SLIDES".equals(format)) config.put("pptSkill", "frontend-slides");
+            var requirement = goal.isBlank() ? "根据上游内容生成结构清晰、可编辑的成果。" : goal;
+            config.put("generationPrompt", requirement + "\n输出形式：" + format);
             nodes.add(new NodeDefinition(id, NodeType.DELIVERABLE, outputLabel(format), 900, 100 + index * 180, config));
             if (upstreamId != null) edges.add(new EdgeDefinition("edge_" + shortId(), upstreamId, id));
         }
+    }
+
+    private String configuredOutputFormat(Map<String, Object> config) {
+        var legacy = Objects.toString(config.get("format"), "").toUpperCase(Locale.ROOT);
+        if (!legacy.isBlank()) return legacy;
+        var prompt = Objects.toString(config.get("generationPrompt"), "").toUpperCase(Locale.ROOT);
+        for (var format : List.of("HTML_SLIDES", "FINANCIAL_REPORT", "EXCALIDRAW", "MERMAID", "PPTX", "DOCX", "PDF")) {
+            if (prompt.contains("输出形式：" + format)) return format;
+        }
+        return "";
     }
 
     private String outputLabel(String format) {

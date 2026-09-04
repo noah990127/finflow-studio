@@ -166,6 +166,21 @@ def _generation_prompt(request: GenerateContentRequest) -> tuple[str, str]:
             request.source_text[:MAX_GENERATION_SOURCE_CHARS],
         )
         return system, user
+    if output_format == "DELIVERABLE_PLAN":
+        system = (
+            "你是 FinBTP Studio 的成果规划模型。根据用户的生成要求和上游内容，决定最合适的成果规格。"
+            "只返回一个合法 JSON 对象，不要使用 Markdown 代码块或附加解释。字段必须包括："
+            'format（PPTX、HTML_SLIDES、DOCX、PDF、FINANCIAL_REPORT、MERMAID、EXCALIDRAW 之一）、'
+            "title、subtitle、heading、include_citations（布尔值）、"
+            "citation_style（IEEE、APA_7、GB_T_7714 之一）、"
+            "ppt_skill（仅可为 guizang-huawei-style-c、frontend-slides 或空字符串）。"
+            "用户明确指定的格式、篇幅、对象、语言、视觉风格和引用要求必须优先；未指定时根据内容自行决定。"
+        )
+        user = "用户的生成要求：\n%s\n\n上游内容：\n%s" % (
+            request.requirements[:MAX_GENERATION_REQUIREMENTS_CHARS],
+            request.source_text[:MAX_GENERATION_SOURCE_CHARS],
+        )
+        return system, user
     if output_format in {"MERMAID", "EXCALIDRAW"}:
         system = (
             "你是 FinBTP Studio 的业务图表生成助手。只返回可执行的 Mermaid flowchart 源码，"
