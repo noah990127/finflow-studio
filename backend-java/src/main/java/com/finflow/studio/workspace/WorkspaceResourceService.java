@@ -105,7 +105,8 @@ public class WorkspaceResourceService {
 
     private String fileType(String name, String mediaType) {
         var lower = name.toLowerCase();
-        if (lower.endsWith(".csv") || lower.endsWith(".xlsx") || lower.endsWith(".xls") || lower.endsWith(".xlsm")) {
+        if (lower.endsWith(".csv") || lower.endsWith(".tsv") || lower.endsWith(".json")
+                || lower.endsWith(".xlsx") || lower.endsWith(".xls") || lower.endsWith(".xlsm")) {
             return "DATA_FILE";
         }
         if (lower.endsWith(".doc") || lower.endsWith(".docx") || lower.endsWith(".ppt") || lower.endsWith(".pptx")) {

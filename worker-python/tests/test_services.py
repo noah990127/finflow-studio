@@ -98,6 +98,41 @@ def test_research_fetch_rejects_private_network_urls() -> None:
     assert response.status_code == 422
 
 
+def test_json_research_payload_exposes_nested_values_as_tables() -> None:
+    from app.research import _json_tables
+
+    tables = _json_tables({"amount": 1, "base": "EUR", "rates": {"USD": 1.17, "CNY": 8.42}})
+
+    assert any(table["title"] == "rates" for table in tables)
+    rates = next(table for table in tables if table["title"] == "rates")
+    assert ["USD", "1.17"] in rates["rows"]
+
+
+def test_html_reader_preserves_table_rows() -> None:
+    from app.research import _ReadableText
+
+    parser = _ReadableText()
+    parser.feed("<html><title>Rates</title><table><tr><th>Currency</th><th>Rate</th></tr>"
+                "<tr><td>USD</td><td>1.17</td></tr></table></html>")
+
+    assert parser.title == "Rates"
+    assert parser.tables[0]["rows"] == [["Currency", "Rate"], ["USD", "1.17"]]
+
+
+def test_json_file_preview_renders_structured_tables(tmp_path) -> None:
+    from app.document_preview import preview_document
+
+    source = tmp_path / "rates.json"
+    source.write_text('{"provenance":{"sourceUrl":"https://example.com"},"tables":['
+                      '{"title":"rates","rows":[["currency","rate"],["USD",1.17]]}]}')
+
+    preview = preview_document(source, source.name)
+
+    assert preview.kind == "data"
+    assert preview.pages[0].blocks[0].text == "rates"
+    assert preview.pages[0].blocks[1].rows[1] == ["USD", "1.17"]
+
+
 def test_financial_report_requests_structured_sections_and_charts() -> None:
     system, _ = _generation_prompt(GenerateContentRequest(
         format="FINANCIAL_REPORT", requirements="生成交互经营报告", source_text="FY2026 收入 100 万元"

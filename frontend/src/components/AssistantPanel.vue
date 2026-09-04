@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { Activity, AlertCircle, ArrowUp, Bot, Check, CheckCircle2, ChevronDown, ChevronRight, Circle, Clock3, LoaderCircle, MessageSquarePlus, PanelRightClose, RotateCcw, ShieldCheck, Sparkles, Square, Wrench, Zap } from 'lucide-vue-next'
+import { Activity, AlertCircle, ArrowDown, ArrowUp, Bot, Check, CheckCircle2, ChevronDown, ChevronRight, Circle, Clock3, LoaderCircle, MessageSquarePlus, PanelRightClose, RotateCcw, ShieldCheck, Sparkles, Square, Wrench, Zap } from 'lucide-vue-next'
 import { useAssistantStore } from '../stores/assistant'
 import type { Project } from '../api/client'
 
@@ -8,9 +8,9 @@ const props = defineProps<{ project: Project | null }>()
 const emit = defineEmits<{ workbenchAction: [action: Record<string, unknown>] }>()
 const assistant = useAssistantStore()
 const conversation = ref<HTMLElement | null>(null)
-const latestAnchor = ref<HTMLElement | null>(null)
 const showSteps = ref(false)
 const showEvents = ref(false)
+const followingLatest = ref(true)
 const now = ref(Date.now())
 let clockTimer: number | undefined
 let conversationObserver: MutationObserver | undefined
@@ -34,6 +34,7 @@ const completedSteps = computed(() => {
   return assistant.plan.steps.filter(step => step.status === 'SUCCEEDED').length
 })
 const latestActivity = computed(() => assistant.timeline.at(-1))
+const showJumpToLatest = computed(() => !followingLatest.value && (running.value || assistant.timeline.length > 0))
 const activeStep = computed(() => assistant.plan?.steps.find(step => stepState(step.order) === 'running'))
 const elapsedLabel = computed(() => {
   const starts = [assistant.timeline[0]?.time, assistant.run?.createdAt, assistant.run?.startedAt]
@@ -73,21 +74,47 @@ function clock(value: string) {
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? '' : date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
 }
-async function scrollToLatest() {
+function handleConversationScroll(event: Event) {
+  const element = conversation.value
+  if (!element) return
+  if (event.target !== element) {
+    followingLatest.value = false
+    return
+  }
+  followingLatest.value = element.scrollHeight - element.clientHeight - element.scrollTop <= 48
+}
+function handleConversationWheel(event: WheelEvent) {
+  if (event.deltaY < 0) followingLatest.value = false
+}
+async function scrollToLatest(force = false) {
+  if (!force && !followingLatest.value) return
   await nextTick()
   window.requestAnimationFrame(() => {
-    if (!conversation.value) return
-    conversation.value.scrollTop = conversation.value.scrollHeight
-    latestAnchor.value?.scrollIntoView({ block: 'end' })
+    const element = conversation.value
+    if (!element || (!force && !followingLatest.value)) return
+    element.scrollTop = element.scrollHeight
+    followingLatest.value = true
   })
 }
+function jumpToLatest() {
+  followingLatest.value = true
+  void scrollToLatest(true)
+}
 watch(() => [assistant.timeline.at(-1)?.id, assistant.timeline.at(-1)?.detail, assistant.assistantMessage,
-  assistant.currentRequest, assistant.history.length, assistant.run?.status, assistant.run?.currentStep,
+  assistant.history.length, assistant.run?.status, assistant.run?.currentStep,
   assistant.plan?.steps.length], scrollToLatest,
 { flush: 'post' })
-watch(() => assistant.currentRequest, () => {
+watch(() => assistant.currentRequest, (request, previous) => {
   showSteps.value = false
   showEvents.value = false
+  if (request && request !== previous) {
+    followingLatest.value = true
+    void scrollToLatest(true)
+  }
+})
+watch(() => assistant.sessionId, () => {
+  followingLatest.value = true
+  void scrollToLatest(true)
 })
 watch(() => [assistant.open, props.project?.id] as const, ([open, projectId]) => {
   if (open && projectId) void assistant.ensureSession(projectId)
@@ -107,7 +134,7 @@ onMounted(() => {
     })
     conversationObserver.observe(conversation.value, { childList: true, subtree: true, characterData: true })
   }
-  void scrollToLatest()
+  void scrollToLatest(true)
 })
 onBeforeUnmount(() => {
   if (clockTimer !== undefined) window.clearInterval(clockTimer)
@@ -139,7 +166,7 @@ onBeforeUnmount(() => {
       </div>
     </header>
 
-    <div ref="conversation" class="assistant-body assistant-conversation">
+    <div ref="conversation" class="assistant-body assistant-conversation" @scroll.capture.passive="handleConversationScroll" @wheel.passive="handleConversationWheel">
       <section v-if="!assistant.currentRequest && !assistant.history.length" class="assistant-empty">
         <span><Sparkles :size="21" /></span>
         <strong>让 Agent 直接处理当前工作</strong>
@@ -232,8 +259,11 @@ onBeforeUnmount(() => {
           </div>
         </article>
       </template>
-      <div ref="latestAnchor" class="assistant-latest-anchor" aria-hidden="true"></div>
     </div>
+
+    <button v-if="showJumpToLatest" class="assistant-jump-latest" type="button" title="恢复自动跟随" @click="jumpToLatest">
+      <ArrowDown :size="14" />查看最新进展
+    </button>
 
     <footer class="assistant-composer">
       <div class="assistant-context-chip">正在使用：{{ contextLabel }}</div>

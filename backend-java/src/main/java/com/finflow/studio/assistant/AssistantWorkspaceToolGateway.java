@@ -265,7 +265,16 @@ public class AssistantWorkspaceToolGateway {
         var detail = new LinkedHashMap<String, Object>();
         detail.put("id", item.id()); detail.put("name", item.name()); detail.put("type", item.resourceType());
         detail.put("status", item.status()); detail.put("version", item.currentVersion()); detail.put("url", Objects.toString(item.url(), ""));
-        if (Set.of("KNOWLEDGE_FILE", "DATA_FILE", "OFFICE_FILE").contains(item.resourceType())) {
+        if ("WEB_URL".equals(item.resourceType())) {
+            var fetched = fetchWebResource(item);
+            detail.put("title", Objects.toString(fetched.get("title"), item.name()));
+            detail.put("content", Objects.toString(fetched.get("text"), ""));
+            detail.put("contentType", Objects.toString(fetched.get("content_type"), ""));
+            detail.put("finalUrl", Objects.toString(fetched.get("final_url"), item.url()));
+            detail.put("contentHash", Objects.toString(fetched.get("content_hash"), ""));
+            detail.put("tables", fetched.getOrDefault("tables", List.of()));
+            detail.put("refs", List.of(webRef(item, fetched)));
+        } else if (Set.of("KNOWLEDGE_FILE", "DATA_FILE", "OFFICE_FILE").contains(item.resourceType())) {
             detail.put("refs", knowledge.currentRefs(item.id(), 20));
             var file = knowledge.filePath(item.id(), null);
             try {
@@ -368,16 +377,44 @@ public class AssistantWorkspaceToolGateway {
 
     private String extractTable(PlanStep step, Map<String, Object> effects) {
         var id = required(step, "resource_id", "资料");
-        var resource = knowledge.get(id);
-        var preview = worker.preview(knowledge.filePath(id, null), resource.name());
-        var tables = preview.get("tables");
-        if (!(tables instanceof List<?> list) || list.isEmpty()) throw new IllegalStateException("资料中没有识别到可抽取表格");
-        var name = argument(step, "target_dataset_name", resource.name() + "-表格.json");
+        var projectId = required(step, "project_id", "项目");
+        var item = resource(projectId, id);
+        List<?> tables;
+        String sourceName;
+        Map<String, Object> provenance;
+        if ("WEB_URL".equals(item.resourceType())) {
+            var fetched = fetchWebResource(item);
+            tables = list(fetched.get("tables"));
+            sourceName = Objects.toString(fetched.get("title"), item.name());
+            provenance = Map.of("sourceResourceId", item.id(), "sourceUrl", item.url(),
+                    "contentHash", Objects.toString(fetched.get("content_hash"), ""),
+                    "fetchedFrom", Objects.toString(fetched.get("final_url"), item.url()));
+            var snapshotText = "来源标题：" + sourceName + "\n原始地址：" + item.url()
+                    + "\n最终地址：" + provenance.get("fetchedFrom")
+                    + "\n内容哈希：" + provenance.get("contentHash") + "\n\n```json\n"
+                    + Objects.toString(fetched.get("text"), "") + "\n```\n";
+            var snapshot = knowledge.importBytes(projectId, sourceName + "-网页快照.md", "text/markdown",
+                    snapshotText.getBytes(StandardCharsets.UTF_8));
+            effects.put("sourceResourceId", snapshot.id());
+            effects.put("sourceUrl", item.url());
+            provenance = new LinkedHashMap<>(provenance);
+            provenance.put("snapshotResourceId", snapshot.id());
+        } else {
+            var resource = knowledge.get(id);
+            sourceName = resource.name();
+            tables = tablesFromPreview(worker.preview(knowledge.filePath(id, null), resource.name()));
+            provenance = Map.of("sourceResourceId", resource.id(), "sourceVersion", resource.currentVersion(),
+                    "sourceName", resource.name(), "contentHash", Objects.toString(resource.checksum(), ""));
+        }
+        if (tables.isEmpty()) throw new IllegalStateException("资料正文已读取，但其中没有识别到结构化表格");
+        var name = argument(step, "target_dataset_name", sourceName + "-表格.json");
         if (!name.toLowerCase(Locale.ROOT).endsWith(".json")) name += ".json";
-        var created = knowledge.importBytes(resource.projectId(), name, "application/json", writeBytes(tables));
+        var created = knowledge.importBytes(projectId, name, "application/json",
+                writeBytes(Map.of("provenance", provenance, "tables", tables)));
+        effects.put("provenance", provenance);
         effects.put("datasetId", created.id());
-        effects.put("uiAction", resourceAction(resource.projectId(), created.id(), true));
-        return "已抽取 " + list.size() + " 个表格并创建数据文件";
+        effects.put("uiAction", resourceAction(projectId, created.id(), true));
+        return "已从“" + sourceName + "”抽取 " + tables.size() + " 个表格并创建数据文件";
     }
 
     private String addDataSource(PlanStep step, Map<String, Object> effects) {
@@ -634,6 +671,40 @@ public class AssistantWorkspaceToolGateway {
                 .orElseThrow(() -> new IllegalArgumentException("工作区资源不存在：" + id));
     }
 
+    private Map<String, Object> fetchWebResource(Resource item) {
+        try {
+            var fetched = worker.fetchResearchSource(item.url());
+            if (Objects.toString(fetched.get("text"), "").isBlank()) {
+                throw new IllegalStateException("网页没有返回可读取正文");
+            }
+            return fetched;
+        } catch (RuntimeException exception) {
+            throw new IllegalStateException("网页资源“" + item.name() + "”读取失败：" + exception.getMessage(), exception);
+        }
+    }
+
+    private Map<String, Object> webRef(Resource item, Map<String, Object> fetched) {
+        return Map.of("id", "web:" + UUID.nameUUIDFromBytes(item.url().getBytes(StandardCharsets.UTF_8)),
+                "resourceId", item.id(), "version", 0,
+                "sourceName", Objects.toString(fetched.get("title"), item.name()),
+                "text", Objects.toString(fetched.get("text"), ""),
+                "location", Map.of("url", item.url(), "finalUrl", Objects.toString(fetched.get("final_url"), item.url())),
+                "contentHash", Objects.toString(fetched.get("content_hash"), ""));
+    }
+
+    private List<?> tablesFromPreview(Map<String, Object> preview) {
+        var result = new ArrayList<>();
+        for (var pageValue : list(preview.get("pages"))) {
+            if (!(pageValue instanceof Map<?, ?> page)) continue;
+            for (var blockValue : list(page.get("blocks"))) {
+                if (!(blockValue instanceof Map<?, ?> block) || !"table".equals(Objects.toString(block.get("type"), ""))) continue;
+                var rows = list(block.get("rows"));
+                if (!rows.isEmpty()) result.add(Map.of("page", page.containsKey("number") ? page.get("number") : 1, "rows", rows));
+            }
+        }
+        return List.copyOf(result);
+    }
+
     private SaveRequest save(com.finflow.studio.workflow.WorkflowModels.WorkflowResponse current,
                              List<NodeDefinition> nodes, List<EdgeDefinition> edges) {
         return new SaveRequest(current.name(), current.description(), nodes, edges, current.executionMode(),
@@ -692,6 +763,10 @@ public class AssistantWorkspaceToolGateway {
         return result;
     }
 
+    private List<?> list(Object value) {
+        return value instanceof List<?> items ? items : List.of();
+    }
+
     private void putIfPresent(Map<String, Object> target, String key, Object value) {
         if (value != null && !Objects.toString(value, "").isBlank()) target.put(key, value);
     }
@@ -737,7 +812,8 @@ public class AssistantWorkspaceToolGateway {
 
     private String fileResourceType(String name) {
         var lower = name.toLowerCase(Locale.ROOT);
-        return lower.endsWith(".csv") || lower.endsWith(".xlsx") || lower.endsWith(".xls") ? "DATA_FILE" : "KNOWLEDGE_FILE";
+        return lower.endsWith(".csv") || lower.endsWith(".tsv") || lower.endsWith(".json")
+                || lower.endsWith(".xlsx") || lower.endsWith(".xls") ? "DATA_FILE" : "KNOWLEDGE_FILE";
     }
 
     private byte[] writeBytes(Object value) {

@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from typing import List
 
@@ -6,6 +7,7 @@ from pptx import Presentation
 from pypdf import PdfReader
 
 from .models import DocumentPreview, PreviewBlock, PreviewPage
+from .research import _json_tables
 
 
 MAX_PAGES = 300
@@ -23,6 +25,24 @@ def preview_document(path: Path, file_name: str) -> DocumentPreview:
         return _preview_docx(path, file_name)
     if suffix == ".pdf":
         return _preview_pdf(path, file_name)
+    if suffix == ".json":
+        payload = json.loads(path.read_text(encoding="utf-8-sig", errors="replace"))
+        declared_tables = payload.get("tables") if isinstance(payload, dict) else payload
+        blocks: list[PreviewBlock] = []
+        if isinstance(declared_tables, list) and declared_tables and all(
+                isinstance(table, dict) and isinstance(table.get("rows"), list) for table in declared_tables):
+            for table in declared_tables:
+                blocks.append(PreviewBlock(type="heading", text=str(table.get("title", "数据表"))))
+                blocks.append(PreviewBlock(type="table", rows=[
+                    [str(cell) for cell in row] for row in table["rows"] if isinstance(row, list)
+                ]))
+        else:
+            blocks = [PreviewBlock(type="table", rows=[[str(cell) for cell in row] for row in table["rows"]])
+                      for table in _json_tables(payload)]
+        if not blocks:
+            blocks = [PreviewBlock(type="text", text=json.dumps(payload, ensure_ascii=False, indent=2)[:MAX_TEXT_CHARS])]
+        return DocumentPreview(file_name=file_name, kind="data", title=Path(file_name).stem,
+                               pages=[PreviewPage(number=1, title="", blocks=blocks)])
     if suffix in {".txt", ".md", ".mermaid", ".mmd", ".excalidraw"}:
         limit = MAX_DIAGRAM_CHARS if suffix in {".mermaid", ".mmd", ".excalidraw"} else MAX_TEXT_CHARS
         text = path.read_text(encoding="utf-8-sig", errors="replace")[:limit]

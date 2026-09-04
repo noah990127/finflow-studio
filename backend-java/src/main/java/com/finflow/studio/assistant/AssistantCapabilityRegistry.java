@@ -47,7 +47,7 @@ public final class AssistantCapabilityRegistry {
                 List.of("project_id", "name", "resource_type", "url"));
         register("resource.open", "resource", "打开资源", "在工作区打开文件、数据集、知识或输出件", "READ", RiskLevel.READ_ONLY, "never",
                 List.of("resource_id"));
-        register("resource.read", "resource", "读取资源", "读取资源元数据和可用预览内容", "READ", RiskLevel.READ_ONLY, "never",
+        register("resource.read", "resource", "读取资源", "读取文件正文、网页正文、JSON API 数据、元数据和可引用来源定位；网页不是只返回链接", "READ", RiskLevel.READ_ONLY, "never",
                 List.of("resource_id", "range", "goal"));
         register("resource.edit", "resource", "编辑资源", "编辑文件或资源内容，保留版本与审计", "WRITE", RiskLevel.CREATE_VERSION, "always",
                 List.of("resource_id", "patch", "expected_version"));
@@ -67,7 +67,7 @@ public final class AssistantCapabilityRegistry {
                 List.of("citation_id", "resource_id", "range"));
         register("knowledge.parse", "knowledge", "解析知识文件", "从文件中解析文本、章节和可检索片段", "WRITE", RiskLevel.CREATE_VERSION, "always",
                 List.of("resource_id", "parser_options"));
-        register("knowledge.extract_table", "knowledge", "抽取文档表格", "从 PDF、Word、PPT 或网页中提取结构化表格并保留定位", "WRITE", RiskLevel.CREATE_VERSION, "always",
+        register("knowledge.extract_table", "knowledge", "抽取文档表格", "从 Word、网页 HTML 表格或 JSON API 中提取结构化表格；网页会先保存可见快照并保留来源定位", "WRITE", RiskLevel.CREATE_VERSION, "always",
                 List.of("resource_id", "pages", "table_hint", "target_dataset_name"));
         register("dataset.add_source", "dataset", "添加数据源", "登记数据库、API 或文件数据入口", "WRITE", RiskLevel.CREATE_VERSION, "always",
                 List.of("project_id", "source_type", "name", "connection"));

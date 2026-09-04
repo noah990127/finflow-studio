@@ -2454,7 +2454,8 @@ button {
 .assistant-codex-panel .send-button { top: auto; right: 8px; bottom: 8px; width: 30px; height: 30px; }
 .assistant-codex-panel .send-button.stop { color: #fff; background: #52677d; }
 .assistant-codex-panel .assistant-composer > p { margin-top: 5px; font-size: 8px; }
-.assistant-latest-anchor { height: 1px; overflow-anchor: auto; }
+.assistant-jump-latest { position: absolute; z-index: 4; right: 18px; bottom: 112px; min-height: 30px; display: flex; align-items: center; gap: 5px; padding: 0 10px; border: 1px solid #cbd9e8; border-radius: 6px; color: #285f98; background: #fff; box-shadow: 0 4px 14px rgb(38 69 101 / 16%); font-size: 9px; font-weight: 700; }
+.assistant-jump-latest:hover { border-color: #8fb7df; background: #f6faff; }
 .assistant-launcher { right: 18px; bottom: 18px; left: auto; top: auto; display: grid; place-items: center; padding: 0; color: #fff; background: #236dcc; }
 
 @media (max-width: 1180px) {
