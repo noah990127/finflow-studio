@@ -2367,6 +2367,10 @@ button {
 .assistant-mode-switch button { min-width: 58px; height: 26px; display: flex; align-items: center; justify-content: center; gap: 4px; padding: 0 7px; border: 0; border-radius: 4px; color: #718196; background: transparent; font-size: 9px; font-weight: 700; }
 .assistant-mode-switch button.active { color: #1e5f9f; background: #fff; box-shadow: 0 1px 3px rgb(40 67 94 / 14%); }
 .assistant-mode-switch button:disabled { cursor: default; opacity: .62; }
+.assistant-session-switcher { display: flex; gap: 4px; width: 210px; margin-top: 7px; }
+.assistant-session-switcher select { min-width: 0; height: 28px; flex: 1; padding: 0 6px; border: 1px solid #d7e0ea; border-radius: 4px; color: #536579; background: #fff; font-size: 10px; }
+.assistant-session-switcher button { width: 28px; height: 28px; flex: 0 0 28px; display: grid; place-items: center; padding: 0; border: 1px solid #d7e0ea; border-radius: 4px; color: #536579; background: #fff; }
+.assistant-session-switcher button:hover { color: #1e5f9f; background: #f4f7fa; }
 .assistant-conversation { padding: 20px 18px 30px; scroll-behavior: smooth; }
 .assistant-user-turn { margin-left: 34px; padding: 11px 13px; border: 1px solid #dce5ef; border-radius: 8px; background: #f6f8fb; }
 .assistant-user-turn p { margin: 5px 0 0; overflow-wrap: anywhere; color: #26384d; font-size: 12px; line-height: 1.6; white-space: pre-wrap; }

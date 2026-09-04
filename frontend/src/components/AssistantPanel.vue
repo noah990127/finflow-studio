@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
-import { AlertCircle, ArrowUp, Bot, Check, CheckCircle2, ChevronDown, ChevronRight, Circle, LoaderCircle, PanelRightClose, RotateCcw, ShieldCheck, Sparkles, Square, Wrench, Zap } from 'lucide-vue-next'
+import { AlertCircle, ArrowUp, Bot, Check, CheckCircle2, ChevronDown, ChevronRight, Circle, LoaderCircle, MessageSquarePlus, PanelRightClose, RotateCcw, ShieldCheck, Sparkles, Square, Wrench, Zap } from 'lucide-vue-next'
 import { useAssistantStore } from '../stores/assistant'
 import type { Project } from '../api/client'
 
@@ -13,6 +13,7 @@ const showEvents = ref(true)
 
 const contextLabel = computed(() => assistant.selection?.range.join('、') || assistant.contextTitle || '项目概览')
 const running = computed(() => ['QUEUED', 'RUNNING'].includes(assistant.run?.status ?? '') || assistant.streaming)
+const controlsLocked = computed(() => assistant.busy || ['QUEUED', 'RUNNING'].includes(assistant.run?.status ?? ''))
 const taskState = computed(() => {
   if (assistant.error || assistant.run?.status === 'FAILED') return { code: 'failed', label: '未完成', detail: assistant.error || assistant.run?.resultSummary || '执行遇到问题' }
   if (assistant.run?.status === 'CANCELED') return { code: 'canceled', label: '已停止', detail: '后续步骤没有继续执行' }
@@ -44,6 +45,7 @@ function stepLabel(order: number) {
   return { completed: '完成', running: '进行中', failed: '失败', canceled: '停止', pending: '等待' }[stepState(order)]
 }
 function send() { if (props.project) assistant.send(props.project.id) }
+function switchSession(event: Event) { void assistant.switchSession((event.target as HTMLSelectElement).value) }
 function clock(value: string) {
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? '' : date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
@@ -73,11 +75,17 @@ watch(() => assistant.run?.status, status => {
       <div>
         <div class="assistant-title"><Bot :size="18" /> AI 助手</div>
         <p><span></span>{{ props.project?.name ?? '个人工作台' }} · {{ contextLabel }}</p>
+        <div class="assistant-session-switcher">
+          <select :value="assistant.sessionId" :disabled="controlsLocked" aria-label="历史对话" @change="switchSession">
+            <option v-for="session in assistant.sessions" :key="session.id" :value="session.id">{{ session.title }} · {{ clock(session.updatedAt) }}</option>
+          </select>
+          <button type="button" title="新对话" :disabled="controlsLocked || !props.project" @click="props.project && assistant.createNewSession(props.project.id)"><MessageSquarePlus :size="14" /></button>
+        </div>
       </div>
       <div class="assistant-header-actions">
         <div class="assistant-mode-switch" role="group" aria-label="Agent 执行模式">
-          <button type="button" :class="{ active: assistant.executionMode === 'AUTO' }" :disabled="running || assistant.busy" title="自动执行 LLM 选择的工具" @click="assistant.setExecutionMode('AUTO')"><Zap :size="12" />Auto</button>
-          <button type="button" :class="{ active: assistant.executionMode === 'APPROVAL' }" :disabled="running || assistant.busy" title="修改前需要确认" @click="assistant.setExecutionMode('APPROVAL')"><ShieldCheck :size="12" />审批</button>
+          <button type="button" :class="{ active: assistant.executionMode === 'AUTO' }" :disabled="controlsLocked" title="自动执行 LLM 选择的工具" @click="assistant.setExecutionMode('AUTO')"><Zap :size="12" />Auto</button>
+          <button type="button" :class="{ active: assistant.executionMode === 'APPROVAL' }" :disabled="controlsLocked" title="修改前需要确认" @click="assistant.setExecutionMode('APPROVAL')"><ShieldCheck :size="12" />审批</button>
         </div>
         <button class="icon-button" type="button" title="收起助手" @click="assistant.open = false"><PanelRightClose :size="18" /></button>
       </div>

@@ -30,9 +30,14 @@ public class AssistantPlanner {
     }
 
     public PlannedWork plan(String goal, String page, Selection selection, WorkspaceContext context, String sessionId) {
+        return plan(goal, page, selection, context, sessionId, "APPROVAL");
+    }
+
+    public PlannedWork plan(String goal, String page, Selection selection, WorkspaceContext context,
+                            String sessionId, String executionMode) {
         var normalized = goal == null ? "" : goal.trim().toLowerCase(Locale.ROOT);
         if (isDirectNavigation(normalized, context)) return fallbackPlan(goal, page, selection, context);
-        var agentPlan = planWithAgent(goal, page, selection, context, sessionId);
+        var agentPlan = planWithAgent(goal, page, selection, context, sessionId, executionMode);
         if (agentPlan != null) return agentPlan;
         return fallbackPlan(goal, page, selection, context);
     }
@@ -156,10 +161,11 @@ public class AssistantPlanner {
 
     @SuppressWarnings("unchecked")
     private PlannedWork planWithAgent(String goal, String page, Selection selection, WorkspaceContext context,
-                                      String sessionId) {
+                                      String sessionId, String executionMode) {
         try {
             var request = new LinkedHashMap<String, Object>();
             request.put("session_id", sessionId == null ? "" : sessionId);
+            request.put("execution_mode", executionMode == null ? "APPROVAL" : executionMode);
             request.put("goal", goal == null ? "" : goal.trim());
             request.put("page", page == null ? "project-home" : page);
             request.put("project_id", context.projectId());

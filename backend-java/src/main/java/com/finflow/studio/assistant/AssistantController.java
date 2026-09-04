@@ -33,6 +33,11 @@ public class AssistantController {
         return assistant.createSession(projectId, request == null ? null : request.title());
     }
 
+    @GetMapping("/projects/{projectId}/assistant/sessions")
+    List<SessionResponse> listSessions(@PathVariable String projectId) {
+        return assistant.listSessions(projectId);
+    }
+
     @GetMapping("/assistant/sessions/{sessionId}")
     SessionResponse getSession(@PathVariable String sessionId) {
         return assistant.getSession(sessionId);

@@ -74,6 +74,21 @@ public class AssistantService {
                 .orElseThrow(() -> new IllegalArgumentException("助手会话不存在"));
     }
 
+    public List<SessionResponse> listSessions(String projectId) {
+        projects.get(projectId);
+        return jdbc.sql("""
+                        select * from assistant_session
+                        where project_id = :projectId
+                        order by updated_at desc
+                        """)
+                .param("projectId", projectId)
+                .query((rs, rowNum) -> new SessionResponse(
+                        rs.getString("id"), rs.getString("project_id"), rs.getString("title"),
+                        rs.getString("status"), rs.getTimestamp("created_at").toInstant(),
+                        rs.getTimestamp("updated_at").toInstant()))
+                .list();
+    }
+
     public List<MessageHistoryItem> listMessages(String sessionId) {
         getSession(sessionId);
         return jdbc.sql("""
@@ -125,6 +140,10 @@ public class AssistantService {
             if (folder.parentId() != null) item.put("parent_id", folder.parentId());
             workspaceItems.add(item);
         });
+        workspaceResponse.workflows().stream().limit(Math.max(0, 120 - workspaceItems.size())).forEach(workflow ->
+                workspaceItems.add(Map.<String, Object>of(
+                        "id", workflow.id(), "name", workflow.name(), "type", "WORKFLOW",
+                        "group", "WORKFLOW", "status", workflow.status())));
         workspaceResponse.resources().stream().limit(Math.max(0, 120 - workspaceItems.size())).forEach(resource ->
                 workspaceItems.add(Map.<String, Object>of(
                         "id", resource.id(), "name", resource.name(), "type", resource.resourceType(),
@@ -139,7 +158,8 @@ public class AssistantService {
                 selected == null ? null : selected.name(),
                 List.copyOf(workspaceItems),
                 recentMessages(sessionId, session.projectId()));
-        var plannedWork = planner.plan(request.text(), request.page(), request.selection(), workspaceContext, sessionId);
+        var plannedWork = planner.plan(request.text(), request.page(), request.selection(), workspaceContext,
+                sessionId, executionPolicy.name());
         if (executionPolicy == ExecutionPolicy.AUTO) {
             var automaticSteps = plannedWork.steps().stream().map(step -> new PlanStep(
                     step.id(), step.order(), step.tool(), step.mode(), step.title(), step.description(),

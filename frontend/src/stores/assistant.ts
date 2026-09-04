@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { api, type AssistantEvent, type AssistantMessage, type ContextSnapshot, type Plan, type Run, type Selection } from '../api/client'
+import { api, type AssistantEvent, type AssistantMessage, type AssistantSession, type ContextSnapshot, type Plan, type Run, type Selection } from '../api/client'
 import { useProjectsStore } from './projects'
 
 type TimelineItem = {
@@ -56,6 +56,8 @@ export const useAssistantStore = defineStore('assistant', {
     executionMode: (localStorage.getItem('finflow.assistant.executionMode') === 'AUTO' ? 'AUTO' : 'APPROVAL') as 'AUTO' | 'APPROVAL',
     history: [] as AssistantMessage[],
     historySessionId: '',
+    sessions: [] as AssistantSession[],
+    sessionsProjectId: '',
   }),
   getters: {
     needsConfirmation: (state) =>
@@ -73,29 +75,61 @@ export const useAssistantStore = defineStore('assistant', {
       this.selection = selection ?? null
     },
     setExecutionMode(mode: 'AUTO' | 'APPROVAL') {
-      if (this.busy || this.streaming) return
+      if (this.busy || (this.run && ['QUEUED', 'RUNNING'].includes(this.run.status))) return
       this.executionMode = mode
       localStorage.setItem('finflow.assistant.executionMode', mode)
     },
     async ensureSession(projectId: string) {
+      if (this.sessionsProjectId !== projectId) {
+        this.sessions = await api.listAssistantSessions(projectId)
+        this.sessionsProjectId = projectId
+      }
       if (!this.sessionId || this.sessionProjectId !== projectId) {
         const storageKey = `finflow.assistant.session.${projectId}`
         const storedId = localStorage.getItem(storageKey) ?? ''
-        let session = null
-        if (storedId) {
-          try {
-            const existing = await api.getAssistantSession(storedId)
-            if (existing.projectId === projectId) session = existing
-          } catch { localStorage.removeItem(storageKey) }
-        }
+        let session = this.sessions.find(item => item.id === storedId) ?? this.sessions[0] ?? null
         if (!session) session = await api.createSession(projectId)
-        this.sessionId = session.id
-        this.sessionProjectId = projectId
-        localStorage.setItem(storageKey, session.id)
-        this.lastEventSequence = 0
+        if (!this.sessions.some(item => item.id === session.id)) this.sessions.unshift(session)
+        await this.activateSession(session)
       }
       this.connectEvents()
       if (this.historySessionId !== this.sessionId) await this.loadHistory()
+    },
+    async createNewSession(projectId: string) {
+      if (this.busy || (this.run && ['QUEUED', 'RUNNING'].includes(this.run.status))) return
+      const stamp = new Date().toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+      const session = await api.createSession(projectId, `新对话 ${stamp}`)
+      this.sessions.unshift(session)
+      this.sessionsProjectId = projectId
+      await this.activateSession(session)
+    },
+    async switchSession(sessionId: string) {
+      if (sessionId === this.sessionId || this.busy || (this.run && ['QUEUED', 'RUNNING'].includes(this.run.status))) return
+      const session = this.sessions.find(item => item.id === sessionId)
+      if (session) await this.activateSession(session)
+    },
+    async activateSession(session: AssistantSession) {
+      eventSource?.close()
+      eventSource = null
+      eventSessionId = ''
+      this.sessionId = session.id
+      this.sessionProjectId = session.projectId
+      localStorage.setItem(`finflow.assistant.session.${session.projectId}`, session.id)
+      this.currentRequest = ''
+      this.assistantMessage = ''
+      this.plan = null
+      this.context = null
+      this.run = null
+      this.timeline = []
+      this.progress = 0
+      this.progressLabel = ''
+      this.streaming = false
+      this.error = ''
+      this.lastEventSequence = 0
+      this.history = []
+      this.historySessionId = ''
+      await this.loadHistory()
+      this.connectEvents()
     },
     async loadHistory() {
       if (!this.sessionId) return

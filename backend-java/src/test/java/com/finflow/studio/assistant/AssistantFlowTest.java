@@ -143,6 +143,21 @@ class AssistantFlowTest {
     }
 
     @Test
+    void listsProjectConversationSessionsForHistorySwitching() throws Exception {
+        var project = json(postJson("/api/projects", Map.of(
+                "name", "会话切换测试", "description", "验证历史会话列表")));
+        var projectId = project.get("id").asText();
+        var first = json(postJson("/api/projects/" + projectId + "/assistant/sessions", Map.of("title", "第一段对话")));
+        var second = json(postJson("/api/projects/" + projectId + "/assistant/sessions", Map.of("title", "第二段对话")));
+
+        var sessions = json(mockMvc.perform(get("/api/projects/" + projectId + "/assistant/sessions"))
+                .andExpect(status().is2xxSuccessful()).andReturn().getResponse().getContentAsString());
+
+        assertThat(sessions).extracting(item -> item.get("id").asText())
+                .containsExactly(second.get("id").asText(), first.get("id").asText());
+    }
+
+    @Test
     void workspaceToolsCreateReadAndRunRealResources() {
         var project = projects.create("Agent 工具场景", "验证工作区与工作流工具真实执行");
         var effects = new LinkedHashMap<String, Object>();
@@ -191,6 +206,13 @@ class AssistantFlowTest {
                 .filter(node -> node.type() == NodeType.DELIVERABLE)
                 .map(node -> node.config().get("format")))
                 .containsExactlyInAnyOrder("PPTX", "HTML_SLIDES");
+
+        var disposable = workflows.create(project.id(), new SaveRequest(
+                "待删除工作流", "验证 Agent 删除工具", List.of(), List.of()));
+        var deleteResult = execution.executeStep(step("workflow.delete", Map.of(
+                "project_id", project.id(), "workflow_id", disposable.id())), effects);
+        assertThat(deleteResult).isEqualTo("已删除工作流“待删除工作流”");
+        assertThat(workflows.list(project.id())).noneMatch(item -> item.id().equals(disposable.id()));
     }
 
     private PlanStep step(String tool, Map<String, Object> arguments) {

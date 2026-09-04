@@ -6,7 +6,35 @@ import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 class AssistantPlannerTest {
+
+    @Test
+    void passesAutoModeAndNamedWorkspaceObjectsToTheAgent() {
+        var captured = new AtomicReference<Map<String, Object>>();
+        var worker = new WorkerClient("http://127.0.0.1:9") {
+            @Override
+            @SuppressWarnings("unchecked")
+            public Map<String, Object> planAgent(Object request) {
+                captured.set((Map<String, Object>) request);
+                return Map.of("summary", "将删除主工作流", "steps", List.of(Map.of(
+                        "tool", "workflow.delete", "title", "删除工作流", "description", "删除主工作流",
+                        "arguments", Map.of("workflow_id", "workflow-main"))));
+            }
+        };
+        var context = new AssistantPlanner.WorkspaceContext("project-1", "项目", 0, 0, 0,
+                false, null, null, null,
+                List.of(Map.of("id", "workflow-main", "name", "主工作流", "type", "WORKFLOW",
+                        "group", "WORKFLOW", "status", "DRAFT")), List.of());
+
+        var work = new AssistantPlanner(worker).plan("删除掉主工作流", "project-home", null,
+                context, "session-1", "AUTO");
+
+        assertThat(captured.get()).containsEntry("execution_mode", "AUTO");
+        assertThat(captured.get().get("resources")).isEqualTo(context.resources());
+        assertThat(work.steps()).extracting(AssistantModels.PlanStep::tool)
+                .containsExactly("workspace.inspect", "workflow.delete");
+    }
 
     @Test
     void rejectsUnknownAgentToolsAndFallsBackToSafePlanner() {

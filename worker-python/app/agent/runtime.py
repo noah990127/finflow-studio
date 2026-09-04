@@ -48,6 +48,7 @@ class AgentMessage(BaseModel):
 
 class AgentPlanRequest(BaseModel):
     session_id: str = ""
+    execution_mode: str = "APPROVAL"
     goal: str
     page: str
     project_id: Optional[str] = None
@@ -179,6 +180,7 @@ async def plan_with_agent(request: AgentPlanRequest, model_override: Any = None)
         item = deps.request
         return {
             "project": {"id": item.project_id, "name": item.project_name, "page": item.page},
+            "execution_mode": item.execution_mode,
             "selection": item.selection,
             "resources": [resource.model_dump() for resource in item.resources],
             "recent_messages": [message.model_dump() for message in item.recent_messages],
@@ -219,6 +221,8 @@ async def plan_with_agent(request: AgentPlanRequest, model_override: Any = None)
 必须亲自调用所需的具体工具来形成执行序列，禁止只描述计划或捏造工具名称。工具结果由 Java 权限网关真实执行。
 不要因为用户提到分析就自动创建财务报告，也不要在缺少结构化数据时创建数据加工或图表报告。
 根据用户选择的 Auto 或审批策略决定是否等待确认；风险分类由后端最终强制执行。
+当前执行模式可从 inspect_workspace 的 execution_mode 读取。AUTO 模式下不得要求用户再次确认；当工作区快照中能按名称唯一匹配对象时，
+必须自行使用其 ID 调用工具，不得向用户索要 workflow_id、resource_id、folder_id 等内部标识。APPROVAL 模式下也应先形成工具计划，由界面统一请求确认。
 完成工具选择后返回 JSON，包含 summary、intent、selected_skills。summary 描述接下来将执行什么，不得把尚未执行的动作说成已经完成。
 用业务用户看得懂的中文，不暴露隐藏推理。"""
     workbench_tools = build_workbench_tools(deps)

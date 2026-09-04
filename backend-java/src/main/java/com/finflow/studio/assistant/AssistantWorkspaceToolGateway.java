@@ -49,7 +49,7 @@ public class AssistantWorkspaceToolGateway {
             "dataset.add_source", "dataset.connect", "dataset.import", "dataset.query", "dataset.extract",
             "dataset.create", "dataset.transform", "dataset.open", "dataset.delete", "dataset.profile",
             "workflow.open", "workflow.edit", "workflow.add_node", "workflow.remove_node", "workflow.connect",
-            "workflow.save_version",
+            "workflow.save_version", "workflow.delete",
             "deliverable.open", "deliverable.edit", "deliverable.export", "deliverable.delete"
     );
 
@@ -131,6 +131,7 @@ public class AssistantWorkspaceToolGateway {
             case "workflow.remove_node" -> removeWorkflowNode(step, effects);
             case "workflow.connect" -> connectWorkflow(step, effects);
             case "workflow.save_version" -> saveWorkflowVersion(step, effects);
+            case "workflow.delete" -> deleteWorkflow(step, effects);
             case "deliverable.open" -> openDeliverable(step, effects);
             case "deliverable.edit" -> editDeliverable(step, effects);
             case "deliverable.export" -> exportDeliverable(step, effects);
@@ -207,6 +208,16 @@ public class AssistantWorkspaceToolGateway {
         folders.delete(projectId, required(step, "folder_id", "目录"));
         effects.put("uiAction", Map.of("type", "REFRESH_WORKSPACE", "projectId", projectId));
         return "已删除目录";
+    }
+
+    private String deleteWorkflow(PlanStep step, Map<String, Object> effects) {
+        var projectId = required(step, "project_id", "项目");
+        var id = required(step, "workflow_id", "工作流");
+        var workflow = workflows.get(id);
+        if (!projectId.equals(workflow.projectId())) throw new IllegalArgumentException("工作流不属于当前项目");
+        workflows.delete(id);
+        effects.put("uiAction", Map.of("type", "REFRESH_WORKSPACE", "projectId", projectId));
+        return "已删除工作流“" + workflow.name() + "”";
     }
 
     private String uploadResource(PlanStep step, Map<String, Object> effects) {

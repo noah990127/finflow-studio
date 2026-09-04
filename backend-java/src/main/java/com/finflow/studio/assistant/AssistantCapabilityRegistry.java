@@ -107,6 +107,8 @@ public final class AssistantCapabilityRegistry {
                 List.of("workflow_id", "parameters"));
         register("workflow.save_version", "workflow", "保存工作流版本", "为当前工作流保存可审计版本", "WRITE", RiskLevel.CREATE_VERSION, "always",
                 List.of("workflow_id", "message"));
+        register("workflow.delete", "workflow", "删除工作流", "删除指定工作流及其历史运行记录", "WRITE", RiskLevel.DESTRUCTIVE_OR_EXTERNAL, "always",
+                List.of("workflow_id"));
         register("workflow.add_data_transform", "workflow", "增加数据加工", "加入透明、可查看和可复核的数据加工草稿", "WRITE", RiskLevel.CREATE_VERSION, "always",
                 List.of("project_id", "resource_id", "resource_type", "resource_name", "goal"));
         register("workflow.add_outputs", "workflow", "增加输出成果", "按用户明确指定的格式添加输出节点", "WRITE", RiskLevel.CREATE_VERSION, "always",
