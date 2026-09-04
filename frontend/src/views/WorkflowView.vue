@@ -6,7 +6,8 @@ import { Controls } from '@vue-flow/controls'
 import { MiniMap } from '@vue-flow/minimap'
 import { Activity, BookOpen, Braces, CalendarClock, CheckCircle2, ChevronRight, CircleStop, CircleUserRound, Clock3, Code2, Combine, Database, File, FileOutput, FileSpreadsheet, FileText, FileUp, History, Network, Play, Plus, RotateCcw, Save, Search, Sparkles, Trash2, X } from 'lucide-vue-next'
 import WorkflowNode from '../components/WorkflowNode.vue'
-import { api, type DataConnection, type DataTransformSource, type FileResource, type Project, type Workflow, type WorkflowNodeType, type WorkflowProgressEvent, type WorkflowRun, type WorkflowSave, type WorkspaceResource } from '../api/client'
+import { api, type DataConnection, type DataTransformSample, type DataTransformSource, type FileResource, type Project, type Workflow, type WorkflowNodeType, type WorkflowProgressEvent, type WorkflowRun, type WorkflowSave, type WorkspaceResource } from '../api/client'
+import { initialWorkflowNodeConfig, normalizeWorkflowNodeConfig, workflowNodeSpecForResource } from '../domain/workflowNodeConfig'
 
 const props = defineProps<{ project: Project | null; resources: WorkspaceResource[]; workflowId?: string }>()
 const emit = defineEmits<{ resourcesChanged: []; workflowChanged: [workflow: Workflow]; openDeliverable: [deliverableId: string]; openResource: [resourceId: string] }>()
@@ -59,27 +60,18 @@ const selectedIncoming = computed(() => {
   const sourceIds = edges.value.filter(edge => edge.target === selectedNode.value?.id).map(edge => edge.source)
   return sourceIds.map(id => nodes.value.find(node => node.id === id)).filter((node): node is Node => !!node)
 })
-function initialConfig(type: WorkflowNodeType): Record<string, unknown> {
-  if (type === 'LINK_INPUT') return { url: '', title: '' }
-  if (type === 'DATASET_INPUT') return { extractJobId: '' }
-  if (type === 'DATA_EXTRACT') return { connectionId: '', sql: 'select * from your_table', outputName: 'data.csv', fetchSize: 5000 }
-  if (type === 'DATA_TRANSFORM') return { requirements: '根据已连接的数据完成清洗、关联和计算，保留可核对的关键字段。', script: '', outputName: '数据加工结果.csv', inputAliases: {}, sheetNames: {}, scriptSummary: '', scriptMode: '', assumptions: [], qualityRules: [], sampleReport: null }
-  if (type === 'REF_SEARCH') return { query: '', limit: 10 }
-  if (type === 'AI_ANALYSIS') return { prompt: '结合已连接的资料进行分析，给出有证据支持的结论。' }
-  if (type === 'AGENT_TASK') return { instruction: '结合已连接的内容完成任务，区分事实、计算、推断和不确定项。', externalResearch: 'OFF', domainAllowlist: [], skills: [], maxToolCalls: 40, timeoutSeconds: 600, maxPoints: 10 }
-  if (type === 'DELIVERABLE') return { generationPrompt: '根据已连接的内容生成一份可以直接使用的成果。' }
-  return { resourceId: '' }
-}
+const selectedSampleReport = computed<DataTransformSample | null>(() => {
+  const report = selectedNode.value?.data.config.sampleReport
+  return report && typeof report === 'object' ? report as DataTransformSample : null
+})
 function makeNode(type: WorkflowNodeType, x: number, y: number, label?: string, config?: Record<string, unknown>): Node {
   const count = nodes.value.filter(node => node.data.nodeType === type).length + 1
   const base = catalog.find(item => item.type === type)?.label ?? ({ FILE_INPUT: '使用文件', LINK_INPUT: '使用链接', DATASET_INPUT: '使用数据' } as Record<string, string>)[type] ?? '步骤'
-  return { id: `${type.toLowerCase()}_${crypto.randomUUID().slice(0, 8)}`, type: 'business', position: { x, y }, data: { label: label ?? `${base} ${count}`, nodeType: type, config: config ?? initialConfig(type) } }
+  return { id: `${type.toLowerCase()}_${crypto.randomUUID().slice(0, 8)}`, type: 'business', position: { x, y }, data: { label: label ?? `${base} ${count}`, nodeType: type, config: config ?? initialWorkflowNodeConfig(type) } }
 }
 function resourceNode(resource: WorkspaceResource, x: number, y: number): Node {
-  if (['DATABASE_CONNECTION', 'API_CONNECTION'].includes(resource.resourceType)) return makeNode('DATA_EXTRACT', x, y, resource.name, { connectionId: resource.id, sql: resource.resourceType === 'API_CONNECTION' ? 'GET /' : 'select * from your_table', outputName: `${resource.name}.csv`, fetchSize: 5000 })
-  if (resource.resourceType === 'DELIVERABLE') return makeNode('DELIVERABLE', x, y, resource.name, { outputResourceId: resource.id, generationPrompt: `根据已连接的内容更新“${resource.name}”，保持适合当前内容的成果形式。` })
-  if (resource.resourceType === 'DATASET') return makeNode('DATASET_INPUT', x, y, resource.name, { extractJobId: resource.id })
-  return makeNode('FILE_INPUT', x, y, resource.name, { resourceId: resource.id })
+  const spec = workflowNodeSpecForResource(resource)
+  return makeNode(spec.type, x, y, spec.label, spec.config)
 }
 function openWorkflow(item: Workflow) {
   activeId.value = item.id; currentVersion.value = item.currentVersion; name.value = item.name; description.value = item.description; validation.value = null; currentRun.value = null
@@ -87,9 +79,7 @@ function openWorkflow(item: Workflow) {
   const visibleNodes = item.nodes.filter(node => !removedNodeTypes.has(node.type))
   const visibleNodeIds = new Set(visibleNodes.map(node => node.id))
   nodes.value = visibleNodes.map(node => {
-    const config = structuredClone(node.config ?? {})
-    if (node.type === 'AI_ANALYSIS') delete config.maxPoints
-    if (node.type === 'DELIVERABLE') Object.keys(config).filter(key => !['generationPrompt', 'outputResourceId'].includes(key)).forEach(key => delete config[key])
+    const config = normalizeWorkflowNodeConfig(node.type, node.config)
     return { id: node.id, type: 'business', position: { x: node.x, y: node.y }, data: { label: node.name, nodeType: node.type, config } }
   })
   edges.value = item.edges.filter(edge => visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target)).map(decorateEdge); selectedNodeId.value = ''; loadRuns(item.id)
@@ -338,7 +328,7 @@ watch(() => [props.project?.id, props.workflowId], () => { activeId.value = ''; 
           <div class="transform-actions"><button class="secondary-button" type="button" :disabled="transformBusy || !selectedIncoming.length" @click="generateTransformScript"><Sparkles :size="14"/>{{ transformBusy ? '正在处理' : '生成加工脚本' }}</button><button class="secondary-button" type="button" :disabled="transformBusy || !selectedNode.data.config.script" @click="sampleTransformScript"><Play :size="14"/>样本试跑</button></div>
           <p v-if="selectedNode.data.config.scriptSummary" class="transform-summary">{{ selectedNode.data.config.scriptSummary }}<small>{{ selectedNode.data.config.scriptMode }}</small></p>
           <label class="script-editor"><span><Code2 :size="13"/>可查看、可修改的加工脚本</span><textarea v-model="selectedNode.data.config.script" rows="12" spellcheck="false" placeholder="先填写加工要求，再生成脚本"></textarea></label>
-          <section v-if="selectedNode.data.config.sampleReport" class="sample-report"><div><CheckCircle2 :size="15"/><strong>样本试跑通过</strong><small>{{ (selectedNode.data.config.sampleReport as any).sampleRowCount }} 行 · {{ (selectedNode.data.config.sampleReport as any).columns?.length ?? 0 }} 列</small></div><p v-for="item in ((selectedNode.data.config.sampleReport as any).checks ?? [])" :key="item">{{ item }}</p></section>
+          <section v-if="selectedSampleReport" class="sample-report"><div><CheckCircle2 :size="15"/><strong>样本试跑通过</strong><small>{{ selectedSampleReport.sampleRowCount }} 行 · {{ selectedSampleReport.columns.length }} 列</small></div><p v-for="item in selectedSampleReport.checks" :key="item">{{ item }}</p></section>
           <label><span>输出文件名</span><input v-model="selectedNode.data.config.outputName" placeholder="数据加工结果.csv"></label>
         </template>
         <template v-else-if="selectedNode.data.nodeType === 'REF_SEARCH'"><label><span>查找内容</span><textarea v-model="selectedNode.data.config.query" rows="4"></textarea></label><label><span>最多使用</span><input v-model.number="selectedNode.data.config.limit" type="number" min="1" max="50"></label></template>

@@ -3,10 +3,6 @@ package com.finflow.studio.workflow;
 import com.finflow.studio.data.DataModels.CreateExtractRequest;
 import com.finflow.studio.data.ExtractJobService;
 import com.finflow.studio.data.DataTransformService;
-import com.finflow.studio.deliverable.DeliverableModels.CreateRequest;
-import com.finflow.studio.deliverable.DeliverableModels.CitationRequest;
-import com.finflow.studio.deliverable.DeliverableModels.SectionRequest;
-import com.finflow.studio.deliverable.DeliverableService;
 import com.finflow.studio.knowledge.KnowledgeService;
 import com.finflow.studio.project.ProjectService;
 import com.finflow.studio.worker.WorkerClient;
@@ -24,8 +20,6 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 
-import java.nio.file.Path;
-import java.nio.file.Files;
 import java.nio.charset.StandardCharsets;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -36,9 +30,6 @@ import java.util.concurrent.CancellationException;
 
 @Service
 public class WorkflowRunService {
-    static final int MAX_WORKFLOW_CONTEXT_CHARS = 180_000;
-    private static final Set<String> TEXT_PREVIEW_EXTENSIONS = Set.of(
-            "csv", "tsv", "txt", "md", "json", "jsonl", "xml", "html", "htm", "yaml", "yml", "sql");
     private final JdbcClient jdbc;
     private final ObjectMapper objectMapper;
     private final ProjectService projects;
@@ -47,7 +38,8 @@ public class WorkflowRunService {
     private final DataTransformService dataTransforms;
     private final KnowledgeService knowledge;
     private final WorkerClient worker;
-    private final DeliverableService deliverables;
+    private final WorkflowDeliverableService workflowDeliverables;
+    private final WorkflowContextAssembler contexts;
     private final TaskExecutor taskExecutor;
     private final WorkflowRunEventService events;
     private final WorkflowFactService facts;
@@ -55,7 +47,7 @@ public class WorkflowRunService {
     public WorkflowRunService(JdbcClient jdbc, ObjectMapper objectMapper, ProjectService projects,
                               WorkflowDefinitionService definitions, ExtractJobService extracts,
                               DataTransformService dataTransforms, KnowledgeService knowledge, WorkerClient worker,
-                              DeliverableService deliverables,
+                              WorkflowDeliverableService workflowDeliverables, WorkflowContextAssembler contexts,
                               @Qualifier("applicationTaskExecutor") TaskExecutor taskExecutor,
                               WorkflowRunEventService events, WorkflowFactService facts) {
         this.jdbc = jdbc;
@@ -66,7 +58,8 @@ public class WorkflowRunService {
         this.dataTransforms = dataTransforms;
         this.knowledge = knowledge;
         this.worker = worker;
-        this.deliverables = deliverables;
+        this.workflowDeliverables = workflowDeliverables;
+        this.contexts = contexts;
         this.taskExecutor = taskExecutor;
         this.events = events;
         this.facts = facts;
@@ -311,9 +304,9 @@ public class WorkflowRunService {
             case AGENT_TASK -> agentTask(run.projectId(), runId, node, config, upstream, context,
                     startProgress, endProgress);
             case REVIEW -> throw new IllegalStateException("复核步骤应由运行器暂停处理");
-            case DELIVERABLE -> createDeliverable(run.projectId(), runId, node, config, upstream,
+            case DELIVERABLE -> workflowDeliverables.create(run.projectId(), runId, node, config, upstream,
                     startProgress, endProgress);
-            case OUTPUT -> createDeliverable(run.projectId(), runId, node, config, upstream,
+            case OUTPUT -> workflowDeliverables.create(run.projectId(), runId, node, config, upstream,
                     startProgress, endProgress);
             case SUB_WORKFLOW -> runSubWorkflow(run, config, upstream);
             case RESOURCE, ACQUIRE, TOOL, CONTROL -> passThrough(upstream);
@@ -566,8 +559,8 @@ public class WorkflowRunService {
                                         Map<String, Map<String, Object>> upstream,
                                         int startProgress, int endProgress) {
         var prompt = text(config, "prompt");
-        var sourceText = collectText(upstream);
-        var refIds = collectRefIds(upstream);
+        var sourceText = contexts.collectText(upstream);
+        var refIds = contexts.refIds(upstream);
         if (sourceText.isBlank()) throw new IllegalStateException("智能分析没有可读取的上游资料，请先连接资料或数据节点");
         var span = Math.max(1, endProgress - startProgress);
         var result = worker.generateContentStreaming("ANALYSIS", prompt, sourceText, event -> {
@@ -599,7 +592,7 @@ public class WorkflowRunService {
                                           Map<String, Map<String, Object>> context,
                                           int startProgress, int endProgress) {
         var instruction = text(config, "instruction");
-        var sourceContext = collectText(upstream);
+        var sourceContext = contexts.collectText(upstream);
         var externalResearch = optional(config, "externalResearch", "OFF").toUpperCase(Locale.ROOT);
         var policy = new LinkedHashMap<String, Object>();
         policy.put("external_research", externalResearch);
@@ -665,7 +658,7 @@ public class WorkflowRunService {
         output.put("sourceSnapshots", snapshots);
         output.put("externalResearch", externalResearch);
         output.put("toolCalls", result.getOrDefault("tool_calls", 0));
-        output.put("refIds", collectRefIds(context));
+        output.put("refIds", contexts.refIds(context));
         return Map.copyOf(output);
     }
 
@@ -673,126 +666,6 @@ public class WorkflowRunService {
         var result = value.replaceAll("[\\p{Cntrl}/\\\\:*?\"<>|]", "_").trim();
         if (result.isBlank()) result = "网页资料";
         return result.substring(0, Math.min(result.length(), 180));
-    }
-
-    private Map<String, Object> createDeliverable(String projectId, String runId, NodeDefinition node,
-                                                  Map<String, Object> config,
-                                                  Map<String, Map<String, Object>> upstream,
-                                                  int startProgress, int endProgress) {
-        var requirements = text(config, "generationPrompt");
-        var sourceText = collectText(upstream);
-        if (sourceText.isBlank()) throw new IllegalStateException("生成成果没有可读取的上游内容，请先连接资料、数据或分析节点");
-        events.publish(runId, "MODEL_STATUS", node.id(), node.name(), "RUNNING", startProgress,
-                "正在理解生成要求并决定成果形式", "");
-        var planning = worker.generateContent("DELIVERABLE_PLAN", requirements,
-                sourceText.substring(0, Math.min(sourceText.length(), 30_000)));
-        var planningMode = Objects.toString(planning.get("mode"), "");
-        if (planningMode.contains("fallback")) throw new IllegalStateException("大模型当前不可用，无法规划生成成果");
-        var plan = parseDeliverablePlan(Objects.toString(planning.get("content"), ""));
-        var format = plannedFormat(plan);
-        var title = plannedText(plan, "title", "成果标题", 280);
-        var subtitle = optional(plan, "subtitle", "");
-        var heading = plannedText(plan, "heading", "主章节", 300);
-        var includeCitations = bool(plan, "include_citations");
-        var citationStyle = plannedCitationStyle(plan);
-        var pptSkill = plannedPptSkill(plan, format);
-        var skillRequirement = "guizang-huawei-style-c".equals(pptSkill)
-                ? "\nPPT 技能：华为企业汇报 Style C。采用结论先行的管理层叙事，避免模板化堆框。"
-                  + "每页只表达一个判断；标题必须单行且不超过22个汉字，摘要不超过64个汉字，"
-                  + "每页3条要点、每条不超过56个汉字，分别说清量化依据、业务影响和决策或动作；"
-                  + "禁止手工换行、长段落和重复措辞。有可靠连续数据、分类比较或构成数据时生成原生图表，"
-                  + "正文中至少40%的页面应在有可靠数值时配置图表，并用一句话解释其业务含义。"
-                : "frontend-slides".equals(pptSkill)
-                ? "\n演示技能：Frontend Slides 网页演示。产物是 HTML + JavaScript，不是 PowerPoint 文件。"
-                  + "内容应适合浏览器全屏演示，强调视觉层级、页面节奏、图表证据与版式变化；"
-                  + "每页只表达一个判断，标题不超过22个汉字，每页2至3条要点，有可靠数值时优先使用图表。"
-                : "";
-        var citationRequirement = citationRequirement(includeCitations, citationStyle);
-        var completeRequirements = requirements + "\n\n模型选择的成果规格：\n成果形式：" + format
-                + "\n标题：" + title + "\n副标题：" + subtitle + "\n主章节：" + heading
-                + skillRequirement + "\n" + citationRequirement;
-        var referenceCatalog = collectReferenceCatalog(upstream);
-        var generationSource = sourceText;
-        if (includeCitations && !referenceCatalog.isBlank()) {
-            generationSource += "\n\n--- 可用参考来源（正文必须使用对应编号） ---\n" + referenceCatalog;
-        }
-        events.publish(runId, "MODEL_STATUS", node.id(), node.name(), "RUNNING", startProgress + 1,
-                "已选择 " + format + "，正在生成“" + title + "”", "");
-        var span = Math.max(1, endProgress - startProgress);
-        var generation = worker.generateContentStreaming(format, completeRequirements, generationSource, event -> {
-            var type = Objects.toString(event.get("type"), "status");
-            var modelProgress = event.get("progress") instanceof Number number ? number.intValue() : 50;
-            var progress = startProgress + Math.max(1, (int) Math.floor(span * modelProgress / 100.0));
-            if ("content".equals(type)) {
-                events.publish(runId, "MODEL_OUTPUT", node.id(), node.name(), "RUNNING", progress,
-                        "正在生成成果内容", Objects.toString(event.get("content"), ""));
-            } else if (!"complete".equals(type)) {
-                events.publish(runId, "MODEL_STATUS", node.id(), node.name(), "RUNNING", progress,
-                Objects.toString(event.get("message"), "正在生成成果"), "");
-            }
-        });
-        var generationMode = Objects.toString(generation.get("mode"), "");
-        if (generationMode.contains("fallback")) throw new IllegalStateException("大模型当前不可用，成果内容未生成");
-        var generatedBody = Objects.toString(generation.get("content"), sourceText);
-        var refIds = includeCitations ? collectRefIds(upstream) : List.<String>of();
-        var section = new SectionRequest(heading, List.of(generatedBody),
-                stringList(findValue(upstream, "points")), refIds,
-                includeCitations ? collectCitations(upstream) : List.of());
-        events.publish(runId, "STEP_PROGRESS", node.id(), node.name(), "RUNNING", Math.max(startProgress, endProgress - 1),
-                "正在写入 " + format + " 文件", "");
-        var outputResourceId = compatibleOutputResource(config, format);
-        var item = deliverables.create(new CreateRequest(projectId, outputResourceId, title,
-                subtitle, format, pptSkill,
-                includeCitations, citationStyle, List.of(section)));
-        return Map.of("deliverableId", item.id(), "name", item.name(), "format", item.format(), "outputPlan", plan,
-                "version", item.currentVersion(), "downloadUrl", "/api/deliverables/" + item.id() + "/download",
-                "analysisMode", generationMode, "planningMode", planningMode);
-    }
-
-    Map<String, Object> parseDeliverablePlan(String value) {
-        var clean = value == null ? "" : value.trim();
-        if (clean.startsWith("```")) {
-            clean = clean.replaceFirst("^```(?:json)?\\s*", "").replaceFirst("\\s*```$", "").trim();
-        }
-        var objectStart = clean.indexOf('{');
-        var objectEnd = clean.lastIndexOf('}');
-        if (objectStart >= 0 && objectEnd > objectStart) clean = clean.substring(objectStart, objectEnd + 1);
-        var plan = readMap(clean);
-        if (plan.isEmpty()) throw new IllegalStateException("大模型没有返回有效的成果规格");
-        return plan;
-    }
-
-    private String plannedFormat(Map<String, Object> plan) {
-        var format = optional(plan, "format", "").toUpperCase(Locale.ROOT);
-        if (!Set.of("PPTX", "HTML_SLIDES", "DOCX", "PDF", "FINANCIAL_REPORT", "MERMAID", "EXCALIDRAW").contains(format)) {
-            throw new IllegalStateException("大模型返回了不支持的成果形式");
-        }
-        return format;
-    }
-
-    private String plannedText(Map<String, Object> plan, String key, String label, int maxLength) {
-        var value = optional(plan, key, "").trim();
-        if (value.isBlank()) throw new IllegalStateException("大模型没有给出" + label);
-        return value.substring(0, Math.min(value.length(), maxLength));
-    }
-
-    private String plannedCitationStyle(Map<String, Object> plan) {
-        var style = optional(plan, "citation_style", "IEEE").toUpperCase(Locale.ROOT);
-        return Set.of("IEEE", "APA_7", "GB_T_7714").contains(style) ? style : "IEEE";
-    }
-
-    private String plannedPptSkill(Map<String, Object> plan, String format) {
-        if (!List.of("PPTX", "HTML_SLIDES").contains(format)) return "";
-        var skill = optional(plan, "ppt_skill", "");
-        if ("PPTX".equals(format) && "guizang-huawei-style-c".equals(skill)) return skill;
-        if ("HTML_SLIDES".equals(format) && "frontend-slides".equals(skill)) return skill;
-        return "";
-    }
-
-    private String compatibleOutputResource(Map<String, Object> config, String format) {
-        var resourceId = optional(config, "outputResourceId", "");
-        if (resourceId.isBlank()) return null;
-        return deliverables.get(resourceId).format().equalsIgnoreCase(format) ? resourceId : null;
     }
 
     private Map<String, Map<String, Object>> upstream(WorkflowDocument document, String nodeId,
@@ -882,91 +755,6 @@ public class WorkflowRunService {
         } else taskExecutor.execute(task);
     }
 
-    String collectText(Map<String, Map<String, Object>> values) {
-        var result = new StringBuilder();
-        for (var output : values.values()) {
-            var hasParsedText = false;
-            for (var key : List.of("analysis", "summary", "text")) {
-                var value = Objects.toString(output.get(key), "").trim();
-                if (!value.isBlank()) {
-                    result.append(value).append('\n');
-                    hasParsedText = true;
-                }
-            }
-            for (var item : list(output.get("refs"))) {
-                if (item instanceof Map<?, ?> map) {
-                    var value = Objects.toString(map.get("text"), "").trim();
-                    if (!value.isBlank()) {
-                        result.append(value).append('\n');
-                        hasParsedText = true;
-                    }
-                }
-            }
-            var url = Objects.toString(output.get("url"), "");
-            if (!url.isBlank()) result.append("网站资料：").append(Objects.toString(output.get("title"), url))
-                    .append(" ").append(url).append('\n');
-            var fileId = Objects.toString(output.get("fileId"), "");
-            if (!fileId.isBlank() && !hasParsedText) appendFilePreview(result, knowledge.filePath(fileId,
-                    output.get("version") instanceof Number number ? number.intValue() : null));
-            var extractId = Objects.toString(output.get("extractJobId"), "");
-            if (!extractId.isBlank()) appendFilePreview(result, extracts.outputPath(extractId));
-        }
-        var text = result.toString().trim();
-        if (text.length() <= MAX_WORKFLOW_CONTEXT_CHARS) return text;
-        return text.substring(0, MAX_WORKFLOW_CONTEXT_CHARS)
-                + "\n[工作流上下文较长，已按安全上限截断]";
-    }
-
-    private String collectReferenceCatalog(Map<String, Map<String, Object>> context) {
-        var byId = new LinkedHashMap<String, Map<?, ?>>();
-        for (var output : context.values()) {
-            for (var item : list(output.get("refs"))) {
-                if (item instanceof Map<?, ?> map) {
-                    var id = Objects.toString(map.get("id"), "");
-                    if (!id.isBlank()) byId.putIfAbsent(id, map);
-                }
-            }
-        }
-        var catalog = new StringBuilder();
-        var ids = collectRefIds(context);
-        for (var index = 0; index < ids.size(); index++) {
-            var ref = byId.get(ids.get(index));
-            if (ref == null) continue;
-            catalog.append("[Ref ").append(index + 1).append("] ")
-                    .append(Objects.toString(ref.get("sourceName"), "项目资料"));
-            var location = ref.get("location");
-            if (location != null) catalog.append("，位置：").append(location);
-            var text = Objects.toString(ref.get("text"), "").replaceAll("\\s+", " ").trim();
-            if (!text.isBlank()) catalog.append("，摘录：").append(text, 0, Math.min(text.length(), 500));
-            catalog.append('\n');
-        }
-        return catalog.toString().trim();
-    }
-
-    private void appendFilePreview(StringBuilder result, Path path) {
-        var name = path.getFileName() == null ? "" : path.getFileName().toString();
-        var separator = name.lastIndexOf('.');
-        var extension = separator < 0 ? "" : name.substring(separator + 1).toLowerCase(Locale.ROOT);
-        if (!TEXT_PREVIEW_EXTENSIONS.contains(extension)) return;
-        try (var input = Files.newInputStream(path)) {
-            var bytes = input.readNBytes(300_000);
-            if (bytes.length > 0) {
-                result.append("\n--- 结构化数据预览 ---\n")
-                        .append(new String(bytes, StandardCharsets.UTF_8));
-                if (input.read() >= 0) result.append("\n[数据较大，以上为前 300KB 预览]");
-                result.append('\n');
-            }
-        } catch (Exception ignored) {
-            // Non-text files remain available to dedicated file-processing steps.
-        }
-    }
-
-    private List<String> collectRefIds(Map<String, Map<String, Object>> context) {
-        var ids = new LinkedHashSet<String>();
-        context.values().forEach(output -> stringList(output.get("refIds")).forEach(ids::add));
-        return List.copyOf(ids);
-    }
-
     private Map<String, Object> linkInput(NodeDefinition node, Map<String, Object> config) {
         var url = text(config, "url");
         var title = optional(config, "title", node.name());
@@ -991,37 +779,6 @@ public class WorkflowRunService {
         return Map.of("id", ref.id(), "resourceId", ref.resourceId(), "version", ref.version(),
                 "sourceName", ref.sourceName(), "text", ref.text(), "location", ref.location(),
                 "contentHash", ref.contentHash());
-    }
-
-    private List<CitationRequest> collectCitations(Map<String, Map<String, Object>> context) {
-        var result = new LinkedHashMap<String, CitationRequest>();
-        for (var output : context.values()) {
-            for (var item : list(output.get("refs"))) {
-                if (!(item instanceof Map<?, ?> ref)) continue;
-                var id = Objects.toString(ref.get("id"), "");
-                if (id.isBlank()) continue;
-                var location = new LinkedHashMap<String, Object>();
-                if (ref.get("location") instanceof Map<?, ?> rawLocation) {
-                    rawLocation.forEach((key, value) -> location.put(Objects.toString(key), value));
-                }
-                result.putIfAbsent(id, new CitationRequest(id, Objects.toString(ref.get("resourceId"), ""),
-                        ref.get("version") instanceof Number number ? number.intValue() : 0,
-                        Objects.toString(ref.get("sourceName"), "未命名资料"), Objects.toString(ref.get("text"), ""),
-                        location, Objects.toString(ref.get("contentHash"), "")));
-            }
-        }
-        return List.copyOf(result.values());
-    }
-
-    private String citationRequirement(boolean include, String style) {
-        if (!include) {
-            return "来源标注：关闭。正文、图表和页脚中不要输出 [Ref N]、来源编号或参考文献。";
-        }
-        return switch (style) {
-            case "APA_7" -> "来源标注：开启，使用 APA 第 7 版。正文采用（机构或作者, 年份）格式；缺少年份时使用 n.d.；图表 source_ref 使用相同格式；末尾生成按作者排序的参考文献。";
-            case "GB_T_7714" -> "来源标注：开启，使用 GB/T 7714-2015 顺序编码制。正文和图表使用 [1]、[2] 编号；末尾生成对应编号的参考文献。";
-            default -> "来源标注：开启，使用 IEEE 顺序编码制。正文和图表使用 [1]、[2] 编号；末尾生成对应编号的参考文献。";
-        };
     }
 
     private Object findValue(Map<String, Map<String, Object>> values, String key) {

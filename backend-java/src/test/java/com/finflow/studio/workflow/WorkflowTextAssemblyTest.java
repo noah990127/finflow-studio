@@ -7,11 +7,13 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class WorkflowTextAssemblyTest {
 
-    private final WorkflowRunService service = new WorkflowRunService(
-            null, new ObjectMapper(), null, null, null, null, null, null, null, null, null, null);
+    private final WorkflowContextAssembler contexts = new WorkflowContextAssembler(null, null);
+    private final WorkflowDeliverableService deliverables = new WorkflowDeliverableService(
+            null, null, null, new ObjectMapper(), contexts);
 
     @Test
     void parsedReferencesPreventRawFileBytesFromBeingReadAgain() {
@@ -22,15 +24,15 @@ class WorkflowTextAssemblyTest {
                         Map.of("text", "第一页的已解析内容"),
                         Map.of("text", "第二页的已解析内容")));
 
-        assertThat(service.collectText(Map.of("input", output)))
+        assertThat(contexts.collectText(Map.of("input", output)))
                 .isEqualTo("第一页的已解析内容\n第二页的已解析内容");
     }
 
     @Test
     void generatedContextNeverExceedsWorkerRequestLimit() {
-        var oversized = "数据".repeat(WorkflowRunService.MAX_WORKFLOW_CONTEXT_CHARS);
+        var oversized = "数据".repeat(WorkflowContextAssembler.MAX_CONTEXT_CHARS);
 
-        var result = service.collectText(Map.of("analysis", Map.of("analysis", oversized)));
+        var result = contexts.collectText(Map.of("analysis", Map.of("analysis", oversized)));
 
         assertThat(result).hasSizeLessThan(200_000)
                 .endsWith("[工作流上下文较长，已按安全上限截断]");
@@ -38,7 +40,7 @@ class WorkflowTextAssemblyTest {
 
     @Test
     void parsesModelSelectedDeliverablePlanWithoutMarkdownWrapper() {
-        var plan = service.parseDeliverablePlan("""
+        var plan = deliverables.parsePlan("""
                 ```json
                 {"format":"PPTX","title":"经营复盘","subtitle":"2026年","heading":"核心结论",
                  "include_citations":true,"citation_style":"IEEE","ppt_skill":"guizang-huawei-style-c"}
@@ -48,5 +50,32 @@ class WorkflowTextAssemblyTest {
         assertThat(plan).containsEntry("format", "PPTX")
                 .containsEntry("title", "经营复盘")
                 .containsEntry("include_citations", true);
+    }
+
+    @Test
+    void deduplicatesReferencesAcrossConnectedNodes() {
+        var reference = Map.<String, Object>of(
+                "id", "ref-1", "resourceId", "file-1", "version", 2,
+                "sourceName", "年度报告", "text", "收入同比增长 18%",
+                "location", Map.of("page", 8), "contentHash", "sha-1");
+        var context = Map.of(
+                "source-a", Map.<String, Object>of("refs", List.of(reference), "refIds", List.of("ref-1")),
+                "source-b", Map.<String, Object>of("refs", List.of(reference), "refIds", List.of("ref-1")));
+
+        assertThat(contexts.refIds(context)).containsExactly("ref-1");
+        assertThat(contexts.citations(context)).singleElement().satisfies(citation -> {
+            assertThat(citation.sourceName()).isEqualTo("年度报告");
+            assertThat(citation.location()).containsEntry("page", 8);
+        });
+        assertThat(contexts.referenceCatalog(context))
+                .contains("[Ref 1] 年度报告")
+                .contains("收入同比增长 18%");
+    }
+
+    @Test
+    void rejectsInvalidDeliverablePlanWithDomainError() {
+        assertThatThrownBy(() -> deliverables.parsePlan("not-json"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("大模型没有返回有效的成果规格");
     }
 }

@@ -45,6 +45,7 @@ from ..spreadsheet_files import profile_spreadsheet, transform_spreadsheet
 from ..data_transform import generate_transform, profile_tabular, run_transform, sample_transform
 from ..agent import AgentPlanRequest, AgentPlanResponse, OpenTaskRequest, load_skills, plan_with_agent, run_open_task_stream
 from ..research import fetch_web
+from .uploads import temporary_upload
 import json
 
 
@@ -205,108 +206,65 @@ async def parse_file(
     file: UploadFile = File(...),
     original_name: str = Form(...),
 ) -> ParsedDocument:
-    suffix = Path(original_name).suffix
-    total = 0
-    temp_path: Optional[Path] = None
     try:
-        with tempfile.NamedTemporaryFile(prefix="finflow-", suffix=suffix, delete=False) as stream:
-            temp_path = Path(stream.name)
-            while chunk := await file.read(1024 * 1024):
-                total += len(chunk)
-                if total > settings.max_upload_bytes:
-                    raise HTTPException(status_code=413, detail="文件超过允许的大小")
-                stream.write(chunk)
-        return parse_document(temp_path, original_name, file.content_type or "application/octet-stream")
+        async with temporary_upload(
+            file, original_name, prefix="finflow-", max_bytes=settings.max_upload_bytes
+        ) as temp_path:
+            return parse_document(temp_path, original_name, file.content_type or "application/octet-stream")
     except HTTPException:
         raise
     except ValueError as exception:
         raise HTTPException(status_code=422, detail=str(exception)) from exception
     except Exception as exception:
         raise HTTPException(status_code=500, detail="文件解析失败") from exception
-    finally:
-        await file.close()
-        if temp_path is not None:
-            temp_path.unlink(missing_ok=True)
 
 
 @app.post("/v1/files/preview", response_model=DocumentPreview)
 async def preview_file(file: UploadFile = File(...), original_name: str = Form(...)) -> DocumentPreview:
-    suffix = Path(original_name).suffix
-    total = 0
-    temp_path: Optional[Path] = None
     try:
-        with tempfile.NamedTemporaryFile(prefix="finflow-preview-", suffix=suffix, delete=False) as stream:
-            temp_path = Path(stream.name)
-            while chunk := await file.read(1024 * 1024):
-                total += len(chunk)
-                if total > settings.max_upload_bytes:
-                    raise HTTPException(status_code=413, detail="文件超过允许的大小")
-                stream.write(chunk)
-        return preview_document(temp_path, original_name)
+        async with temporary_upload(
+            file, original_name, prefix="finflow-preview-", max_bytes=settings.max_upload_bytes
+        ) as temp_path:
+            return preview_document(temp_path, original_name)
     except HTTPException:
         raise
     except ValueError as exception:
         raise HTTPException(status_code=422, detail=str(exception)) from exception
     except Exception as exception:
         raise HTTPException(status_code=500, detail="文件预览生成失败") from exception
-    finally:
-        await file.close()
-        if temp_path is not None:
-            temp_path.unlink(missing_ok=True)
 
 
 @app.post("/v1/spreadsheets/profile", response_model=SpreadsheetProfile)
 async def spreadsheet_profile(file: UploadFile = File(...), original_name: str = Form(...)) -> SpreadsheetProfile:
-    suffix = Path(original_name).suffix
-    temp_path: Optional[Path] = None
-    total = 0
     try:
-        with tempfile.NamedTemporaryFile(prefix="finflow-sheet-", suffix=suffix, delete=False) as stream:
-            temp_path = Path(stream.name)
-            while chunk := await file.read(1024 * 1024):
-                total += len(chunk)
-                if total > settings.max_upload_bytes:
-                    raise HTTPException(status_code=413, detail="文件超过允许的大小")
-                stream.write(chunk)
-        return profile_spreadsheet(temp_path, original_name)
+        async with temporary_upload(
+            file, original_name, prefix="finflow-sheet-", max_bytes=settings.max_upload_bytes
+        ) as temp_path:
+            return profile_spreadsheet(temp_path, original_name)
     except HTTPException:
         raise
     except ValueError as exception:
         raise HTTPException(status_code=422, detail=str(exception)) from exception
-    finally:
-        await file.close()
-        if temp_path is not None:
-            temp_path.unlink(missing_ok=True)
 
 
 @app.post("/v1/spreadsheets/transform")
 async def spreadsheet_transform(file: UploadFile = File(...), original_name: str = Form(...),
-                                operations: str = Form(...)) -> Response:
-    suffix = Path(original_name).suffix
-    temp_path: Optional[Path] = None
-    total = 0
+    operations: str = Form(...)) -> Response:
     try:
-        request = SpreadsheetTransformRequest.model_validate(json.loads(operations))
-        with tempfile.NamedTemporaryFile(prefix="finflow-transform-", suffix=suffix, delete=False) as stream:
-            temp_path = Path(stream.name)
-            while chunk := await file.read(1024 * 1024):
-                total += len(chunk)
-                if total > settings.max_upload_bytes:
-                    raise HTTPException(status_code=413, detail="文件超过允许的大小")
-                stream.write(chunk)
-        content = transform_spreadsheet(temp_path, original_name, request)
-        media_type = "application/vnd.ms-excel.sheet.macroEnabled.12" if suffix.lower() == ".xlsm" else (
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" if suffix.lower() == ".xlsx"
-            else "text/tab-separated-values" if suffix.lower() == ".tsv" else "text/csv")
-        return Response(content, media_type=media_type)
+        async with temporary_upload(
+            file, original_name, prefix="finflow-transform-", max_bytes=settings.max_upload_bytes
+        ) as temp_path:
+            request = SpreadsheetTransformRequest.model_validate(json.loads(operations))
+            content = transform_spreadsheet(temp_path, original_name, request)
+            suffix = Path(original_name).suffix.lower()
+            media_type = "application/vnd.ms-excel.sheet.macroEnabled.12" if suffix == ".xlsm" else (
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" if suffix == ".xlsx"
+                else "text/tab-separated-values" if suffix == ".tsv" else "text/csv")
+            return Response(content, media_type=media_type)
     except HTTPException:
         raise
     except (ValueError, json.JSONDecodeError) as exception:
         raise HTTPException(status_code=422, detail=str(exception)) from exception
-    finally:
-        await file.close()
-        if temp_path is not None:
-            temp_path.unlink(missing_ok=True)
 
 
 async def _save_transform_files(files: list[UploadFile], metadata: list[dict]) -> tuple[Path, list[dict]]:

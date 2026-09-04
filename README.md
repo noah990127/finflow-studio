@@ -60,8 +60,8 @@ FinBTP Studio 是一个面向个人深度工作的智能工作流平台。当前
 
 ```bash
 cd worker-python
-python3 -m venv .venv
-source .venv/bin/activate
+python3.12 -m venv .venv312
+source .venv312/bin/activate
 pip install '.[dev]'
 python -m uvicorn app.main:app --reload --port 8001
 ```
@@ -103,10 +103,10 @@ API Key 只在 Python 服务端读取，不会进入浏览器，也不会复用�
 ## 测试
 
 ```bash
-cd backend-java && mvn test
-cd worker-python && .venv/bin/python -m pytest
-cd frontend && npm run build
+./scripts/verify.sh
 ```
+
+该命令统一使用与本地启动脚本相同的 `worker-python/.venv312`，依次运行 Java 测试、Python 测试、前端类型检查与生产构建，以及 Git 空白错误检查。
 
 Agent 验收不围绕某几个演示问题写固定流程。启动 Java API 后，可以直接从实时 Tool Manifest 生成覆盖全部能力域的隐藏自然语言场景：
 
