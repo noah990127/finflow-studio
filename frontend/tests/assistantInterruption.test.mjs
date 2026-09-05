@@ -37,6 +37,21 @@ function store() {
   return value
 }
 
+test('completed writes publish one workspace update and late writes still refresh after interruption', () => {
+  const state = store()
+  state.sessionProjectId = 'project'
+  const actions = []
+  state.publishWorkbenchAction = action => actions.push(action)
+  state.handleEvent({ sessionId: 'session', runId: 'run', eventSeq: 1, type: 'assistant.step.completed', createdAt: new Date().toISOString(),
+    payload: { uiAction: { type: 'REFRESH_WORKSPACE', projectId: 'project', refreshWorkspace: true } } })
+  assert.equal(actions.length, 1)
+  state.interruptedRuns = ['run']
+  state.interrupted = true
+  state.handleEvent({ sessionId: 'session', runId: 'run', eventSeq: 2, type: 'assistant.step.completed', createdAt: new Date().toISOString(), payload: {} })
+  assert.equal(actions.length, 2)
+  assert.equal(state.interrupted, true)
+})
+
 test('thinking can be interrupted without a run id and the next message remains usable', async () => {
   const state = store()
   const pending = deferred()

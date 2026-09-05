@@ -219,6 +219,12 @@ export const useAssistantStore = defineStore('assistant', {
     handleEvent(event: AssistantEvent, replay = false) {
       if (event.sessionId !== this.sessionId || event.eventSeq <= this.lastEventSequence) return
       this.lastEventSequence = event.eventSeq
+      if (!replay && ['assistant.run.canceled', 'agent.cancelled', 'assistant.run.failed'].includes(event.type)) {
+        this.publishWorkbenchAction({ type: 'REFRESH_WORKSPACE', projectId: this.sessionProjectId, refreshWorkspace: true })
+      }
+      if (!replay && event.type === 'assistant.step.completed' && event.runId && this.interruptedRuns.includes(event.runId)) {
+        this.publishWorkbenchAction({ type: 'REFRESH_WORKSPACE', projectId: this.sessionProjectId, refreshWorkspace: true })
+      }
       if (event.runId && this.interruptedRuns.includes(event.runId)) return
       const payload = event.payload ?? {}
       if (event.type === 'assistant.request.received' && typeof payload.requestId === 'string' && (!this.activeRequestId || (replay && !this.busy))) this.activeRequestId = payload.requestId

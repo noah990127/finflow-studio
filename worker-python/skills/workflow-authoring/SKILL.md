@@ -19,6 +19,15 @@ Use:
 
 Workflow is a tool the Agent can call, not the Agent runtime. Use workflows to make a proven process repeatable.
 
+For a known graph, use one structured `workflow.edit` patch to upsert nodes and connect them together.
+Supply stable IDs for new nodes; reuse returned IDs for existing nodes. `nodes` merges by ID,
+while `edges`, when supplied, replaces the complete edge list. Preserve existing connections deliberately.
+Do not send prose or JSON Patch arrays as `patch`. Each analysis node needs its complete
+`config.prompt`; Agent nodes need `config.instruction`; deliverables need `config.generationPrompt`.
+Preserve user-provided rules, scoring weights, exact output schemas, and citation requirements in full.
+Use the workflow and version returned by a mutation to check the result without reopening it repeatedly.
+If `changed` is false, do not repeat the same edit. Correct invalid parameters or explain the blocker.
+
 ## Steps And Checkpoints
 1. Inspect the project and current workflow.
 2. Map real inputs before creating processing nodes.
@@ -46,7 +55,8 @@ Preserve `sources` and `refIds` across analysis and generation; switching off vi
 If required inputs are missing, create a draft workflow with placeholders only when the user asked for a draft. If run fails, report failed node, logs, and recoverable next steps.
 
 ## Human Confirmation Boundary
-Creating, editing, running write-capable workflows, deleting nodes, saving versions, and exporting workflow results require confirmation.
+The Java gateway enforces permissions and the session's AUTO or approval mode. Honor its confirmation
+response; do not invent a second confirmation requirement in AUTO mode or bypass a required approval.
 
 ## Output Contract
 Return workflow id, changed nodes, connection summary, version/run id, pending confirmations, and provenance impact.

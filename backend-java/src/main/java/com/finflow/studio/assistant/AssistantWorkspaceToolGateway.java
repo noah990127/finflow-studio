@@ -565,15 +565,17 @@ public class AssistantWorkspaceToolGateway {
     private String editWorkflow(PlanStep step, Map<String, Object> effects) {
         var id = required(step, "workflow_id", "工作流");
         var current = workflows.get(id);
-        var patch = map(step.arguments().get("patch"));
         var expected = integer(step, "expected_version", current.currentVersion());
-        var name = Objects.toString(patch.getOrDefault("name", current.name()), current.name());
-        var description = Objects.toString(patch.getOrDefault("description", current.description()), current.description());
-        var updated = workflows.update(id, new SaveRequest(name, description, current.nodes(), current.edges(),
-                current.executionMode(), current.schedule(), expected));
+        if (expected != current.currentVersion()) throw new IllegalStateException("工作流版本已变化，请读取最新版本再修改");
+        var request = WorkflowAgentPatch.apply(current, step.arguments().get("patch"), expected);
+        boolean changed = !request.name().equals(current.name()) || !request.description().equals(current.description())
+                || !request.nodes().equals(current.nodes()) || !request.edges().equals(current.edges());
+        var updated = changed ? workflows.update(id, request) : current;
         effects.put("workflowId", id);
+        effects.put("workflow", updated);
+        effects.put("changed", changed);
         effects.put("uiAction", Map.of("type", "OPEN_WORKFLOW", "projectId", current.projectId(), "workflowId", id, "refreshWorkspace", true));
-        return "已更新工作流至 v" + updated.currentVersion();
+        return changed ? "已保存节点配置和连线，工作流版本 v" + updated.currentVersion() : "配置与当前版本一致，没有产生修改，请基于已返回的工作流继续或结束任务";
     }
 
     private String addWorkflowNode(PlanStep step, Map<String, Object> effects) {
@@ -584,9 +586,11 @@ public class AssistantWorkspaceToolGateway {
         var node = new NodeDefinition("node_" + shortId(), nodeType(required(step, "node_type", "节点类型")),
                 argument(step, "name", "新步骤"), number(position.get("x"), 200), number(position.get("y"), 160),
                 map(step.arguments().get("config")));
+        WorkflowAgentPatch.node(null, Map.of("id", node.id(), "type", node.type().name(), "name", node.name(), "config", node.config()));
         nodes.add(node);
         var updated = workflows.update(id, save(current, nodes, current.edges()));
         effects.put("workflowId", id); effects.put("workflowNodeId", node.id());
+        effects.put("workflow", updated);
         return "已添加工作流步骤“" + node.name() + "”，版本 v" + updated.currentVersion();
     }
 
@@ -597,9 +601,10 @@ public class AssistantWorkspaceToolGateway {
         var nodes = current.nodes().stream().filter(node -> !node.id().equals(nodeId)).toList();
         if (nodes.size() == current.nodes().size()) throw new IllegalArgumentException("工作流节点不存在");
         var edges = current.edges().stream().filter(edge -> !edge.source().equals(nodeId) && !edge.target().equals(nodeId)).toList();
-        workflows.update(id, new SaveRequest(current.name(), current.description(), nodes, edges,
+        var updated = workflows.update(id, new SaveRequest(current.name(), current.description(), nodes, edges,
                 current.executionMode(), current.schedule(), integer(step, "expected_version", current.currentVersion())));
         effects.put("workflowId", id);
+        effects.put("workflow", updated);
         return "已移除工作流步骤";
     }
 
@@ -608,9 +613,16 @@ public class AssistantWorkspaceToolGateway {
         var current = workflows.get(id);
         var edge = new EdgeDefinition("edge_" + shortId(), required(step, "source_node_id", "起点"),
                 required(step, "target_node_id", "终点"));
+        if (current.nodes().stream().noneMatch(node -> node.id().equals(edge.source())) || current.nodes().stream().noneMatch(node -> node.id().equals(edge.target())))
+            throw new IllegalArgumentException("连线的起点或终点不存在");
+        if (current.edges().stream().anyMatch(item -> item.source().equals(edge.source()) && item.target().equals(edge.target()))) {
+            effects.put("changed", false); effects.put("workflow", current);
+            return "连线已经存在，不再重复添加";
+        }
         var edges = new ArrayList<>(current.edges()); edges.add(edge);
-        workflows.update(id, save(current, current.nodes(), edges));
+        var updated = workflows.update(id, save(current, current.nodes(), edges));
         effects.put("workflowId", id);
+        effects.put("workflow", updated);
         return "已连接工作流步骤";
     }
 

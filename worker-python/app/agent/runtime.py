@@ -111,6 +111,7 @@ class AgentDependencies:
     skills: list[Skill]
     staged_actions: list[AgentAction] = field(default_factory=list)
     selected_skills: set[str] = field(default_factory=set)
+    public_summary: str = ""
 
 def _model():
     from langchain_openai import ChatOpenAI
@@ -146,12 +147,14 @@ def build_workbench_tools(deps: AgentDependencies):
         safe_name = capability.id.replace(".", "_").replace("-", "_")
         fields = {name: (Any, Field(default=None, description=f"{capability.id} 的 {name} 参数"))
                   for name in capability.arguments}
+        fields["action_summary"] = (str, Field(default="", description="向用户简短说明目标理解和选择此动作的依据；不要内部推理"))
         args_schema = create_model(f"{safe_name.title().replace('_', '')}Input", **fields)
 
         def make_invoke(item: AgentCapability):
             async def invoke(**arguments: Any) -> str:
                 if deps.staged_actions:
                     return "本轮已经选择了一个真实工作台动作。请等待执行结果，不要继续调用其他工作台工具"
+                deps.public_summary = str(arguments.pop("action_summary", ""))[:1200]
                 clean_arguments = {key: value for key, value in arguments.items() if value is not None}
                 deps.staged_actions.append(AgentAction(
                     tool=item.id,
@@ -168,6 +171,7 @@ def build_workbench_tools(deps: AgentDependencies):
             description=(f"{capability.description}。风险：{capability.risk}；"
                          f"参数字段：{', '.join(capability.arguments) or '无'}。调用即把该操作加入本次执行序列。"),
             args_schema=args_schema,
+            return_direct=True,
         ))
     return tools
 
@@ -234,6 +238,10 @@ async def plan_with_agent(request: AgentPlanRequest, model_override: Any = None)
 普通问答可以直接回答；读取到足够上下文后直接在 summary 中回答，不再委派给另一个摘要接口。
 除非用户需要可复用、可保存的流程，否则不要创建或运行工作流。任务本身不需要套工作流模板。
 采用动态单步执行：每轮最多调用一个真实工作台工具，然后立即结束本轮并等待 Java 返回真实 Observation。
+同一个工作流的节点、分析要求和连线已经明确时，优先一次调用 workflow.edit 批量保存，不要逐节点逐连线各调用一次模型。
+用户提供的节点 Prompt 必须完整写入相应配置，包含规则、权重、输出格式和出处要求；不能只写名称或截取开头。
+workflow.edit 的 patch 必须是结构化对象；nodes 按 id 合并，edges 为完整连线列表。不要使用自然语言 patch 或 JSON Patch 数组。
+Observation 已返回 workflow 时直接使用其节点和版本，不要重复打开核对同一内容。changed=false 表示没有修改，不得重复尝试同样操作。
 禁止提前编排整条固定步骤，也禁止只描述计划或捏造工具名称。工具结果由 Java 权限网关真实执行。
 不要因为用户提到分析就自动创建财务报告，也不要在缺少结构化数据时创建数据加工或图表报告。
 根据用户选择的 Auto 或审批策略决定是否等待确认；风险分类由后端最终强制执行。
@@ -265,15 +273,18 @@ dataset.transform 的 script 只能是单条只读 DuckDB SELECT/WITH SQL，输�
     ]
     turn_content = request.goal
     if request.continuation:
-        turn_content = ("原始目标：" + request.goal + "\n真实工具 Observation：" +
-                        json.dumps(request.observation, ensure_ascii=False) +
+        observation = dict(request.observation)
+        if isinstance(observation.get("arguments"), dict):
+            observation["arguments"] = {key: value for key, value in observation["arguments"].items() if key != "goal"}
+        turn_content = (("" if thread_id in _ACTIVE_AGENT_THREADS else "原始目标：" + request.goal) + "\n真实工具 Observation：" +
+                        json.dumps(observation, ensure_ascii=False) +
                         f"\n已执行真实动作数：{request.completed_actions}。请根据最新工作区和结果决定下一步。")
     if not messages or messages[-1]["role"] != "user" or messages[-1]["content"] != turn_content:
         messages.append({"role": "user", "content": turn_content})
-    result = await agent.ainvoke(
+    result = await asyncio.wait_for(agent.ainvoke(
         {"messages": messages},
-        config={"configurable": {"thread_id": thread_id}},
-    )
+        config={"configurable": {"thread_id": thread_id}, "recursion_limit": 12},
+    ), timeout=120)
     _ACTIVE_AGENT_THREADS.add(thread_id)
     raw_content = getattr(result.get("messages", [None])[-1], "content", "")
     try:
@@ -288,7 +299,7 @@ dataset.transform 的 script 只能是单条只读 DuckDB SELECT/WITH SQL，输�
         "completed": False if deps.staged_actions else raw_decision.get("completed", True),
     })
     return AgentPlanResponse(summary=decision.summary, intent=decision.intent,
-                             public_summary=decision.public_summary,
+                             public_summary=deps.public_summary or decision.public_summary,
                              selected_skills=decision.selected_skills or sorted(deps.selected_skills),
                              steps=deps.staged_actions, mode="deep-agents", completed=decision.completed)
 

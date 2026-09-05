@@ -138,6 +138,18 @@ class AssistantInterruptionTest {
         var project = projects.create("中断回归", "测试");
         return postJson("/api/projects/" + project.id() + "/assistant/sessions", Map.of("title", "中断")).get("id").asText();
     }
+
+    @Test
+    void repeatedInvalidWritesStopAfterThreeAttempts() throws Exception {
+        var session = session();
+        when(worker.planAgent(any())).thenReturn(Map.of("summary", "修改工作流", "steps", List.of(Map.of(
+                "tool", "workflow.edit", "title", "修改", "description", "修改", "arguments", Map.of("workflow_id", "missing", "patch", "invalid")))));
+        var response = send(session, "no-progress", "AUTO");
+        var id = response.get("run").get("id").asText();
+        awaitStatus(id, "FAILED");
+        assertThat(getJson("/api/assistant/runs/" + id).get("resultSummary").asText()).contains("连续三次");
+        verify(worker, times(3)).planAgent(any());
+    }
     private JsonNode send(String session, String id, String mode) {
         try { return postJson("/api/assistant/sessions/" + session + "/messages", Map.of(
                 "text", "执行中断回归", "page", "project-home", "requestId", id, "executionMode", mode)); }

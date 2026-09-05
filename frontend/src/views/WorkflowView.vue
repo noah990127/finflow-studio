@@ -11,7 +11,9 @@ import { workProgress } from '../domain/workProgress'
 import { api, type DataConnection, type DataTransformSample, type DataTransformSource, type FileResource, type PptSkill, type Project, type Workflow, type WorkflowNodeType, type WorkflowProgressEvent, type WorkflowRun, type WorkflowSave, type WorkspaceResource } from '../api/client'
 import { initialWorkflowNodeConfig, normalizeWorkflowNodeConfig, workflowNodeSpecForResource } from '../domain/workflowNodeConfig'
 
-const props = defineProps<{ project: Project | null; resources: WorkspaceResource[]; workflowId?: string }>()
+const props = defineProps<{ project: Project | null; resources: WorkspaceResource[]; workflowId?: string; workflowVersion?: number }>()
+const savedContent = ref('')
+const pendingRemote = ref<Workflow | null>(null)
 const emit = defineEmits<{ resourcesChanged: []; workflowChanged: [workflow: Workflow]; openDeliverable: [deliverableId: string]; openResource: [resourceId: string] }>()
 const files = ref<FileResource[]>([]), connections = ref<DataConnection[]>([]), runs = ref<WorkflowRun[]>([])
 const pptSkills = ref<PptSkill[]>([])
@@ -107,13 +109,39 @@ function openWorkflow(item: Workflow) {
     return { id: node.id, type: 'business', position: { x: node.x, y: node.y }, data: { label: node.name, nodeType: node.type, config } }
   })
   edges.value = item.edges.filter(edge => visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target)).map(decorateEdge); selectedNodeId.value = ''; loadRuns(item.id)
+  autoLayout(false)
+  savedContent.value = contentSignature()
+  pendingRemote.value = null
+}
+function contentSignature() { const { expectedVersion, ...content } = payload(); return JSON.stringify(content) }
+let remoteRetryTimer = 0
+async function syncRemoteWorkflow() {
+  window.clearTimeout(remoteRetryTimer)
+  const id = activeId.value
+  if (!id || busy.value || !props.workflowVersion || props.workflowVersion <= currentVersion.value) return
+  try {
+    const updated = await api.getWorkflow(id)
+    if (activeId.value !== id || updated.currentVersion <= currentVersion.value) return
+    if (contentSignature() !== savedContent.value) {
+      pendingRemote.value = updated
+      message.value = '工作流已有更新，你尚未保存的修改已保留。'
+      return
+    }
+    openWorkflow(updated)
+  } catch {
+    message.value = '工作流更新暂时未同步，将自动重试'
+    remoteRetryTimer = window.setTimeout(() => { void syncRemoteWorkflow() }, 5000)
+  }
+}
+function loadRemoteWorkflow() {
+  if (pendingRemote.value && window.confirm('加载最新版本将替换当前未保存的画布修改，是否继续？')) openWorkflow(pendingRemote.value)
 }
 function payload(): WorkflowSave {
   const schedule = executionMode.value === 'SCHEDULED' ? { frequency: frequency.value, time: scheduleTime.value, dayOfWeek: dayOfWeek.value, dayOfMonth: dayOfMonth.value, timezone: timezone.value } : undefined
   return { name: name.value.trim() || '主工作流', description: description.value.trim(), executionMode: executionMode.value, schedule, nodes: nodes.value.map(node => ({ id: node.id, type: node.data.nodeType, name: node.data.label, x: node.position.x, y: node.position.y, config: node.data.config ?? {} })), edges: edges.value.map(edge => ({ id: edge.id, source: edge.source, target: edge.target })), expectedVersion: currentVersion.value || undefined }
 }
 async function load() { if (!props.project) return; panel.value = 'none'; message.value = ''; try { const [workflow, loadedFiles, loadedConnections, loadedPptSkills] = await Promise.all([props.workflowId ? api.getWorkflow(props.workflowId) : api.getProjectWorkflow(props.project.id), api.listFiles(props.project.id), api.listConnections(props.project.id), api.listPptSkills()]); files.value = loadedFiles; connections.value = loadedConnections; pptSkills.value = loadedPptSkills; openWorkflow(workflow); emit('workflowChanged', workflow) } catch (error) { message.value = error instanceof Error ? error.message : '工作流没有加载' } }
-async function save(silent = false) { if (!props.project) return null; busy.value = true; try { const saved = activeId.value ? await api.updateWorkflow(activeId.value, payload()) : await api.createWorkflow(props.project.id, payload()); activeId.value = saved.id; currentVersion.value = saved.currentVersion; nextRunAt.value = saved.nextRunAt ?? ''; emit('workflowChanged', saved); if (!silent) message.value = saved.status === 'READY' ? `已保存第 ${saved.currentVersion} 版` : `草稿已保存为第 ${saved.currentVersion} 版，还有内容需要补充`; return saved } catch (error) { message.value = error instanceof Error ? error.message : '工作流没有保存'; return null } finally { busy.value = false } }
+async function save(silent = false) { if (!props.project) return null; busy.value = true; const submitted = contentSignature(); try { const saved = activeId.value ? await api.updateWorkflow(activeId.value, payload()) : await api.createWorkflow(props.project.id, payload()); activeId.value = saved.id; currentVersion.value = saved.currentVersion; nextRunAt.value = saved.nextRunAt ?? ''; savedContent.value = submitted; pendingRemote.value = null; emit('workflowChanged', saved); if (!silent) message.value = saved.status === 'READY' ? `已保存第 ${saved.currentVersion} 版` : `草稿已保存为第 ${saved.currentVersion} 版，还有内容需要补充`; return saved } catch (error) { message.value = error instanceof Error ? error.message : '工作流没有保存'; return null } finally { busy.value = false } }
 async function saveNodeSettings() { if (!selectedNode.value) return; const saved = await save(true); if (saved) message.value = `节点设置已保存到第 ${saved.currentVersion} 版` }
 function selectDeliverableFormat(format: string) {
   if (!selectedNode.value) return
@@ -224,7 +252,7 @@ function clearFlowFocus() {
   nodes.value.forEach(node => { node.data.flowRole = '' })
 }
 function selectNode(id: string) { clearFlowFocus(); selectedNodeId.value = id; panel.value = 'none' }
-function autoLayout() {
+function autoLayout(announce = true) {
   if (!nodes.value.length) return
   const byId = new Map(nodes.value.map(node => [node.id, node]))
   const incoming = new Map(nodes.value.map(node => [node.id, 0]))
@@ -266,10 +294,9 @@ function autoLayout() {
     columnNodes.forEach((node, index) => { node.position = { x: 70 + column * xGap, y: startY + index * yGap } })
   }
   edges.value = edges.value.map(decorateEdge)
-  selectedNodeId.value = ''
-  selectedEdgeId.value = ''
+  if (announce) { selectedNodeId.value = ''; selectedEdgeId.value = '' }
   validation.value = null
-  message.value = '已按数据流方向自动排布，保存后生效'
+  if (announce) message.value = '已按数据流方向自动排布，保存后生效'
   window.requestAnimationFrame(() => fitView({ padding: 0.18, duration: 500 }))
 }
 function defaultPoint() { return { x: 120 + (nodes.value.length % 4) * 45, y: 100 + (nodes.value.length % 5) * 45 } }
@@ -322,6 +349,10 @@ function requirementPlaceholder(format: unknown) {
   return '例如：先给结论，对比本期与预算，突出风险和下一步行动，语言简洁。'
 }
 watch([issuesByNode, runByNode], () => nodes.value.forEach(node => { node.data.issue = issuesByNode.value.has(node.id); node.data.status = runByNode.value.get(node.id) ?? '' }), { immediate: true })
+watch(() => props.workflowVersion, () => { void syncRemoteWorkflow() })
+watch(busy, value => { if (!value) void syncRemoteWorkflow() })
+onBeforeUnmount(() => window.clearTimeout(remoteRetryTimer))
+watch(() => nodes.value.map(node => node.id).join(',') + '|' + edges.value.map(edge => `${edge.source}:${edge.target}`).join(','), () => autoLayout(false))
 watch(() => [props.project?.id, props.workflowId], () => { activeId.value = ''; eventSource?.close(); liveRunId.value = ''; liveEvents.value = []; liveContent.value = ''; liveContentNode.value = ''; load() }); onMounted(() => { load(); window.addEventListener('keydown', handleDeleteKey) }); onBeforeUnmount(() => { window.clearTimeout(pollTimer); eventSource?.close(); window.removeEventListener('keydown', handleDeleteKey) })
 </script>
 
@@ -331,7 +362,7 @@ watch(() => [props.project?.id, props.workflowId], () => { activeId.value = ''; 
       <div class="workflow-heading"><p class="eyebrow">工作流 · 第 {{ currentVersion }} 版</p><input v-model="name" class="workflow-title-input" aria-label="工作流名称"><input v-model="description" class="workflow-description-input" aria-label="工作流说明"></div>
       <div class="workflow-actions">
         <button class="secondary-button" type="button" title="添加内容" aria-label="添加内容" @click="panel = 'add'"><Plus :size="16"/><span>添加内容</span></button>
-        <button class="secondary-button" type="button" title="自动排布" aria-label="自动排布" @click="autoLayout"><Network :size="16"/><span>自动排布</span></button>
+        <button class="secondary-button" type="button" title="自动排布" aria-label="自动排布" @click="autoLayout()"><Network :size="16"/><span>自动排布</span></button>
         <button class="secondary-button" type="button" :title="executionMode === 'SCHEDULED' ? '定时执行' : '手工执行'" :aria-label="executionMode === 'SCHEDULED' ? '定时执行' : '手工执行'" @click="panel = 'schedule'"><CalendarClock :size="16"/><span>{{ executionMode === 'SCHEDULED' ? '定时执行' : '手工执行' }}</span></button>
         <button v-if="latestRun || liveEvents.length" class="secondary-button" type="button" title="运行进展" aria-label="运行进展" @click="panel = 'progress'"><Activity :size="16"/><span>运行进展</span></button>
         <button class="secondary-button" type="button" title="执行历史" aria-label="执行历史" @click="panel = 'history'; loadRuns()"><History :size="16"/><span>执行历史</span></button>
@@ -340,7 +371,7 @@ watch(() => [props.project?.id, props.workflowId], () => { activeId.value = ''; 
         <button class="primary-button" type="button" title="立即运行" aria-label="立即运行" :disabled="busy || runActive" @click="run"><Play :size="16"/><span>立即运行</span></button>
       </div>
     </header>
-    <p v-if="message" class="workflow-notice">{{ message }}</p>
+    <p v-if="message" class="workflow-notice">{{ message }} <button v-if="pendingRemote" type="button" class="secondary-button" @click="loadRemoteWorkflow">加载最新版本</button></p>
     <section class="workflow-canvas" aria-label="工作流编排画布" @dragover.prevent @drop.prevent="onCanvasDrop">
       <VueFlow v-model:nodes="nodes" v-model:edges="edges" :min-zoom="0.35" :max-zoom="1.6" fit-view-on-init @connect="connect" @node-click="selectNode($event.node.id)" @edge-click="focusEdge($event.edge.id)" @pane-click="selectedNodeId = ''; clearFlowFocus()">
         <Background :gap="20" color="#dce6f2"/><Controls position="bottom-left"/><MiniMap position="bottom-right" pannable zoomable/><template #node-business="slotProps"><WorkflowNode v-bind="slotProps" /></template>

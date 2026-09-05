@@ -13,7 +13,6 @@ import AssistantModelSettings from './AssistantModelSettings.vue'
 import { createComposerKeyboard } from '../domain/composerKeyboard'
 
 const props = defineProps<{ project: Project | null }>()
-const emit = defineEmits<{ workbenchAction: [action: Record<string, unknown>] }>()
 const assistant = useAssistantStore()
 const conversation = ref<HTMLElement | null>(null)
 const composer = ref<HTMLTextAreaElement | null>(null)
@@ -198,10 +197,6 @@ watch(() => [assistant.open, props.project?.id] as const, ([open, projectId]) =>
 }, { immediate: true })
 watch(() => assistant.run?.status, status => {
   if (status && ['SUCCEEDED', 'FAILED', 'CANCELED', 'ROLLED_BACK'].includes(status)) showSteps.value = false
-  if (status === 'SUCCEEDED') {
-    const action = assistant.run?.result?.uiAction
-    if (action && typeof action === 'object') emit('workbenchAction', action as Record<string, unknown>)
-  }
 })
 onMounted(() => {
   clockTimer = window.setInterval(() => { now.value = Date.now() }, 1000)

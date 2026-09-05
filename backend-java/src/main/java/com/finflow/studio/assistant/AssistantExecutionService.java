@@ -153,6 +153,7 @@ public class AssistantExecutionService {
                 "runId", runId, "progress", 25,
                 "message", runtime.dynamic() ? "开始动态执行，Agent 会根据每一步结果继续决策" : "开始执行计划"));
         try {
+            int stalledActions = 0;
             while (true) {
                 if (isCanceled(runId)) return;
                 var pending = loadSteps(run.planId()).stream().filter(step -> "PENDING".equals(step.status())).toList();
@@ -169,6 +170,10 @@ public class AssistantExecutionService {
                         throw new IllegalStateException(Objects.toString(observation.get("error"), "工具执行失败"));
                     }
                     if (!runtime.dynamic()) continue;
+                    var output = observation.get("output") instanceof Map<?, ?> values ? values : Map.of();
+                    if (!Boolean.TRUE.equals(observation.get("success")) || Boolean.FALSE.equals(output.get("changed"))) stalledActions++;
+                    else if (!"READ".equals(step.mode())) stalledActions = 0;
+                    if (stalledActions >= 3) throw new IllegalStateException("连续三次修改或重试未取得进展，已停止重复操作；已保存的结果保留，请检查节点配置后继续。");
                     var completedActions = completedActionCount(run.planId());
                     events.publish(run.sessionId(), runId, "agent.thinking_summary", Map.of(
                             "status", "running", "progress", dynamicProgress(completedActions),
@@ -249,12 +254,22 @@ public class AssistantExecutionService {
                 "status", "running", "step", step.order(), "toolName", step.tool(),
                 "message", step.description(), "progress", progress));
         effects.remove("uiAction");
+        effects.remove("changed");
         var effectsBefore = new LinkedHashMap<String, Object>(effects);
         var observation = new LinkedHashMap<String, Object>();
         observation.put("tool", step.tool());
         observation.put("arguments", step.arguments());
         try {
             var result = executeStep(step, effects);
+            if (!"READ".equals(step.mode())) {
+                var action = new LinkedHashMap<String, Object>();
+                if (effects.get("uiAction") instanceof Map<?, ?> existing) existing.forEach((key, value) -> action.put(String.valueOf(key), value));
+                action.putIfAbsent("type", "REFRESH_WORKSPACE");
+                var projectId = activeProjectId(loadRuntime(run.planId()), step, effects);
+                if (projectId != null) action.putIfAbsent("projectId", projectId);
+                action.put("refreshWorkspace", true);
+                effects.put("uiAction", action);
+            }
             jdbc.sql("update assistant_plan_step set status = 'SUCCEEDED' where id = :id")
                     .param("id", step.id()).update();
             observation.put("success", true);
@@ -393,7 +408,7 @@ public class AssistantExecutionService {
     private Map<String, Object> observationOutput(Map<String, Object> before, Map<String, Object> after) {
         var output = new LinkedHashMap<String, Object>();
         after.forEach((key, value) -> {
-            if (!"uiAction".equals(key) && !Objects.equals(before.get(key), value)) output.put(key, value);
+            if (!"uiAction".equals(key) && (Set.of("workflow", "changed").contains(key) || !Objects.equals(before.get(key), value))) output.put(key, value);
         });
         return output;
     }

@@ -113,8 +113,7 @@ def test_codex_cli_gateway_allows_virtual_agent_tool_selection() -> None:
 async def test_deep_agent_selects_workspace_tools_in_a_session(monkeypatch) -> None:
     responses = iter([
         '{"tool_calls":[{"name":"inspect_workspace","arguments":{}}]}',
-        '{"tool_calls":[{"name":"project_rename","arguments":{"project_id":"p1","new_name":"新项目"}}]}',
-        '{"final":{"summary":"将重命名项目","public_summary":"你希望只修改项目名称，保留原有资料。我会在当前项目上更新名称，不另建项目。","intent":"rename","selected_skills":["workspace-operations"]}}',
+        '{"tool_calls":[{"name":"project_rename","arguments":{"project_id":"p1","new_name":"新项目","action_summary":"你希望只修改项目名称，保留原有资料。我会在当前项目上更新名称，不另建项目。"}}]}',
     ])
 
     async def complete(_system: str, _user: str) -> str:
@@ -146,9 +145,7 @@ async def test_deep_agent_replans_after_a_real_observation(monkeypatch) -> None:
     responses = iter([
         '{"tool_calls":[{"name":"inspect_workspace","arguments":{}}]}',
         '{"tool_calls":[{"name":"folder_create","arguments":{"project_id":"p1","name":"临时目录","group":"knowledge"}}]}',
-        '{"final":{"summary":"先创建目录","intent":"organize","completed":false}}',
-        '{"tool_calls":[{"name":"folder_rename","arguments":{"project_id":"p1","folder_id":"f1","name":"最终目录"}}]}',
-        '{"final":{"summary":"继续重命名目录","public_summary":"目录已创建，接下来只需修改名称，不必重复创建。","intent":"organize","completed":false}}',
+        '{"tool_calls":[{"name":"folder_rename","arguments":{"project_id":"p1","folder_id":"f1","name":"最终目录","action_summary":"目录已创建，接下来只需修改名称，不必重复创建。"}}]}',
         '{"final":{"summary":"目录已经创建并重命名","intent":"organize","completed":true}}',
     ])
 

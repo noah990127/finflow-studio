@@ -93,7 +93,7 @@ public final class AssistantCapabilityRegistry {
                 List.of("project_id", "goal", "resource_id", "resource_type", "resource_name", "output_formats"));
         register("workflow.open", "workflow", "打开工作流", "在画布中打开指定工作流", "READ", RiskLevel.READ_ONLY, "never",
                 List.of("project_id", "workflow_id", "workflow_name"));
-        register("workflow.edit", "workflow", "编辑工作流", "修改工作流名称、描述、节点或配置", "WRITE", RiskLevel.CREATE_VERSION, "always",
+        register("workflow.edit", "workflow", "编辑工作流", "一次批量保存工作流。patch 是对象：nodes 按 id 合并或新增 [{id,type,name,config:{prompt:完整分析要求},position:{x,y}}]；未列出的节点保留。edges 提供完整连线数组 [{id,source,target}]，省略则保留。已有节点可省略 type。AI_ANALYSIS 用 config.prompt，AGENT_TASK 用 instruction，DELIVERABLE 用 generationPrompt、format、includeCitations、pptSkill。不得省略用户给出的规则与输出格式。可用 patch.node_id/config/name 编辑单节点。返回真实 workflow 和版本；不接受自然语言或 JSON Patch 数组", "WRITE", RiskLevel.CREATE_VERSION, "always",
                 List.of("workflow_id", "patch", "expected_version"));
         register("workflow.add_selected_resource", "workflow", "把内容加入工作流", "将当前选择的资源添加为工作流输入", "WRITE", RiskLevel.CREATE_VERSION, "always",
                 List.of("project_id", "resource_id", "resource_type", "resource_name"));

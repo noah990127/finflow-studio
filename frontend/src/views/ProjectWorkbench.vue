@@ -43,17 +43,22 @@ const activeWorkflowId = computed(() => activeTab.value?.kind === 'workflow' ? a
 const openWebTabs = computed(() => tabs.value.filter(tab => tab.kind === 'resource' && tab.resource?.resourceType === 'WEB_URL'))
 const filteredResources = computed(() => (workspace.value?.resources ?? []).filter(item => item.name.toLowerCase().includes(search.value.trim().toLowerCase())))
 
+let workspaceLoadSequence = 0
 async function loadWorkspace() {
   if (!props.project) return
+  const projectId = props.project.id
+  const sequence = ++workspaceLoadSequence
   loadingWorkspace.value = true
   try {
-    workspace.value = await api.getProjectWorkspace(props.project.id)
+    const result = await api.getProjectWorkspace(projectId)
+    if (sequence !== workspaceLoadSequence || projectId !== props.project?.id) return
+    workspace.value = result
     tabs.value.forEach(tab => {
       if (tab.resource) tab.resource = workspace.value?.resources.find(item => item.id === tab.resource?.id) ?? tab.resource
     })
   }
   catch (reason) { notice.value = reason instanceof Error ? reason.message : '项目内容没有加载' }
-  finally { loadingWorkspace.value = false }
+  finally { if (sequence === workspaceLoadSequence) loadingWorkspace.value = false }
 }
 function resources(group: string) { return filteredResources.value.filter(item => item.group === group) }
 function rootResources(root: UiRoot) { return filteredResources.value.filter(item => item.group === root) }
@@ -123,7 +128,7 @@ async function openWorkflowResource(resourceId: string) {
 function openWorkflow(workflowId?: string) {
   const item = workspace.value?.workflows?.find(workflow => workflow.id === workflowId) ?? workspace.value?.workflows?.[0] ?? workspace.value?.workflow
   if (!item) return
-  workflowKey.value += 1
+  if (activeTab.value?.workflowId !== item.id) workflowKey.value += 1
   openTab({ id: `workflow-${item.id}`, title: item.name, kind: 'workflow', workflowId: item.id })
 }
 function syncWorkflow(workflow: Workflow) {
@@ -314,6 +319,7 @@ async function deleteResource(resource: WorkspaceResource) {
 type AssistantWorkbenchAction = { type?: string; projectId?: string; resourceId?: string; workflowId?: string; workflowName?: string; goal?: string; refreshWorkspace?: boolean }
 async function applyAssistantAction(detail: AssistantWorkbenchAction) {
   if (!detail?.type) return
+  if (detail.type === 'REFRESH_WORKSPACE' && detail.projectId && detail.projectId !== props.project?.id) return
   if (detail.type === 'OPEN_PROJECT' && detail.projectId) {
     await projectStore.refresh(detail.projectId)
     notice.value = 'Agent 已创建并打开新项目'
@@ -341,20 +347,24 @@ async function applyAssistantAction(detail: AssistantWorkbenchAction) {
 function handleAssistantAction(event: Event) {
   void applyAssistantAction((event as CustomEvent<AssistantWorkbenchAction>).detail)
 }
-function onAssistantWorkbenchAction(action: Record<string, unknown>) {
-  void applyAssistantAction(action as AssistantWorkbenchAction)
-}
-onMounted(() => window.addEventListener('finflow:assistant-action', handleAssistantAction))
-onBeforeUnmount(() => window.removeEventListener('finflow:assistant-action', handleAssistantAction))
+let workspaceRefreshTimer: number | undefined
+function refreshVisibleWorkspace() { if (!document.hidden) void loadWorkspace() }
+onMounted(() => {
+  window.addEventListener('finflow:assistant-action', handleAssistantAction)
+  window.addEventListener('focus', refreshVisibleWorkspace)
+  workspaceRefreshTimer = window.setInterval(refreshVisibleWorkspace, 5000)
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('finflow:assistant-action', handleAssistantAction)
+  window.removeEventListener('focus', refreshVisibleWorkspace)
+  window.clearInterval(workspaceRefreshTimer)
+})
 watch(activeTab, tab => {
   if (!tab) return
   const page = tab.kind === 'workflow' ? 'workflow' : tab.kind === 'data' ? 'data-collection' : tab.kind === 'resource' ? 'resource' : 'project-home'
   const selection = tab.resource ? { type: tab.resource.resourceType, resourceId: tab.resource.id, range: [tab.resource.name] } : undefined
   assistant.setWorkbenchContext(page, tab.title, selection)
 }, { immediate: true })
-watch(() => assistant.workbenchActionSequence, () => {
-  if (assistant.workbenchAction) void applyAssistantAction(assistant.workbenchAction as AssistantWorkbenchAction)
-})
 watch(() => props.project?.id, (id, previousId) => {
   if (previousId && id !== previousId) { tabs.value = [{ id: 'home', title: '项目概览', kind: 'home' }]; activeTabId.value = 'home' }
   void loadWorkspace()
@@ -382,7 +392,7 @@ watch(() => props.project?.id, (id, previousId) => {
         <div v-if="loading || loadingWorkspace" class="resource-state">正在整理项目空间</div>
         <div v-else-if="error" class="resource-state error">{{ error }}</div>
         <div v-else-if="activeTab?.kind === 'home'" class="project-overview"><header><FolderOpen :size="32"/><div><h1>{{ project?.name }}</h1><p>{{ project?.description || '把文件、数据和资料组织成可以理解、复用和追踪的工作流。' }}</p></div></header><div class="overview-stats"><button v-for="group in groups" :key="group.id" type="button"><component :is="group.icon" :size="19"/><strong>{{ resources(group.id).length }}</strong><span>{{ group.label }}</span></button><button type="button" @click="openWorkflow()"><WorkflowIcon :size="19"/><strong>{{ workspace?.workflows?.length ?? 0 }}</strong><span>工作流</span></button></div><section><h2>最近使用</h2><button v-for="item in filteredResources.slice(0, 8)" :key="item.id" type="button" @click="openResource(item)"><component :is="iconFor(item)" :size="17"/><span>{{ item.name }}</span><small>{{ item.inProjectWorkflow ? '已加入工作流' : '尚未编排' }}</small></button></section></div>
-        <WorkflowView v-else-if="activeTab?.kind === 'workflow'" :key="workflowKey" :project="project" :workflow-id="activeTab.workflowId" :resources="workspace?.resources ?? []" @resources-changed="loadWorkspace" @workflow-changed="syncWorkflow" @open-deliverable="openGeneratedDeliverable" @open-resource="openWorkflowResource" />
+        <WorkflowView v-else-if="activeTab?.kind === 'workflow'" :key="workflowKey" :project="project" :workflow-id="activeTab.workflowId" :workflow-version="workspace?.workflows?.find(item => item.id === activeTab?.workflowId)?.currentVersion" :resources="workspace?.resources ?? []" @resources-changed="loadWorkspace" @workflow-changed="syncWorkflow" @open-deliverable="openGeneratedDeliverable" @open-resource="openWorkflowResource" />
         <DataView v-else-if="activeTab?.kind === 'data'" :project="project" />
         <ResourceWorkbench v-else-if="activeTab?.resource && activeTab.resource.resourceType !== 'WEB_URL'" :key="`${activeTab.resource.id}-${activeTab.resource.currentVersion}`" :resource="activeTab.resource" @add-to-workflow="addToWorkflow" @manage-data="openData" @delete-resource="deleteResource" @open-source="openCitationSource" />
         <ResourceWorkbench v-for="tab in openWebTabs" v-show="!loading && !loadingWorkspace && !error && activeTabId === tab.id" :key="tab.id" :resource="tab.resource!" @add-to-workflow="addToWorkflow" @manage-data="openData" @delete-resource="deleteResource" @open-source="openCitationSource" />
@@ -390,7 +400,7 @@ watch(() => props.project?.id, (id, previousId) => {
     </main>
 
     <aside class="context-sidebar"><header><strong>当前内容</strong></header><template v-if="activeTab?.resource"><component :is="iconFor(activeTab.resource)" :size="26"/><h3>{{ activeTab.resource.name }}</h3><dl><dt>状态</dt><dd>{{ activeTab.resource.status }}</dd><dt>版本</dt><dd>第 {{ activeTab.resource.currentVersion }} 版</dd><dt>工作流</dt><dd>{{ activeTab.resource.inProjectWorkflow ? '已加入' : '未加入' }}</dd></dl><button class="primary-button" type="button" @click="addToWorkflow(activeTab.resource)"><Plus :size="15"/>加入当前工作流</button></template><template v-else><WorkflowIcon :size="26"/><h3>{{ activeTab?.kind === 'workflow' ? activeTab.title : '项目空间' }}</h3><p>选中文件或数据后，这里会显示版本、状态和编排关系。</p></template></aside>
-    <AssistantPanel :project="project" @workbench-action="onAssistantWorkbenchAction" />
+    <AssistantPanel :project="project" />
     <div v-if="addPanelOpen" class="project-form-backdrop" @click.self="addPanelOpen = false"><section class="project-form-panel add-content-panel"><header><div><strong>{{ addPanelMode === 'choose' ? `向“${addTargetRoot === 'DATA' ? '数据' : '资料'}”添加` : addPanelMode === 'url' ? '添加网站地址' : connectionForm.sourceType === 'HTTP_API' ? '接入数据服务' : '连接数据库' }}</strong><small v-if="addTargetFolderId">内容会保存在当前目录</small></div><button class="icon-button" type="button" title="关闭" @click="addPanelOpen = false"><X :size="17"/></button></header>
       <div v-if="addPanelMode === 'choose'" class="add-source-list">
         <template v-if="addTargetRoot === 'DATA'">
