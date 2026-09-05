@@ -30,7 +30,7 @@ export function workProgress(event: Progress): { title: string; detail: string }
   const type = (event.type ?? '').toLowerCase()
   const failed = Boolean(event.error) || ['failed', 'error'].includes((event.status ?? '').toLowerCase()) || type.includes('failed') || /工具没有完成|执行失败/.test(event.message ?? '')
   if (failed) return { title: '这一步未完成', detail: businessError(event.error || event.message || '') }
-  if (type.includes('cancel')) return { title: '已停止', detail: '后续工作没有继续进行。' }
+  if (type.includes('cancel')) return { title: '已停止', detail: businessText(event.message, '后续工作没有继续进行。') }
   if (type.includes('confirmation') || type.includes('review_required')) return { title: '需要你确认', detail: businessText(event.message, '这一步涉及修改内容，确认后才能继续。') }
   if (type.includes('retry')) return { title: '正在尝试解决问题', detail: '上一种方式没有完成，正在调整处理方式。' }
   if (type.includes('thinking')) return {

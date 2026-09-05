@@ -164,6 +164,7 @@ public class AssistantPlanner {
             response = worker.planAgent(agentRequest(goal, page, selection, context, sessionId, executionMode,
                     false, Map.of(), 0));
         } catch (RuntimeException exception) {
+            if (Thread.currentThread().isInterrupted()) throw new java.util.concurrent.CancellationException();
             return null;
         }
         var steps = parseAgentSteps(response, goal, page, context);

@@ -109,6 +109,19 @@ public class AssistantController {
         return execution.cancel(runId);
     }
 
+    @PostMapping("/assistant/sessions/{sessionId}/requests/{requestId}/cancel")
+    Map<String, String> interruptRequest(@PathVariable String sessionId, @PathVariable String requestId) {
+        if (requestId.length() > 64) throw new IllegalArgumentException("请求标识过长");
+        assistant.interruptRequest(sessionId, requestId);
+        return Map.of("status", "CANCELED");
+    }
+
+    @PostMapping("/assistant/plans/{planId}/cancel")
+    Map<String, String> cancelPlan(@PathVariable String planId) {
+        execution.cancelPlan(planId);
+        return Map.of("status", assistant.getPlan(planId).status());
+    }
+
     @PostMapping("/assistant/runs/{runId}/rollback")
     RunResponse rollback(@PathVariable String runId) {
         return execution.rollback(runId);

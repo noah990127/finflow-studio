@@ -58,7 +58,8 @@ public final class AssistantModels {
             String route,
             Selection selection,
             Integer clientContextVersion,
-            String executionMode
+            String executionMode,
+            @jakarta.validation.constraints.Size(max = 64) String requestId
     ) {
     }
 

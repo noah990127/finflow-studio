@@ -19,7 +19,7 @@ export type PlanStep = { id: string; order: number; tool: string; mode: string; 
 export type Plan = { id: string; sessionId: string; goal: string; summary: string; version: number; planHash: string; risk: string; status: string; affectedResources: string[]; steps: PlanStep[]; expiresAt: string }
 export type ContextSnapshot = { id: string; projectId: string; page: string; selection?: Selection; allowedResourceIds: string[]; resourceVersions: Record<string, number>; contextHash: string; expiresAt: string }
 export type Run = { id: string; sessionId: string; planId: string; status: string; currentStep: number; resultSummary: string; createdAt: string; startedAt?: string; finishedAt?: string; result: Record<string, unknown> }
-export type MessageResponse = { sessionId: string; assistantMessage: string; context: ContextSnapshot; plan: Plan; run?: Run }
+export type MessageResponse = { sessionId: string; assistantMessage: string; context: ContextSnapshot; plan: Plan | null; run?: Run }
 export type AssistantEvent = { eventId: string; eventSeq: number; sessionId: string; runId?: string; type: string; payload: Record<string, unknown>; createdAt: string }
 export type AssistantMessage = { id: string; role: 'USER' | 'ASSISTANT' | 'SYSTEM'; content: string; modelName?: string; traceId: string; createdAt: string }
 export type AssistantSession = { id: string; projectId: string; title: string; status: string; createdAt: string; updatedAt: string }
@@ -114,7 +114,9 @@ export const api = {
   getAssistantSession: (sessionId: string) => request<AssistantSession>(`/api/assistant/sessions/${sessionId}`),
   listAssistantMessages: (sessionId: string) => request<AssistantMessage[]>(`/api/assistant/sessions/${sessionId}/messages`),
   listAssistantEvents: (sessionId: string, after = 0) => request<AssistantEvent[]>(`/api/assistant/sessions/${sessionId}/event-history?after=${after}`),
-  sendMessage: (sessionId: string, text: string, page = 'project-home', selection?: Selection, executionMode: 'AUTO' | 'APPROVAL' = 'APPROVAL') => request<MessageResponse>(`/api/assistant/sessions/${sessionId}/messages`, { method: 'POST', body: JSON.stringify({ text, page, route: window.location.pathname, selection, clientContextVersion: 1, executionMode }) }),
+  sendMessage: (sessionId: string, text: string, page = 'project-home', selection?: Selection, executionMode: 'AUTO' | 'APPROVAL' = 'APPROVAL', requestId?: string) => request<MessageResponse>(`/api/assistant/sessions/${sessionId}/messages`, { method: 'POST', body: JSON.stringify({ text, page, route: window.location.pathname, selection, clientContextVersion: 1, executionMode, requestId }) }),
+  interruptAssistantRequest: (sessionId: string, requestId: string) => request<{status: string}>(`/api/assistant/sessions/${sessionId}/requests/${requestId}/cancel`, { method: 'POST' }),
+  cancelAssistantPlan: (planId: string) => request<{status: string}>(`/api/assistant/plans/${planId}/cancel`, { method: 'POST' }),
   getAssistantPlan: (planId: string) => request<Plan>(`/api/assistant/plans/${planId}`),
   confirmPlan: (plan: Plan, context: ContextSnapshot) => request<Run>(`/api/assistant/plans/${plan.id}/confirm`, { method: 'POST', body: JSON.stringify({ planVersion: plan.version, planHash: plan.planHash, idempotencyKey: crypto.randomUUID(), expectedResourceVersions: context.resourceVersions }) }),
   getRun: (runId: string) => request<Run>(`/api/assistant/runs/${runId}`),

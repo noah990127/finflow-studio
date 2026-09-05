@@ -136,6 +136,11 @@ class LlmGateway:
                 process.kill()
                 await process.wait()
                 raise RuntimeError("Codex CLI 生成超时") from exception
+            except asyncio.CancelledError:
+                if process.returncode is None:
+                    process.kill()
+                await process.wait()
+                raise
             if process.returncode != 0:
                 detail = stderr.decode("utf-8", errors="replace").strip().splitlines()[-1:]
                 raise RuntimeError("Codex CLI 调用失败" + ("：" + detail[0] if detail else ""))
@@ -200,6 +205,11 @@ class LlmGateway:
                 process.kill(); await process.wait()
                 self._mark_codex_cli_research_unavailable()
                 return self._research_fallback(topic)
+            except asyncio.CancelledError:
+                if process.returncode is None:
+                    process.kill()
+                await process.wait()
+                raise
             if process.returncode != 0 or not output_path.exists():
                 self._mark_codex_cli_research_unavailable()
                 return self._research_fallback(topic)

@@ -9,6 +9,9 @@ import com.finflow.studio.workspace.WorkspaceResourceService;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import java.util.concurrent.CancellationException;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -25,11 +28,12 @@ public class AssistantService {
     private final AssistantEventService events;
     private final WorkspaceResourceService workspace;
     private final AgentMemoryService memory;
+    private final AssistantInterruptions interruptions;
 
     public AssistantService(JdbcClient jdbc, ObjectMapper objectMapper, ProjectService projects,
                             AssistantPlanner planner, AssistantExecutionService execution,
                             AssistantEventService events, WorkspaceResourceService workspace,
-                            AgentMemoryService memory) {
+                            AgentMemoryService memory, AssistantInterruptions interruptions) {
         this.jdbc = jdbc;
         this.objectMapper = objectMapper;
         this.projects = projects;
@@ -38,6 +42,7 @@ public class AssistantService {
         this.events = events;
         this.workspace = workspace;
         this.memory = memory;
+        this.interruptions = interruptions;
     }
 
     public SessionResponse createSession(String projectId, String title) {
@@ -107,11 +112,13 @@ public class AssistantService {
     @Transactional
     public MessageResponse sendMessage(String sessionId, MessageRequest request) {
         var session = getSession(sessionId);
+        var requestId = request.requestId() == null ? UUID.randomUUID().toString() : request.requestId();
+        var interruption = interruptions.token(sessionId, requestId);
         var executionPolicy = ExecutionPolicy.from(request.executionMode());
         var traceId = UUID.randomUUID().toString();
         saveMessage(sessionId, "USER", request.text(), null, traceId);
         events.publish(sessionId, null, "assistant.request.received", Map.of(
-                "progress", 3, "message", "已收到需求，正在理解你想完成的工作"));
+                "progress", 3, "requestId", requestId, "message", "已收到需求，正在理解你想完成的工作"));
         events.publish(sessionId, null, "agent.thinking_summary", Map.of(
                 "status", "running", "progress", 4, "message", "正在判断目标、上下文和可能需要的工作区能力"));
 
@@ -156,8 +163,14 @@ public class AssistantService {
                 selected == null ? null : selected.name(),
                 List.copyOf(workspaceItems),
                 recentMessages(sessionId, session.projectId()));
-        var plannedWork = planner.plan(request.text(), request.page(), request.selection(), workspaceContext,
-                sessionId, executionPolicy.name());
+        AssistantPlanner.PlannedWork plannedWork;
+        try {
+            plannedWork = interruption.await(() -> planner.plan(request.text(), request.page(), request.selection(), workspaceContext,
+                    sessionId, executionPolicy.name()));
+        } catch (CancellationException exception) {
+            return interruptedResponse(sessionId, requestId, context, traceId);
+        }
+        if (interruption.canceled()) return interruptedResponse(sessionId, requestId, context, traceId);
         if (executionPolicy == ExecutionPolicy.AUTO) {
             var automaticSteps = plannedWork.steps().stream().map(step -> new PlanStep(
                     step.id(), step.order(), step.tool(), step.mode(), step.title(), step.description(),
@@ -172,6 +185,11 @@ public class AssistantService {
         events.publish(sessionId, null, "agent.planning", Map.of(
                 "status", "completed", "progress", 18, "message", plannedWork.summary()));
         var plan = savePlan(sessionId, context, request.text(), plannedWork, executionPolicy);
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override public void afterCommit() {
+                interruption.committed(() -> execution.cancelPlan(plan.id()));
+            }
+        });
         saveMessage(sessionId, "ASSISTANT", plannedWork.summary(), modelName(), traceId);
 
         events.publish(sessionId, null, "assistant.plan.ready", Map.of(
@@ -205,6 +223,19 @@ public class AssistantService {
             run = execution.start(sessionId, plan.id(), "auto-" + plan.id());
         }
         return new MessageResponse(sessionId, plannedWork.summary(), context, plan, run);
+    }
+
+    public void interruptRequest(String sessionId, String requestId) {
+        getSession(sessionId);
+        interruptions.token(sessionId, requestId).cancel();
+    }
+
+    private MessageResponse interruptedResponse(String sessionId, String requestId, ContextSnapshot context, String traceId) {
+        var message = "已停止本次思考，未开始执行操作。你可以继续发送新的要求。";
+        saveMessage(sessionId, "ASSISTANT", message, modelName(), traceId);
+        events.publish(sessionId, null, "agent.cancelled", Map.of(
+                "status", "cancelled", "requestId", requestId, "message", message));
+        return new MessageResponse(sessionId, message, context, null, null);
     }
 
     private List<Map<String, String>> recentMessages(String sessionId, String projectId) {
@@ -274,10 +305,11 @@ public class AssistantService {
                 .param("planId", planId)
                 .query(String.class)
                 .optional();
-        jdbc.sql("update assistant_plan set status = 'CONFIRMED', confirmed_at = :now where id = :id")
+        var confirmed = jdbc.sql("update assistant_plan set status = 'CONFIRMED', confirmed_at = :now where id = :id and status in ('WAITING_CONFIRMATION', 'PLAN_READY')")
                 .param("now", Instant.now())
                 .param("id", planId)
                 .update();
+        if (confirmed == 0) throw new IllegalStateException("当前计划已停止或已确认，不能再次执行");
         if (pausedRunId.isPresent()) {
             return execution.resume(pausedRunId.get());
         }

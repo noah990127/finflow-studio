@@ -26,10 +26,12 @@ let conversationObserver: MutationObserver | undefined
 type HistoryTurn = { id: string; user?: AssistantMessage; assistant: AssistantMessage[] }
 
 const contextLabel = computed(() => assistant.selection?.range.join('、') || assistant.contextTitle || '项目概览')
-const running = computed(() => ['QUEUED', 'RUNNING'].includes(assistant.run?.status ?? '') || assistant.streaming)
+const running = computed(() => !assistant.interrupted && (['QUEUED', 'RUNNING'].includes(assistant.run?.status ?? '') || assistant.streaming))
 const controlsLocked = computed(() => assistant.busy || ['QUEUED', 'RUNNING'].includes(assistant.run?.status ?? ''))
 const waitingConfirmation = computed(() => assistant.needsConfirmation && (!assistant.run || assistant.run.status === 'WAITING_CONFIRMATION'))
 const taskState = computed(() => {
+  if (assistant.stopping) return { code: 'running', label: '正在中断', detail: '正在停止后续处理' }
+  if (assistant.interrupted) return { code: 'canceled', label: '已中断', detail: assistant.progressLabel || '已停止本次处理，可以继续发送新的要求' }
   if (assistant.error || assistant.run?.status === 'FAILED') return { code: 'failed', label: '未完成', detail: businessError(assistant.error || assistant.run?.resultSummary || '执行遇到问题') }
   if (assistant.run?.status === 'CANCELED') return { code: 'canceled', label: '已停止', detail: '后续步骤没有继续执行' }
   if (assistant.run?.status === 'ROLLED_BACK') return { code: 'completed', label: '已撤销', detail: '已恢复到执行前状态' }
@@ -61,7 +63,7 @@ const elapsedLabel = computed(() => {
     .filter(value => Number.isFinite(value))
   if (!starts.length) return '刚刚开始'
   const started = Math.min(...starts)
-  const finished = assistant.run?.finishedAt
+  const finished = assistant.interruptedAt || assistant.run?.finishedAt
   const end = finished ? new Date(finished).getTime() : now.value
   const seconds = Math.max(0, Math.floor((end - started) / 1000))
   const prefix = finished ? '耗时' : '已处理'
@@ -366,8 +368,8 @@ onBeforeUnmount(() => {
       <div class="assistant-context-chip"><span></span>{{ contextLabel }}</div>
       <div class="assistant-composer-box">
         <textarea ref="composer" v-model="assistant.input" rows="1" placeholder="向 Agent 交代任务或继续追问" @keydown="handleComposerKeydown"></textarea>
-        <button v-if="running && assistant.run" class="send-button stop" type="button" title="停止" @click="assistant.cancel"><Square :size="14" /></button>
-        <button v-else class="send-button" type="button" title="发送" :disabled="assistant.busy || !assistant.input.trim()" @click="send"><ArrowUp :size="18" /></button>
+        <button v-if="assistant.canInterrupt || assistant.stopping" class="send-button stop" type="button" :title="assistant.stopping ? '正在中断' : '中断当前任务'" :disabled="assistant.stopping" @click="assistant.cancel"><LoaderCircle v-if="assistant.stopping" :size="14" class="assistant-spinner" /><Square v-else :size="14" /></button>
+        <button v-else class="send-button" type="button" title="发送" :disabled="assistant.busy || assistant.stopping || !assistant.input.trim()" @click="send"><ArrowUp :size="18" /></button>
       </div>
       <p><span>{{ assistant.executionMode === 'AUTO' ? 'Auto 执行' : '审批执行' }}</span><i>·</i> Enter 发送 <i>·</i> Shift+Enter 换行</p>
     </footer>

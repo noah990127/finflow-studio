@@ -6,7 +6,8 @@ import httpx
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile, Request
+from ..runtime.interruptions import ClientDisconnected, until_disconnected
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from starlette.background import BackgroundTask
 
@@ -132,9 +133,11 @@ async def agent_status() -> dict:
 
 
 @app.post("/v1/agent/plan", response_model=AgentPlanResponse)
-async def plan_agent_task(request: AgentPlanRequest) -> AgentPlanResponse:
+async def plan_agent_task(request: AgentPlanRequest, http_request: Request) -> AgentPlanResponse:
     try:
-        result = await plan_with_agent(request)
+        result = await until_disconnected(plan_with_agent(request), http_request.is_disconnected)
+    except ClientDisconnected as exception:
+        raise HTTPException(status_code=499, detail="Agent request interrupted") from exception
     except RuntimeError as exception:
         logger.exception("Agent planning failed for session %s", request.session_id)
         raise HTTPException(status_code=503, detail=str(exception)) from exception

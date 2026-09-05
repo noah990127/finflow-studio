@@ -42,6 +42,11 @@ export const useAssistantStore = defineStore('assistant', {
     sessionProjectId: '',
     input: '',
     busy: false,
+    stopping: false,
+    interrupted: false,
+    interruptedAt: '',
+    activeRequestId: '',
+    interruptedRuns: [] as string[],
     error: '',
     assistantMessage: '',
     currentRequest: '',
@@ -68,7 +73,10 @@ export const useAssistantStore = defineStore('assistant', {
   }),
   getters: {
     needsConfirmation: (state) =>
-      state.plan?.steps.some((step) => step.requiresConfirmation) ?? false,
+      !state.interrupted && state.plan?.status !== 'CANCELED' && (state.plan?.steps.some((step) => step.requiresConfirmation && step.status === 'PENDING') ?? false),
+    canInterrupt: (state) => !state.interrupted && (state.busy || state.streaming
+      || ['QUEUED', 'RUNNING', 'WAITING_CONFIRMATION'].includes(state.run?.status ?? '')
+      || ['WAITING_CONFIRMATION', 'PLAN_READY'].includes(state.plan?.status ?? '')),
   },
   actions: {
     openWithSuggestion(text: string, selection?: Selection) {
@@ -132,10 +140,15 @@ export const useAssistantStore = defineStore('assistant', {
       this.progressLabel = ''
       this.streaming = false
       this.error = ''
+      if (!this.busy) {
+        this.interrupted = false
+        this.interruptedAt = ''
+        this.activeRequestId = ''
+      }
       this.lastEventSequence = 0
       this.history = []
       this.historySessionId = ''
-      await this.loadHistory(true)
+      await this.loadHistory(!this.busy)
       this.connectEvents()
     },
     async loadHistory(restoreLatestRun = true) {
@@ -206,7 +219,10 @@ export const useAssistantStore = defineStore('assistant', {
     handleEvent(event: AssistantEvent, replay = false) {
       if (event.sessionId !== this.sessionId || event.eventSeq <= this.lastEventSequence) return
       this.lastEventSequence = event.eventSeq
+      if (event.runId && this.interruptedRuns.includes(event.runId)) return
       const payload = event.payload ?? {}
+      if (event.type === 'assistant.request.received' && typeof payload.requestId === 'string' && (!this.activeRequestId || (replay && !this.busy))) this.activeRequestId = payload.requestId
+      if (this.interrupted && event.type !== 'agent.cancelled') return
       const value = Number(payload.progress)
       if (Number.isFinite(value)) this.progress = Math.max(0, Math.min(100, value))
       const message = String(payload.message ?? payload.result ?? payload.summary ?? '').trim()
@@ -239,7 +255,11 @@ export const useAssistantStore = defineStore('assistant', {
         this.streaming = false
         this.error = String(payload.error ?? payload.message ?? 'Agent 未能完成这次任务')
       }
-      if (event.type === 'assistant.run.canceled' || event.type === 'agent.cancelled') this.streaming = false
+      if (event.type === 'assistant.run.canceled' || event.type === 'agent.cancelled') {
+        this.streaming = false
+        this.interrupted = true
+        this.interruptedAt = event.createdAt
+      }
       const uiAction = payload.uiAction
       if (!replay && event.type === 'assistant.step.completed' && uiAction && typeof uiAction === 'object') {
         this.pushTimeline(`action-${event.eventSeq}`, '同步工作台', '正在把这一步的结果呈现在左侧工作区', 'info', event.createdAt)
@@ -325,7 +345,11 @@ export const useAssistantStore = defineStore('assistant', {
     },
     async send(projectId: string, requestText = this.input) {
       const text = requestText.trim()
-      if (!text || this.busy) return
+      if (!text || this.busy || this.stopping) return
+      const requestId = crypto.randomUUID()
+      this.activeRequestId = requestId
+      this.interrupted = false
+      this.interruptedAt = ''
       const hadCurrentRequest = Boolean(this.currentRequest)
       this.input = ''
       this.busy = true
@@ -342,12 +366,19 @@ export const useAssistantStore = defineStore('assistant', {
         await this.ensureSession(projectId)
         if (hadCurrentRequest) await this.loadHistory(false)
         this.currentRequest = text
-        const response = await api.sendMessage(this.sessionId, text, this.pageContext, this.selection ?? undefined, this.executionMode)
+        if (this.interrupted) return
+        const response = await api.sendMessage(this.sessionId, text, this.pageContext, this.selection ?? undefined, this.executionMode, requestId)
+        if (this.activeRequestId !== requestId) return
         this.assistantMessage = response.assistantMessage
         this.plan = response.plan
         this.context = response.context
         this.run = response.run ?? null
         await this.syncEvents()
+        if (!response.plan || this.interrupted || this.stopping) {
+          if (!response.plan) { this.interrupted = true; this.interruptedAt ||= new Date().toISOString() }
+          this.streaming = false
+          return
+        }
         if (!this.timeline.some(item => item.title === '计划已准备好')) this.pushTimeline(
           `plan-${response.plan.id}`, '计划已准备好',
           this.needsConfirmation ? '请检查会修改的内容' : '只读取和生成草稿，可直接进行',
@@ -358,35 +389,44 @@ export const useAssistantStore = defineStore('assistant', {
         }
         if (this.run) await this.watchRun()
       } catch (error) {
+        if (this.activeRequestId !== requestId || this.interrupted) return
         this.error = error instanceof Error ? error.message : '助手暂时没有完成请求'
         this.progressLabel = '本次任务未完成'
         this.progress = 100
         this.streaming = false
       } finally {
-        this.busy = false
+        if (this.activeRequestId === requestId) this.busy = false
       }
     },
     async confirm() {
       if (!this.plan || !this.context || this.busy) return
+      const requestId = this.activeRequestId
       this.busy = true
       this.error = ''
       this.streaming = true
       this.progressLabel = '正在启动处理任务'
       try {
-        this.run = await api.confirmPlan(this.plan, this.context)
+        const confirmed = await api.confirmPlan(this.plan, this.context)
+        if (this.activeRequestId !== requestId || this.interrupted) return
+        this.run = confirmed
         this.pushTimeline(`confirmed-${this.run.id}`, '已确认，开始处理', '原内容会保留', 'info')
         await this.watchRun()
       } catch (error) {
+        if (this.activeRequestId !== requestId || this.interrupted) return
         this.error = error instanceof Error ? error.message : '计划没有执行'
         this.streaming = false
       } finally {
-        this.busy = false
+        if (this.activeRequestId === requestId) this.busy = false
       }
     },
     async watchRun() {
       if (!this.run) return
+      const runId = this.run.id
+      const requestId = this.activeRequestId
       for (let attempt = 0; attempt < 300; attempt += 1) {
-        this.run = await api.getRun(this.run.id)
+        const updated = await api.getRun(runId)
+        if (this.activeRequestId !== requestId || this.run?.id !== runId || this.interrupted) return
+        this.run = updated
         await this.syncEvents()
         if (['SUCCEEDED', 'FAILED', 'CANCELED', 'ROLLED_BACK', 'WAITING_CONFIRMATION'].includes(this.run.status)) break
         await new Promise((resolve) => window.setTimeout(resolve, 1000))
@@ -419,14 +459,36 @@ export const useAssistantStore = defineStore('assistant', {
       }
     },
     async cancel() {
-      if (!this.run || !['QUEUED', 'RUNNING'].includes(this.run.status)) return
+      if (!this.canInterrupt || this.stopping) return
+      this.stopping = true
       try {
-        this.run = await api.cancelAssistantRun(this.run.id)
+        if (this.run) {
+          this.run = await api.cancelAssistantRun(this.run.id)
+          if (this.run.status !== 'CANCELED') return
+        } else if (this.plan) {
+          const result = await api.cancelAssistantPlan(this.plan.id)
+          if (result.status !== 'CANCELED') return
+          this.plan = await api.getAssistantPlan(this.plan.id)
+        } else if (this.sessionId && this.activeRequestId) {
+          await api.interruptAssistantRequest(this.sessionId, this.activeRequestId)
+          if (this.run) this.run = await api.getRun(this.run.id)
+          if (this.run && this.run.status !== 'CANCELED') return
+        }
+        this.interrupted = true
+        this.interruptedAt ||= new Date().toISOString()
+        if (this.run) this.interruptedRuns.push(this.run.id)
         this.streaming = false
-        this.progressLabel = '任务已停止'
-        this.pushTimeline(`canceled-${this.run.id}`, '任务已停止', '没有继续执行后续步骤', 'warning')
+        if (this.plan || this.run) this.busy = false
+        this.error = ''
+        this.progressLabel = this.run
+          ? '已中断，后续步骤不会继续。已完成的修改会保留，正在提交的操作可能仍会完成。'
+          : '已中断本次请求，未开始执行操作。可以继续发送新的要求。'
+        this.pushTimeline(`canceled-${this.run?.id || this.activeRequestId || this.plan?.id}`, '已中断', this.progressLabel, 'warning')
+        if (this.plan) await this.refreshPlan(this.plan.id)
       } catch (error) {
         this.error = error instanceof Error ? error.message : '任务暂时无法停止'
+      } finally {
+        this.stopping = false
       }
     },
     async rollback() {

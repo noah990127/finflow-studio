@@ -24,6 +24,8 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.nio.charset.StandardCharsets;
@@ -55,6 +57,7 @@ public class AssistantExecutionService {
     private final AssistantWorkspaceToolGateway workspaceTools;
     private final AssistantPlanner planner;
     private final int maxDynamicActions;
+    private final AssistantInterruptions interruptions;
 
     public AssistantExecutionService(JdbcClient jdbc, AssistantEventService events,
                                      @Qualifier("applicationTaskExecutor") TaskExecutor taskExecutor,
@@ -63,7 +66,8 @@ public class AssistantExecutionService {
                                      WorkspaceResourceService workspace, KnowledgeService knowledge,
                                      DeliverableService deliverables, WorkflowRunService workflowRuns,
                                      AssistantWorkspaceToolGateway workspaceTools, AssistantPlanner planner,
-                                     @Value("${finflow.agent.max-dynamic-actions:80}") int maxDynamicActions) {
+                                     @Value("${finflow.agent.max-dynamic-actions:80}") int maxDynamicActions,
+                                     AssistantInterruptions interruptions) {
         this.jdbc = jdbc;
         this.events = events;
         this.taskExecutor = taskExecutor;
@@ -78,6 +82,7 @@ public class AssistantExecutionService {
         this.workspaceTools = workspaceTools;
         this.planner = planner;
         this.maxDynamicActions = Math.max(12, maxDynamicActions);
+        this.interruptions = interruptions;
     }
 
     public RunResponse start(String sessionId, String planId, String idempotencyKey) {
@@ -157,6 +162,7 @@ public class AssistantExecutionService {
                 }
                 var extended = false;
                 for (var step : pending) {
+                    if (isCanceled(runId)) return;
                     var observation = executeAndObserve(run, step, effects);
                     if (isCanceled(runId)) return;
                     if (!runtime.dynamic() && !Boolean.TRUE.equals(observation.get("success"))) {
@@ -170,9 +176,10 @@ public class AssistantExecutionService {
                     events.publish(run.sessionId(), runId, "agent.planning", Map.of(
                             "status", "running", "progress", dynamicProgress(completedActions),
                             "message", "正在动态更新计划"));
-                    var turn = planner.continueAfterObservation(runtime.goal(), runtime.page(),
+                    var turn = interruptions.token("run", runId).await(() -> planner.continueAfterObservation(runtime.goal(), runtime.page(),
                             workspaceContext(activeProjectId(runtime, step, effects)), run.sessionId(), runtime.executionMode(),
-                            observation, completedActions);
+                            observation, completedActions));
+                    if (isCanceled(runId)) return;
                     if (!turn.publicSummary().isBlank()) {
                         events.publish(run.sessionId(), runId, "agent.thinking_summary", Map.of(
                                 "status", "completed", "phase", "assessment",
@@ -190,6 +197,11 @@ public class AssistantExecutionService {
                                 + " 次执行预算；中间结果已经保留，请继续当前对话以恢复执行");
                     }
                     var next = appendDynamicStep(run.planId(), turn.steps().getFirst(), runtime.executionMode(), turn.summary());
+                    if (isCanceled(runId)) {
+                        jdbc.sql("update assistant_plan_step set status = 'CANCELED' where id = :id and status = 'PENDING'")
+                                .param("id", next.id()).update();
+                        return;
+                    }
                     events.publish(run.sessionId(), runId, "agent.plan_updated", Map.of(
                             "status", "completed", "planId", run.planId(), "step", next.order(),
                             "toolName", next.tool(), "message", "已根据 Observation 增加下一步：“" + next.title() + "”",
@@ -221,8 +233,11 @@ public class AssistantExecutionService {
         var progress = dynamicProgress(completedActionCount(run.planId()));
         jdbc.sql("update assistant_run set current_step = :step where id = :id")
                 .param("step", step.order()).param("id", run.id()).update();
-        jdbc.sql("update assistant_plan_step set status = 'RUNNING' where id = :id")
-                .param("id", step.id()).update();
+        var claimed = jdbc.sql("""
+                update assistant_plan_step set status = 'RUNNING' where id = :id and status = 'PENDING'
+                and exists (select 1 from assistant_run where id = :runId and status = 'RUNNING')
+                """).param("id", step.id()).param("runId", run.id()).update();
+        if (claimed == 0) return Map.of("success", false, "error", "任务已停止");
         events.publish(run.sessionId(), run.id(), "assistant.step.started", Map.of(
                 "step", step.order(), "totalSteps", total, "title", step.title(),
                 "message", step.description(), "progress", progress, "tool", step.tool()));
@@ -302,7 +317,7 @@ public class AssistantExecutionService {
         jdbc.sql("""
                         update assistant_plan set version = :version, plan_hash = :hash, summary = :summary,
                             risk_level = :risk, status = :status, expires_at = :expiresAt
-                        where id = :id
+                        where id = :id and status <> 'CANCELED'
                         """)
                 .param("version", version).param("hash", hash).param("summary", summary)
                 .param("risk", risk.name())
@@ -312,8 +327,9 @@ public class AssistantExecutionService {
     }
 
     private void pauseForConfirmation(RunResponse run, PlanStep next) {
-        jdbc.sql("update assistant_run set status = 'WAITING_CONFIRMATION', result_summary = :summary where id = :id")
+        var changed = jdbc.sql("update assistant_run set status = 'WAITING_CONFIRMATION', result_summary = :summary where id = :id and status = 'RUNNING'")
                 .param("summary", "等待确认下一步：“" + next.title() + "”").param("id", run.id()).update();
+        if (changed == 0) return;
         var plan = jdbc.sql("select version, plan_hash from assistant_plan where id = :id")
                 .param("id", run.planId()).query((rs, row) -> Map.of(
                         "version", rs.getInt("version"), "hash", rs.getString("plan_hash"))).single();
@@ -328,10 +344,11 @@ public class AssistantExecutionService {
 
     private void finishRun(RunResponse run, String summary, Map<String, Object> effects) {
         var safeSummary = summary == null || summary.isBlank() ? "已完成工作台操作。" : summary;
+        var changed = jdbc.sql("update assistant_run set status = 'SUCCEEDED', result_summary = :summary, finished_at = :now where id = :id and status = 'RUNNING'")
+                .param("summary", safeSummary).param("now", Instant.now()).param("id", run.id()).update();
+        if (changed == 0) return;
         jdbc.sql("update assistant_plan set status = 'COMPLETED', summary = :summary where id = :id")
                 .param("summary", safeSummary).param("id", run.planId()).update();
-        jdbc.sql("update assistant_run set status = 'SUCCEEDED', result_summary = :summary, finished_at = :now where id = :id")
-                .param("summary", safeSummary).param("now", Instant.now()).param("id", run.id()).update();
         saveAssistantMessage(run.sessionId(), safeSummary, run.id());
         events.publish(run.sessionId(), run.id(), "agent.generating", Map.of(
                 "status", "completed", "message", "正在整理最终结果和执行轨迹", "progress", 98));
@@ -345,8 +362,9 @@ public class AssistantExecutionService {
 
     private void failRun(RunResponse run, RuntimeException exception) {
         var failure = exception.getMessage() == null ? "执行失败" : exception.getMessage();
-        jdbc.sql("update assistant_run set status = 'FAILED', result_summary = :message, finished_at = :now where id = :id")
+        var changed = jdbc.sql("update assistant_run set status = 'FAILED', result_summary = :message, finished_at = :now where id = :id and status in ('QUEUED', 'RUNNING')")
                 .param("message", failure).param("now", Instant.now()).param("id", run.id()).update();
+        if (changed == 0) return;
         jdbc.sql("update assistant_plan set status = 'FAILED' where id = :id")
                 .param("id", run.planId()).update();
         saveAssistantMessage(run.sessionId(), "本次任务未完成：" + failure, run.id());
@@ -451,19 +469,51 @@ public class AssistantExecutionService {
                 .orElseThrow(() -> new IllegalArgumentException("助手任务不存在"));
     }
 
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public RunResponse cancel(String id) {
         var run = get(id);
+        jdbc.sql("select id from assistant_plan where id = :id for update")
+                .param("id", run.planId()).query(String.class).single();
         if (List.of("SUCCEEDED", "FAILED", "CANCELED", "ROLLED_BACK").contains(run.status())) {
             return run;
         }
-        jdbc.sql("update assistant_run set status = 'CANCELED', finished_at = :now where id = :id")
+        var message = "已中断，后续步骤不会继续。已完成的修改会保留，正在提交的操作可能仍会完成。";
+        var changed = jdbc.sql("update assistant_run set status = 'CANCELED', result_summary = :message, finished_at = :now where id = :id and status in ('QUEUED', 'RUNNING', 'WAITING_CONFIRMATION')")
+                .param("message", message)
                 .param("now", Instant.now())
                 .param("id", id)
                 .update();
+        if (changed == 0) return get(id);
+        jdbc.sql("update assistant_plan set status = 'CANCELED' where id = :id").param("id", run.planId()).update();
+        jdbc.sql("update assistant_plan_step set status = 'CANCELED' where plan_id = :id and status = 'PENDING'")
+                .param("id", run.planId()).update();
+        // Interrupt model decisions only; a tool already committing a write must settle normally.
+        interruptions.token("run", id).cancel();
+        saveAssistantMessage(run.sessionId(), message, id);
         events.publish(run.sessionId(), id, "assistant.run.canceled", Map.of("runId", id));
         events.publish(run.sessionId(), id, "agent.cancelled", Map.of(
-                "status", "cancelled", "runId", id, "message", "任务已停止"));
+                "status", "cancelled", "runId", id, "planId", run.planId(), "message", message));
         return get(id);
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void cancelPlan(String planId) {
+        var sessionId = jdbc.sql("select session_id from assistant_plan where id = :id for update")
+                .param("id", planId).query(String.class).single();
+        var runId = jdbc.sql("select id from assistant_run where plan_id = :id order by created_at desc limit 1")
+                .param("id", planId).query(String.class).optional();
+        if (runId.isPresent()) {
+            cancel(runId.get());
+            return;
+        }
+        var changed = jdbc.sql("update assistant_plan set status = 'CANCELED' where id = :id and status in ('WAITING_CONFIRMATION', 'PLAN_READY')")
+                .param("id", planId).update();
+        if (changed == 0) return;
+        jdbc.sql("update assistant_plan_step set status = 'CANCELED' where plan_id = :id and status = 'PENDING'")
+                .param("id", planId).update();
+        var message = "已取消本次待确认操作，没有执行修改。";
+        saveAssistantMessage(sessionId, message, planId);
+        events.publish(sessionId, null, "agent.cancelled", Map.of("status", "cancelled", "planId", planId, "message", message));
     }
 
     public RunResponse rollback(String id) {
