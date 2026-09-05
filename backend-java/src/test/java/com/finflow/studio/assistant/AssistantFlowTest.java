@@ -207,7 +207,8 @@ class AssistantFlowTest {
                 .toList();
         assertThat(outputNodes).hasSize(2);
         assertThat(outputNodes).allSatisfy(node -> assertThat(node.config())
-                .containsKeys("generationPrompt", "format", "title", "includeCitations", "citationStyle", "pptSkill")
+                .containsKeys("generationPrompt", "format", "includeCitations", "citationStyle", "pptSkill")
+                .doesNotContainKeys("title", "subtitle", "heading", "targetAudience", "lengthHint")
                 .containsEntry("includeCitations", true)
                 .containsEntry("citationStyle", "IEEE"));
         assertThat(outputNodes.stream()

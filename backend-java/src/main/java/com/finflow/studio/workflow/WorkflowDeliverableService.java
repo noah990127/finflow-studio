@@ -48,22 +48,17 @@ public class WorkflowDeliverableService {
         var sourceText = contextAssembler.collectText(upstream);
         if (sourceText.isBlank()) throw new IllegalStateException("生成成果没有可读取的上游内容，请先连接资料、数据或分析节点");
 
-        Map<String, Object> plan;
-        String planningMode;
-        if (hasConfiguredFormat(config)) {
-            plan = configuredPlan(config);
-            planningMode = "configured";
-            events.publish(runId, "MODEL_STATUS", node.id(), node.name(), "RUNNING", startProgress,
-                    "正在按用户选择的成果类型、引用和 Skill 生成", "");
-        } else {
-            events.publish(runId, "MODEL_STATUS", node.id(), node.name(), "RUNNING", startProgress,
-                    "正在理解生成要求并决定成果形式", "");
-            var planning = worker.generateContent("DELIVERABLE_PLAN", requirements,
-                    sourceText.substring(0, Math.min(sourceText.length(), MAX_PLANNING_SOURCE_CHARS)));
-            planningMode = Objects.toString(planning.get("mode"), "");
-            if (planningMode.contains("fallback")) throw new IllegalStateException("大模型当前不可用，无法规划生成成果");
-            plan = parsePlan(Objects.toString(planning.get("content"), ""));
-        }
+        events.publish(runId, "MODEL_STATUS", node.id(), node.name(), "RUNNING", startProgress,
+                "正在理解生成要求，规划标题与内容结构", "");
+        var planningRequirements = requirements
+                + "\n\n根据用户意图与上游资料自主拟定标题、副标题和章节结构，判断合适的使用对象与篇幅。"
+                + "用户已明确选择的成果类型、引用和 Skill 必须遵守："
+                + objectMapper.writeValueAsString(outputPreferences(config));
+        var planning = worker.generateContent("DELIVERABLE_PLAN", planningRequirements,
+                sourceText.substring(0, Math.min(sourceText.length(), MAX_PLANNING_SOURCE_CHARS)));
+        var planningMode = Objects.toString(planning.get("mode"), "");
+        if (planningMode.contains("fallback")) throw new IllegalStateException("大模型当前不可用，无法规划生成成果");
+        var plan = applyOutputPreferences(parsePlan(Objects.toString(planning.get("content"), "")), config);
         var format = plannedFormat(plan);
         var title = plannedText(plan, "title", "成果标题", 280);
         var subtitle = optional(plan, "subtitle", "");
@@ -72,9 +67,9 @@ public class WorkflowDeliverableService {
         var citationStyle = plannedCitationStyle(plan);
         var pptSkill = plannedPptSkill(plan, format);
 
-        var completeRequirements = "使用对象：" + optional(config, "targetAudience", "业务用户")
-                + "\n期望篇幅或规模：" + optional(config, "lengthHint", "适中")
-                + "\n" + requirements + "\n\n已确定的成果规格：\n成果形式：" + format
+        var completeRequirements = requirements
+                + "\n根据用户意图与资料内容自主安排章节、使用对象与篇幅，不套用固定受众或长度。"
+                + "\n\n已确定的成果规格：\n成果形式：" + format
                 + "\n标题：" + title + "\n副标题：" + subtitle + "\n主章节：" + heading
                 + presentationRequirement(pptSkill) + "\n"
                 + contextAssembler.citationRequirement(includeCitations, citationStyle);
@@ -115,22 +110,23 @@ public class WorkflowDeliverableService {
                 "analysisMode", generationMode, "planningMode", planningMode);
     }
 
-    private boolean hasConfiguredFormat(Map<String, Object> config) {
-        return !optional(config, "format", "").isBlank() && !optional(config, "title", "").isBlank();
+    Map<String, Object> applyOutputPreferences(Map<String, Object> modelPlan, Map<String, Object> config) {
+        var plan = new LinkedHashMap<>(modelPlan);
+        plan.putAll(outputPreferences(config));
+        return Map.copyOf(plan);
     }
 
-    Map<String, Object> configuredPlan(Map<String, Object> config) {
-        var format = optional(config, "format", "PPTX").toUpperCase(Locale.ROOT);
-        if ("MERMAID".equals(format) && bool(config, "handDrawn")) format = "EXCALIDRAW";
+    private Map<String, Object> outputPreferences(Map<String, Object> config) {
         var plan = new LinkedHashMap<String, Object>();
-        plan.put("format", format);
-        plan.put("title", optional(config, "title", "分析结果"));
-        plan.put("subtitle", optional(config, "subtitle", "由工作流自动生成"));
-        plan.put("heading", optional(config, "heading", "分析结果"));
-        plan.put("include_citations", !config.containsKey("includeCitations") || bool(config, "includeCitations"));
-        plan.put("citation_style", optional(config, "citationStyle", "IEEE"));
-        plan.put("ppt_skill", optional(config, "pptSkill", ""));
-        return Map.copyOf(plan);
+        var format = optional(config, "format", "").toUpperCase(Locale.ROOT);
+        if (!format.isBlank()) {
+            if ("MERMAID".equals(format) && bool(config, "handDrawn")) format = "EXCALIDRAW";
+            plan.put("format", format);
+        }
+        if (config.containsKey("includeCitations")) plan.put("include_citations", bool(config, "includeCitations"));
+        if (config.containsKey("citationStyle")) plan.put("citation_style", optional(config, "citationStyle", "IEEE"));
+        if (config.containsKey("pptSkill")) plan.put("ppt_skill", optional(config, "pptSkill", ""));
+        return plan;
     }
 
     Map<String, Object> parsePlan(String value) {

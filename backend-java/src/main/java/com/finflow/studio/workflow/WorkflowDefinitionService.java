@@ -317,6 +317,11 @@ public class WorkflowDefinitionService {
     }
 
     private NodeDefinition normalizeNode(NodeDefinition node) {
+        if (node.type() == NodeType.DELIVERABLE && node.config() != null) {
+            var config = new LinkedHashMap<>(node.config());
+            List.of("title", "subtitle", "heading", "targetAudience", "lengthHint").forEach(config::remove);
+            return new NodeDefinition(node.id(), node.type(), node.name(), node.x(), node.y(), Map.copyOf(config));
+        }
         if (node.type() != NodeType.AI_ANALYSIS || node.config() == null || !node.config().containsKey("maxPoints")) {
             return node;
         }

@@ -1,6 +1,10 @@
 package com.finflow.studio.workflow;
 
+import com.finflow.studio.deliverable.DeliverableModels;
+import com.finflow.studio.deliverable.DeliverableService;
+import com.finflow.studio.worker.WorkerClient;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import tools.jackson.databind.ObjectMapper;
 
 import java.util.List;
@@ -8,6 +12,8 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
 
 class WorkflowTextAssemblyTest {
 
@@ -54,16 +60,71 @@ class WorkflowTextAssemblyTest {
 
     @Test
     void preservesExplicitDeliverableTypeCitationAndSkillChoices() {
-        var plan = deliverables.configuredPlan(Map.of(
-                "format", "PPTX", "title", "经营复盘", "heading", "核心结论",
+        var plan = deliverables.applyOutputPreferences(Map.of(
+                "format", "HTML_SLIDES", "title", "经营复盘", "heading", "核心结论",
+                "include_citations", false, "citation_style", "IEEE", "ppt_skill", "frontend-slides"), Map.of(
+                "format", "PPTX", "title", "旧标题", "heading", "旧章节",
                 "pptSkill", "guizang-huawei-style-c", "includeCitations", true,
                 "citationStyle", "GB_T_7714"));
 
         assertThat(plan).containsEntry("format", "PPTX")
                 .containsEntry("title", "经营复盘")
                 .containsEntry("ppt_skill", "guizang-huawei-style-c")
+                .containsEntry("heading", "核心结论")
                 .containsEntry("include_citations", true)
                 .containsEntry("citation_style", "GB_T_7714");
+    }
+
+    @Test
+    void explicitDisabledOptionsOverrideModelAndPromptOnlyPlansStayIntact() {
+        var modelPlan = Map.<String, Object>of("format", "PPTX", "title", "自动标题",
+                "include_citations", true, "ppt_skill", "guizang-huawei-style-c");
+        assertThat(deliverables.applyOutputPreferences(modelPlan,
+                Map.of("includeCitations", false, "pptSkill", "")))
+                .containsEntry("include_citations", false).containsEntry("ppt_skill", "")
+                .containsEntry("title", "自动标题");
+        assertThat(deliverables.applyOutputPreferences(modelPlan, Map.of("generationPrompt", "总结资料")))
+                .isEqualTo(modelPlan);
+        assertThat(deliverables.applyOutputPreferences(modelPlan, Map.of("format", "MERMAID", "handDrawn", true)))
+                .containsEntry("format", "EXCALIDRAW");
+    }
+
+    @Test
+    void configuredOutputsStillUseModelPlanningAndIgnoreRetiredContentFields() {
+        var worker = mock(WorkerClient.class);
+        var artifacts = mock(DeliverableService.class);
+        var events = mock(WorkflowRunEventService.class);
+        var service = new WorkflowDeliverableService(worker, artifacts, events, new ObjectMapper(), contexts);
+        when(worker.generateContent(eq("DELIVERABLE_PLAN"), anyString(), anyString())).thenReturn(Map.of(
+                "mode", "llm", "content", """
+                {"format":"HTML_SLIDES","title":"模型标题","subtitle":"模型副标题","heading":"模型章节",
+                 "include_citations":true,"citation_style":"IEEE","ppt_skill":"frontend-slides"}
+                """));
+        when(worker.generateContentStreaming(eq("PPTX"), anyString(), anyString(), any()))
+                .thenReturn(Map.of("mode", "llm", "content", "模型生成正文"));
+        when(artifacts.create(any())).thenReturn(new DeliverableModels.Response(
+                "artifact", "project", "模型标题", "PPTX", 1, "READY", 100, "hash", null, null));
+        var config = Map.<String, Object>of("generationPrompt", "给出变化原因和行动建议",
+                "format", "PPTX", "title", "旧标题", "subtitle", "旧副标题", "heading", "旧章节",
+                "targetAudience", "旧受众配置", "lengthHint", "旧篇幅配置", "includeCitations", false, "pptSkill", "");
+        var node = new WorkflowModels.NodeDefinition("output", WorkflowModels.NodeType.DELIVERABLE,
+                "生成成果", 0, 0, config);
+
+        var result = service.create("project", "run", node, config,
+                Map.of("analysis", Map.of("analysis", "已核验的上游资料")), 10, 90);
+
+        verify(worker).generateContent(eq("DELIVERABLE_PLAN"), contains("给出变化原因和行动建议"), eq("已核验的上游资料"));
+        var requirements = ArgumentCaptor.forClass(String.class);
+        verify(worker).generateContentStreaming(eq("PPTX"), requirements.capture(), anyString(), any());
+        assertThat(requirements.getValue()).contains("模型标题", "模型章节", "给出变化原因和行动建议")
+                .doesNotContain("旧标题", "旧副标题", "旧章节", "旧受众配置", "旧篇幅配置");
+        var request = ArgumentCaptor.forClass(DeliverableModels.CreateRequest.class);
+        verify(artifacts).create(request.capture());
+        assertThat(request.getValue().title()).isEqualTo("模型标题");
+        assertThat(request.getValue().format()).isEqualTo("PPTX");
+        assertThat(request.getValue().includeCitations()).isFalse();
+        assertThat(request.getValue().pptSkill()).isEmpty();
+        assertThat(result).containsEntry("planningMode", "llm");
     }
 
     @Test

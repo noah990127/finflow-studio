@@ -107,7 +107,9 @@ class WorkflowFlowTest {
                 Map.of("prompt", "分析数据变化", "maxPoints", 6));
         var resultNode = new NodeDefinition("result", NodeType.DELIVERABLE, "生成成果", 400, 100,
                 Map.of("generationPrompt", "生成董事会汇报", "title", "旧标题", "format", "PPTX",
-                        "targetAudience", "董事会", "includeCitations", true));
+                        "subtitle", "旧副标题", "heading", "旧章节", "lengthHint", "10页",
+                        "targetAudience", "董事会", "includeCitations", true,
+                        "citationStyle", "GB_T_7714", "pptSkill", "guizang-huawei-style-c"));
         var saved = definitions.saveProjectWorkflow(project.id(), new SaveRequest("主工作流", "",
                 List.of(node, resultNode), List.of(new EdgeDefinition("analysis-result", "analysis", "result")),
                 first.currentVersion()));
@@ -116,8 +118,9 @@ class WorkflowFlowTest {
         assertThat(saved.nodes().get(1).config())
                 .containsEntry("generationPrompt", "生成董事会汇报")
                 .containsEntry("format", "PPTX")
-                .containsEntry("title", "旧标题")
-                .containsEntry("targetAudience", "董事会")
+                .doesNotContainKeys("title", "subtitle", "heading", "targetAudience", "lengthHint")
+                .containsEntry("citationStyle", "GB_T_7714")
+                .containsEntry("pptSkill", "guizang-huawei-style-c")
                 .containsEntry("includeCitations", true);
 
         assertThatThrownBy(() -> definitions.saveProjectWorkflow(project.id(), new SaveRequest("旧版本", "",

@@ -16,9 +16,8 @@ export function initialWorkflowNodeConfig(type: WorkflowNodeType): Record<string
     case 'AI_ANALYSIS': return { prompt: '结合已连接的资料进行分析，给出有证据支持的结论。' }
     case 'AGENT_TASK': return { instruction: '结合已连接的内容完成任务，区分事实、计算、推断和不确定项。', externalResearch: 'OFF', domainAllowlist: [], skills: [], maxToolCalls: 40, timeoutSeconds: 600, maxPoints: 10 }
     case 'DELIVERABLE': return {
-      title: '分析结果', subtitle: '由工作流自动生成', format: 'PPTX',
-      pptSkill: 'guizang-huawei-style-c', heading: '核心发现', targetAudience: '业务负责人',
-      lengthHint: '5-8 页', includeCitations: true, citationStyle: 'IEEE',
+      format: 'PPTX', pptSkill: 'guizang-huawei-style-c',
+      includeCitations: true, citationStyle: 'IEEE',
       generationPrompt: '先给出核心结论，再说明变化原因、风险和下一步行动。语言简洁，所有结论仅基于工作流中的数据和参考资料。',
     }
     default: return { resourceId: '' }
@@ -33,6 +32,7 @@ export function normalizeWorkflowNodeConfig(
   if (type === 'AI_ANALYSIS') delete config.maxPoints
   if (type !== 'DELIVERABLE') return config
 
+  for (const key of ['title', 'subtitle', 'heading', 'targetAudience', 'lengthHint']) delete config[key]
   const defaults = initialWorkflowNodeConfig('DELIVERABLE')
   return { ...defaults, ...config, generationPrompt: String(config.generationPrompt ?? defaults.generationPrompt) }
 }
@@ -58,7 +58,6 @@ export function workflowNodeSpecForResource(resource: WorkspaceResource): Workfl
       config: {
         ...initialWorkflowNodeConfig('DELIVERABLE'),
         outputResourceId: resource.id,
-        title: resource.name,
         format,
         pptSkill: format === 'HTML_SLIDES' ? 'frontend-slides' : format === 'PPTX' ? 'guizang-huawei-style-c' : '',
         generationPrompt: `根据已连接的内容更新“${resource.name}”，保持适合当前内容的成果形式。`,
