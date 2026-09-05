@@ -4,7 +4,7 @@ import {
   Activity, AlertCircle, ArrowDown, ArrowUp, Bot, BrainCircuit, Check, CheckCircle2,
   ChevronDown, ChevronRight, Circle, Clock3, FileOutput, History, ListChecks, LoaderCircle,
   MessageSquarePlus, PanelRightClose, Radio, RotateCcw, Search, ShieldCheck,
-  Sparkles, Square, Wrench, Zap,
+  Sparkles, Square, Zap,
 } from 'lucide-vue-next'
 import { useAssistantStore } from '../stores/assistant'
 import type { AssistantMessage, Project } from '../api/client'
@@ -41,8 +41,16 @@ const taskState = computed(() => {
   return { code: 'idle', label: '就绪', detail: '' }
 })
 const completedSteps = computed(() => assistant.plan?.steps.filter(step => step.status === 'SUCCEEDED').length ?? 0)
+const directReply = computed(() => assistant.plan?.steps.length === 1
+  && assistant.plan.steps[0]?.tool === 'assistant.respond'
+  && typeof assistant.plan.steps[0]?.arguments.prepared_answer === 'string')
 const latestActivity = computed(() => assistant.timeline.at(-1))
-const liveActivities = computed(() => assistant.timeline.slice(-4))
+const visibleActivities = computed(() => {
+  if (showEvents.value) return assistant.timeline
+  const summary = assistant.timeline.findLast(item => item.eventType === 'agent.thinking_summary' && item.status === 'completed')
+  const latest = assistant.run?.status === 'SUCCEEDED' ? undefined : latestActivity.value
+  return [summary, latest].filter((item, index, items) => item && items.indexOf(item) === index)
+})
 const showJumpToLatest = computed(() => !followingLatest.value && (running.value || unseenActivityCount.value > 0))
 const activeStep = computed(() => assistant.plan?.steps.find(step => stepState(step.order) === 'running'))
 const streamHealthLabel = computed(() => assistant.eventConnection === 'live' ? '实时' : assistant.eventConnection === 'reconnecting' ? '正在重连' : '连接中')
@@ -108,7 +116,7 @@ function activityStatus(item: (typeof assistant.timeline)[number]) {
   if (item.error || item.status === 'failed') return '失败'
   if (item.status === 'waiting') return '待确认'
   if (item.status === 'completed' || item.tone === 'success') return '完成'
-  return '进行中'
+  return running.value && item.id === latestActivity.value?.id ? '进行中' : '已记录'
 }
 function lastAssistant(turn: HistoryTurn) { return turn.assistant.at(-1) }
 function earlierAssistant(turn: HistoryTurn) { return turn.assistant.slice(0, -1) }
@@ -158,6 +166,10 @@ async function scrollToLatest(force = false) {
 function jumpToLatest() {
   followingLatest.value = true
   void scrollToLatest(true)
+}
+function toggleActivities() {
+  showEvents.value = !showEvents.value
+  if (showEvents.value) followingLatest.value = false
 }
 
 watch(() => assistant.input, () => nextTick(resizeComposer))
@@ -286,32 +298,37 @@ onBeforeUnmount(() => {
             <span v-if="taskState.detail">{{ businessText(taskState.detail) }}</span>
           </div>
 
-          <div v-if="assistant.plan" class="assistant-inline-progress">
+          <div v-if="assistant.plan && !directReply" class="assistant-inline-progress">
             <i><span :style="{ width: `${assistant.progress}%` }"></span></i><small>{{ completedSteps }}/{{ assistant.plan.steps.length }} 步</small>
           </div>
 
-          <section v-if="running || waitingConfirmation" class="assistant-live-stream" aria-live="polite" aria-label="Agent 实时工作过程">
-            <header>
-              <span><Activity :size="14" />工作过程 <small>公开摘要</small></span>
-              <span class="assistant-live-badge"><i></i>{{ streamHealthLabel }}</span>
-            </header>
-            <div class="assistant-live-list">
-              <article v-for="item in liveActivities" :key="item.id" :data-tone="item.tone">
-                <span><component :is="activityIcon(item.kind)" :size="13" /></span>
-                <div><strong>{{ item.title }}</strong><p>{{ item.detail }}</p></div>
-                <small>{{ activityStatus(item) }}</small>
-              </article>
-              <article v-if="!liveActivities.length" class="assistant-live-placeholder">
-                <span><LoaderCircle :size="13" class="assistant-spinner" /></span>
-                <div><strong>{{ latestActivity?.title || activeStep?.title || taskState.label }}</strong><p>{{ latestActivity?.detail || activeStep?.description || taskState.detail }}</p></div>
-              </article>
+          <section v-if="assistant.timeline.length || running || waitingConfirmation" class="assistant-work-process" aria-label="工作过程">
+            <button type="button" class="assistant-process-toggle" :aria-expanded="showEvents" aria-controls="assistant-process-entries" @click="toggleActivities">
+              <span><Activity :size="14" />工作过程 <small>{{ assistant.timeline.length }} 条进展</small></span>
+              <ChevronDown v-if="showEvents" :size="15" /><ChevronRight v-else :size="15" />
+            </button>
+            <div id="assistant-process-entries" class="assistant-process-entries" :aria-live="showEvents ? 'off' : 'polite'">
+              <template v-for="item in visibleActivities" :key="item?.id">
+                <article v-if="item" class="assistant-activity-item" :data-tone="item.tone">
+                  <span class="assistant-activity-icon"><component :is="activityIcon(item.kind)" :size="13" /></span>
+                  <div>
+                    <header><strong>{{ item.title }}</strong><time>{{ clock(item.time) }} · {{ activityStatus(item) }}</time></header>
+                    <p>{{ item.detail }}</p>
+                    <small v-if="item.resultSummary && item.resultSummary !== item.detail">结果：{{ businessText(item.resultSummary, '已收到这一步的处理结果') }}</small>
+                    <small v-if="item.provenanceSummary">来源：{{ businessText(item.provenanceSummary, '已记录所用资料') }}</small>
+                    <details v-if="item.toolName || item.technicalDetail !== item.detail" class="assistant-error-detail"><summary>技术详情</summary><code>{{ item.toolName }}<template v-if="item.argumentSummary"> · {{ item.argumentSummary }}</template></code><pre>{{ item.technicalDetail }}</pre></details>
+                    <details v-if="item.error" class="assistant-error-detail"><summary>错误详情</summary><pre>{{ item.error }}</pre></details>
+                  </div>
+                </article>
+              </template>
+              <p v-if="!visibleActivities.length && (running || waitingConfirmation)">{{ businessText(activeStep?.description || taskState.detail) }}</p>
             </div>
           </section>
 
           <p v-if="assistant.assistantMessage && assistant.run?.status === 'SUCCEEDED'" class="assistant-final-answer">{{ assistant.assistantMessage }}</p>
           <div v-if="assistant.error" class="assistant-error"><AlertCircle :size="15" /><span>{{ businessError(assistant.error) }}</span><details><summary>问题详情</summary><pre>{{ assistant.error }}</pre></details></div>
 
-          <section v-if="assistant.plan" class="assistant-tool-group">
+          <section v-if="assistant.plan && !directReply" class="assistant-tool-group">
             <button type="button" @click="showSteps = !showSteps">
               <span><ListChecks :size="15" /><strong>执行步骤</strong><small>{{ completedSteps }}/{{ assistant.plan.steps.length }} 已完成</small></span>
               <ChevronDown v-if="showSteps" :size="16" /><ChevronRight v-else :size="16" />
@@ -333,23 +350,6 @@ onBeforeUnmount(() => {
             <ShieldCheck :size="18" /><p><strong>需要你的确认</strong><span>将执行上方列出的工作台修改。</span></p>
             <button class="primary-button" type="button" :disabled="assistant.busy" @click="assistant.confirm">确认执行</button>
           </div>
-
-          <details v-if="assistant.timeline.length" class="assistant-event-details assistant-activity-stream" :open="showEvents" @toggle="showEvents = ($event.target as HTMLDetailsElement).open">
-            <summary><span><Wrench :size="14" />完整活动记录 · {{ assistant.timeline.length }}</span><ChevronDown :size="15" /></summary>
-            <div>
-              <article v-for="item in assistant.timeline" :key="item.id" class="assistant-activity-item" :data-tone="item.tone">
-                <span class="assistant-activity-icon"><component :is="activityIcon(item.kind)" :size="13" /></span>
-                <div>
-                  <header><strong>{{ item.title }}</strong><time>{{ clock(item.time) }}</time></header>
-                  <p>{{ item.detail }}</p>
-                  <small v-if="item.resultSummary && item.resultSummary !== item.detail">结果：{{ businessText(item.resultSummary, '已收到这一步的处理结果') }}</small>
-                  <small v-if="item.provenanceSummary">来源：{{ businessText(item.provenanceSummary, '已记录所用资料') }}</small>
-                  <details v-if="item.toolName || item.technicalDetail" class="assistant-error-detail"><summary>技术详情</summary><code>{{ item.toolName }}<template v-if="item.argumentSummary"> · {{ item.argumentSummary }}</template></code><pre>{{ item.technicalDetail }}</pre></details>
-                  <details v-if="item.error" class="assistant-error-detail"><summary>错误详情</summary><pre>{{ item.error }}</pre></details>
-                </div>
-              </article>
-            </div>
-          </details>
 
           <div v-if="assistant.run?.status === 'SUCCEEDED' && assistant.run.result?.createdProjectId" class="result-actions">
             <button class="secondary-button" type="button" @click="assistant.rollback"><RotateCcw :size="15" />撤销本次操作</button>

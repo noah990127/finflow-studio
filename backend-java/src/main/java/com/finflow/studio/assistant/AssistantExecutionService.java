@@ -162,7 +162,7 @@ public class AssistantExecutionService {
                     if (!runtime.dynamic() && !Boolean.TRUE.equals(observation.get("success"))) {
                         throw new IllegalStateException(Objects.toString(observation.get("error"), "工具执行失败"));
                     }
-                    if (!runtime.dynamic() || "workspace.inspect".equals(step.tool())) continue;
+                    if (!runtime.dynamic()) continue;
                     var completedActions = completedActionCount(run.planId());
                     events.publish(run.sessionId(), runId, "agent.thinking_summary", Map.of(
                             "status", "running", "progress", dynamicProgress(completedActions),
@@ -173,6 +173,11 @@ public class AssistantExecutionService {
                     var turn = planner.continueAfterObservation(runtime.goal(), runtime.page(),
                             workspaceContext(activeProjectId(runtime, step, effects)), run.sessionId(), runtime.executionMode(),
                             observation, completedActions);
+                    if (!turn.publicSummary().isBlank()) {
+                        events.publish(run.sessionId(), runId, "agent.thinking_summary", Map.of(
+                                "status", "completed", "phase", "assessment",
+                                "progress", dynamicProgress(completedActions), "message", turn.publicSummary()));
+                    }
                     if (turn.completed() || turn.steps().isEmpty()) {
                         if (!Boolean.TRUE.equals(observation.get("success"))) {
                             throw new IllegalStateException(turn.summary());
@@ -354,7 +359,7 @@ public class AssistantExecutionService {
     private int completedActionCount(String planId) {
         return jdbc.sql("""
                         select count(*) from assistant_plan_step
-                        where plan_id = :planId and tool_name <> 'workspace.inspect' and status in ('SUCCEEDED', 'FAILED')
+                        where plan_id = :planId and status in ('SUCCEEDED', 'FAILED')
                         """).param("planId", planId).query(Integer.class).single();
     }
 
@@ -606,6 +611,11 @@ public class AssistantExecutionService {
     }
 
     private String respond(PlanStep step, Map<String, Object> effects) {
+        var preparedAnswer = argument(step, "prepared_answer", "");
+        if (!preparedAnswer.isBlank()) {
+            effects.put("assistantResponse", preparedAnswer);
+            return preparedAnswer;
+        }
         var goal = argument(step, "goal", "请介绍当前项目");
         if ("NO_STRUCTURED_DATA".equals(argument(step, "reason", ""))) {
             var message = "当前项目中没有可用于这项任务的结构化数据。请先在左侧“数据”中上传表格，或连接数据库/数据服务，再选择内容让我继续。";

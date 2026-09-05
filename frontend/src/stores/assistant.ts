@@ -211,7 +211,7 @@ export const useAssistantStore = defineStore('assistant', {
       if (Number.isFinite(value)) this.progress = Math.max(0, Math.min(100, value))
       const message = String(payload.message ?? payload.result ?? payload.summary ?? '').trim()
       const title = String(payload.title ?? this.eventTitle(event.type)).trim()
-      const publicProgress = workProgress({ type: event.type, message, toolName: String(payload.toolName ?? payload.tool ?? ''), status: String(payload.status ?? ''), error: typeof payload.error === 'string' ? payload.error : undefined })
+      const publicProgress = workProgress({ type: event.type, message, phase: String(payload.phase ?? ''), toolName: String(payload.toolName ?? payload.tool ?? ''), status: String(payload.status ?? ''), error: typeof payload.error === 'string' ? payload.error : undefined })
       if (message) {
         this.progressLabel = publicProgress.detail
         this.streamLines.push(publicProgress.detail)

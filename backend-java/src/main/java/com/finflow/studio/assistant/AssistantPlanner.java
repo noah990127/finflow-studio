@@ -35,8 +35,6 @@ public class AssistantPlanner {
 
     public PlannedWork plan(String goal, String page, Selection selection, WorkspaceContext context,
                             String sessionId, String executionMode) {
-        var normalized = goal == null ? "" : goal.trim().toLowerCase(Locale.ROOT);
-        if (isDirectNavigation(normalized, context)) return fallbackPlan(goal, page, selection, context);
         var agentPlan = planWithAgent(goal, page, selection, context, sessionId, executionMode);
         if (agentPlan != null) return agentPlan;
         return fallbackPlan(goal, page, selection, context);
@@ -159,34 +157,28 @@ public class AssistantPlanner {
         return new PlannedWork(modelSummary(text, steps, context), List.copyOf(steps));
     }
 
-    @SuppressWarnings("unchecked")
     private PlannedWork planWithAgent(String goal, String page, Selection selection, WorkspaceContext context,
                                       String sessionId, String executionMode) {
+        Map<String, Object> response;
         try {
-            var response = worker.planAgent(agentRequest(goal, page, selection, context, sessionId, executionMode,
+            response = worker.planAgent(agentRequest(goal, page, selection, context, sessionId, executionMode,
                     false, Map.of(), 0));
-            var steps = parseAgentSteps(response, goal, page, context);
-            if (steps.isEmpty()) return null;
-            if (steps.stream().noneMatch(step -> "workspace.inspect".equals(step.tool()))) {
-                steps.addFirst(step(1, "workspace.inspect", "READ", "了解当前工作",
-                        contextDescription(page, context), RiskLevel.READ_ONLY,
-                        mapOf("project_id", context.projectId(), "resource_id", context.selectedResourceId(), "page", page, "goal", goal)));
-                for (var index = 0; index < steps.size(); index++) {
-                    var current = steps.get(index);
-                    steps.set(index, new PlanStep(current.id(), index + 1, current.tool(), current.mode(), current.title(),
-                            current.description(), current.arguments(), current.risk(), current.requiresConfirmation(), current.status()));
-                }
-            }
-            if (steps.size() == 1 && "workspace.inspect".equals(steps.getFirst().tool())) {
-                steps.add(step(2, "assistant.respond", "READ", "回答并给出建议",
-                        "结合真实工作区摘要回答用户，不自行修改内容", RiskLevel.READ_ONLY,
-                        mapOf("goal", goal)));
-            }
-            var summary = readable(response.get("summary"), modelSummary(goal, steps, context), 240);
-            return new PlannedWork(summary, List.copyOf(steps), true);
         } catch (RuntimeException exception) {
             return null;
         }
+        var steps = parseAgentSteps(response, goal, page, context);
+        if (steps.isEmpty() && Boolean.TRUE.equals(response.get("completed"))
+                && response.get("steps") instanceof List<?> rawSteps && rawSteps.isEmpty()
+                && response.get("summary") instanceof String answer && !answer.isBlank()) {
+            var reply = step(1, "assistant.respond", "READ", "回答你的问题",
+                    "根据当前上下文给出回答，不修改工作台", RiskLevel.READ_ONLY,
+                    mapOf("goal", goal, "prepared_answer", answer));
+            return new PlannedWork(readable(answer, "", 240), List.of(reply), false,
+                    readable(response.get("public_summary"), "", 1200));
+        }
+        if (steps.isEmpty()) throw new IllegalStateException("助手没有返回有效操作或完整回答，请重试；未执行任何修改。");
+        var summary = readable(response.get("summary"), modelSummary(goal, steps, context), 240);
+        return new PlannedWork(summary, List.copyOf(steps), true, readable(response.get("public_summary"), "", 1200));
     }
 
     public DynamicTurn continueAfterObservation(String goal, String page, WorkspaceContext context,
@@ -195,9 +187,12 @@ public class AssistantPlanner {
         var response = worker.planAgent(agentRequest(goal, page, null, context, sessionId, executionMode,
                 true, observation, completedActions));
         var steps = parseAgentSteps(response, goal, page, context);
-        var completed = Boolean.TRUE.equals(response.get("completed")) || steps.isEmpty();
+        var completed = Boolean.TRUE.equals(response.get("completed"))
+                && response.get("steps") instanceof List<?> rawSteps && rawSteps.isEmpty()
+                && response.get("summary") instanceof String answer && !answer.isBlank();
+        if (!completed && steps.isEmpty()) throw new IllegalStateException("助手尚未完成任务，但没有返回有效的下一步；已有结果已保留。");
         var summary = readable(response.get("summary"), completed ? "任务已经完成" : "正在调整下一步", 240);
-        return new DynamicTurn(completed, summary, List.copyOf(steps));
+        return new DynamicTurn(completed, summary, List.copyOf(steps), readable(response.get("public_summary"), "", 1200));
     }
 
     private Map<String, Object> agentRequest(String goal, String page, Selection selection, WorkspaceContext context,
@@ -301,11 +296,6 @@ public class AssistantPlanner {
     private boolean asksForDataWork(String text) { return containsAny(text, "数据", "字段", "清理", "整理", "异常", "表格", "excel", "csv", "关联", "合并", "计算"); }
     private boolean asksToModifyData(String text) { return containsAny(text, "清理", "整理", "加工", "关联", "合并", "计算", "转换", "去重", "补全"); }
     private boolean asksForSources(String text) { return containsAny(text, "搜索", "检索", "查找", "找资料", "查资料", "搜集资料", "收集资料", "联网", "公开资料", "参考资料", "信息来源", "search", "research", "find sources", "latest results"); }
-
-    private boolean isDirectNavigation(String text, WorkspaceContext context) {
-        return navigationTarget(text, context) != null
-                && !containsAny(text, "新建", "新增", "创建", "删除", "修改", "编排", "分析", "生成", "运行", "执行");
-    }
 
     private boolean isStructuredSelection(WorkspaceContext context, Selection selection) {
         return selection != null && (isStructuredType(context.selectedResourceType()) || isStructuredType(selection.type()));
@@ -430,9 +420,12 @@ public class AssistantPlanner {
         public static WorkspaceContext empty() { return new WorkspaceContext(null, "当前项目", 0, 0, 0, false, null, null, null, List.of(), List.of()); }
     }
 
-    public record PlannedWork(String summary, List<PlanStep> steps, boolean dynamic) {
+    public record PlannedWork(String summary, List<PlanStep> steps, boolean dynamic, String publicSummary) {
+        public PlannedWork(String summary, List<PlanStep> steps, boolean dynamic) { this(summary, steps, dynamic, ""); }
         public PlannedWork(String summary, List<PlanStep> steps) { this(summary, steps, false); }
     }
 
-    public record DynamicTurn(boolean completed, String summary, List<PlanStep> steps) { }
+    public record DynamicTurn(boolean completed, String summary, List<PlanStep> steps, String publicSummary) {
+        public DynamicTurn(boolean completed, String summary, List<PlanStep> steps) { this(completed, summary, steps, ""); }
+    }
 }

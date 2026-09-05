@@ -123,8 +123,6 @@ public class AssistantService {
         var context = createContext(session, request);
         events.publish(sessionId, null, "assistant.planning.started", Map.of(
                 "progress", 12, "message", "正在识别意图并匹配可用能力与技能"));
-        events.publish(sessionId, null, "agent.skill_loading", Map.of(
-                "status", "running", "progress", 13, "message", "正在按任务类型加载可复用 Skill"));
         var workspaceResponse = workspace.get(session.projectId());
         var selected = request.selection() == null ? null : workspaceResponse.resources().stream()
                 .filter(resource -> resource.id().equals(request.selection().resourceId()))
@@ -164,7 +162,12 @@ public class AssistantService {
             var automaticSteps = plannedWork.steps().stream().map(step -> new PlanStep(
                     step.id(), step.order(), step.tool(), step.mode(), step.title(), step.description(),
                     step.arguments(), step.risk(), false, step.status())).toList();
-            plannedWork = new AssistantPlanner.PlannedWork(plannedWork.summary(), automaticSteps, plannedWork.dynamic());
+            plannedWork = new AssistantPlanner.PlannedWork(plannedWork.summary(), automaticSteps, plannedWork.dynamic(), plannedWork.publicSummary());
+        }
+        if (!plannedWork.publicSummary().isBlank()) {
+            events.publish(sessionId, null, "agent.thinking_summary", Map.of(
+                    "status", "completed", "phase", "understanding", "progress", 17,
+                    "message", plannedWork.publicSummary()));
         }
         events.publish(sessionId, null, "agent.planning", Map.of(
                 "status", "completed", "progress", 18, "message", plannedWork.summary()));

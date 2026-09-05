@@ -52,15 +52,39 @@ class DynamicAssistantFlowTest {
 
         assertThat(run.get("status").asText()).isEqualTo("SUCCEEDED");
         assertThat(plan.get("steps")).extracting(step -> step.get("tool").asText())
-                .containsExactly("workspace.inspect", "folder.create", "folder.rename");
+                .containsExactly("folder.create", "folder.rename");
         assertThat(plan.get("steps")).allSatisfy(step -> assertThat(step.get("status").asText()).isEqualTo("SUCCEEDED"));
         assertThat(folders.list(project.id())).extracting(item -> item.name()).containsExactly("最终目录");
 
         var events = json(getJson("/api/assistant/sessions/" + session.get("id").asText() + "/event-history"));
-        assertThat(events).filteredOn(event -> "agent.observation".equals(event.get("type").asText())).hasSize(3);
+        assertThat(events).filteredOn(event -> "agent.observation".equals(event.get("type").asText())).hasSize(2);
         assertThat(events).filteredOn(event -> "agent.observation".equals(event.get("type").asText()))
-                .anySatisfy(event -> assertThat(event.get("payload").get("message").asText()).contains("动态 Auto"));
+                .anySatisfy(event -> assertThat(event.get("payload").get("message").asText()).contains("最终目录"));
         assertThat(events).anySatisfy(event -> assertThat(event.get("type").asText()).isEqualTo("agent.plan_updated"));
+        assertThat(events).filteredOn(event -> "agent.thinking_summary".equals(event.get("type").asText()))
+                .anySatisfy(event -> {
+                    assertThat(event.get("payload").path("phase").asText()).isEqualTo("understanding");
+                    assertThat(event.get("payload").get("message").asText()).isEqualTo("你希望整理目录并保留已有资料。先创建目录，不改动原始内容。");
+                }).anySatisfy(event -> {
+                    assertThat(event.get("payload").path("phase").asText()).isEqualTo("assessment");
+                    assertThat(event.get("payload").get("message").asText()).isEqualTo("已检查执行结果，目标已经达成，无需继续修改。");
+                });
+    }
+
+    @Test
+    void directAnswerKeepsUnderstandingAndDoesNotFallBackOrCallAnotherModel() throws Exception {
+        var project = projects.create("直接回答", "公开摘要测试");
+        var session = json(postJson("/api/projects/" + project.id() + "/assistant/sessions", Map.of("title", "只读回答")));
+        var response = json(postJson("/api/assistant/sessions/" + session.get("id").asText() + "/messages", Map.of(
+                "text", "只读回答：当前有哪些工作流？", "page", "project-home", "executionMode", "AUTO")));
+        var run = awaitStatus(response.get("run").get("id").asText(), "SUCCEEDED");
+        assertThat(run.get("resultSummary").asText()).contains("当前没有工作流");
+        assertThat(response.get("plan").get("steps")).hasSize(1);
+        var events = json(getJson("/api/assistant/sessions/" + session.get("id").asText() + "/event-history"));
+        assertThat(events).anySatisfy(event -> {
+            assertThat(event.get("type").asText()).isEqualTo("agent.thinking_summary");
+            assertThat(event.get("payload").get("message").asText()).isEqualTo("你只需要工作流清单，当前项目目录已足够回答，不需要修改内容。");
+        });
     }
 
     @Test
@@ -99,7 +123,7 @@ class DynamicAssistantFlowTest {
         var plan = json(getJson("/api/assistant/plans/" + response.get("plan").get("id").asText()));
 
         assertThat(run.get("status").asText()).isEqualTo("SUCCEEDED");
-        assertThat(plan.get("steps")).hasSize(15);
+        assertThat(plan.get("steps")).hasSize(14);
         assertThat(plan.get("steps")).filteredOn(step -> "project.list".equals(step.get("tool").asText())).hasSize(14);
     }
 
@@ -144,6 +168,9 @@ class DynamicAssistantFlowTest {
                     var request = (Map<String, Object>) value;
                     var continuation = Boolean.TRUE.equals(request.get("continuation"));
                     var goal = String.valueOf(request.get("goal"));
+                    if (goal.contains("只读回答")) return Map.of("summary", "当前没有工作流。",
+                            "public_summary", "你只需要工作流清单，当前项目目录已足够回答，不需要修改内容。",
+                            "completed", true, "steps", List.of());
                     var completed = ((Number) request.getOrDefault("completed_actions", 0)).intValue();
                     if (goal.contains("长任务")) {
                         if (completed < 14) return action("project.list", "检查工作区 " + (completed + 1),
@@ -168,12 +195,12 @@ class DynamicAssistantFlowTest {
                         return action("folder.rename", "重命名目录", "根据最新工作区继续重命名", Map.of(
                                 "folder_id", folderId, "new_name", "最终目录"));
                     }
-                    return Map.of("summary", "目标已经完成", "completed", true, "steps", List.of());
+                    return Map.of("summary", "目标已经完成", "public_summary", "已检查执行结果，目标已经达成，无需继续修改。", "completed", true, "steps", List.of());
                 }
 
                 private Map<String, Object> action(String tool, String title, String description,
                                                    Map<String, Object> arguments) {
-                    return Map.of("summary", title, "completed", false, "steps", List.of(Map.of(
+                    return Map.of("summary", title, "public_summary", "你希望整理目录并保留已有资料。先创建目录，不改动原始内容。", "completed", false, "steps", List.of(Map.of(
                             "tool", tool, "title", title, "description", description, "arguments", arguments)));
                 }
             };

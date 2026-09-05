@@ -72,6 +72,7 @@ class AgentAction(BaseModel):
 class AgentDecision(BaseModel):
     summary: str
     intent: str
+    public_summary: str = ""
     selected_skills: list[str] = Field(default_factory=list)
     completed: bool = False
 
@@ -79,6 +80,7 @@ class AgentDecision(BaseModel):
 class AgentPlanResponse(BaseModel):
     summary: str
     intent: str
+    public_summary: str = ""
     selected_skills: list[str] = Field(default_factory=list)
     steps: list[AgentAction]
     mode: str
@@ -137,6 +139,8 @@ def build_workbench_tools(deps: AgentDependencies):
 
     tools = []
     for capability in deps.request.capabilities:
+        if capability.id == "assistant.respond":
+            continue
         safe_name = capability.id.replace(".", "_").replace("-", "_")
         fields = {name: (Any, Field(default=None, description=f"{capability.id} 的 {name} 参数"))
                   for name in capability.arguments}
@@ -206,6 +210,8 @@ async def plan_with_agent(request: AgentPlanRequest, model_override: Any = None)
         terms = set(re.findall(r"[\w\u4e00-\u9fff]+", query.lower()))
         matches = []
         for capability in deps.request.capabilities:
+            if capability.id == "assistant.respond":
+                continue
             text = " ".join([capability.id, capability.title, capability.description, *capability.arguments]).lower()
             score = sum(term in text for term in terms)
             if score or not terms:
@@ -217,12 +223,14 @@ async def plan_with_agent(request: AgentPlanRequest, model_override: Any = None)
     @tool
     def describe_tool(tool_id: str) -> dict[str, Any]:
         """Read the complete contract and risk metadata for one workbench tool."""
-        item = next((value for value in deps.request.capabilities if value.id == tool_id), None)
+        item = next((value for value in deps.request.capabilities if value.id == tool_id and value.id != "assistant.respond"), None)
         return item.model_dump() if item else {"error": "工具不存在", "tool_id": tool_id}
 
     instructions = """你是通用的个人工作台 Agent，不是固定的财经工作流模板。
 先理解用户真正想完成的事情和当前上下文，再自主选择 Skill、MCP 工具与工作台能力。
-先调用 inspect_workspace；按需调用 find_skills、search_tools、describe_tool。所有左侧工作区操作都已作为独立工具提供。
+涉及项目内容时按需调用 inspect_workspace；按需调用 find_skills、search_tools、describe_tool。所有左侧工作区操作都已作为独立工具提供。
+普通问答可以直接回答；读取到足够上下文后直接在 summary 中回答，不再委派给另一个摘要接口。
+除非用户需要可复用、可保存的流程，否则不要创建或运行工作流。任务本身不需要套工作流模板。
 采用动态单步执行：每轮最多调用一个真实工作台工具，然后立即结束本轮并等待 Java 返回真实 Observation。
 禁止提前编排整条固定步骤，也禁止只描述计划或捏造工具名称。工具结果由 Java 权限网关真实执行。
 不要因为用户提到分析就自动创建财务报告，也不要在缺少结构化数据时创建数据加工或图表报告。
@@ -231,6 +239,10 @@ async def plan_with_agent(request: AgentPlanRequest, model_override: Any = None)
 必须自行使用其 ID 调用工具，不得向用户索要 workflow_id、resource_id、folder_id 等内部标识。APPROVAL 模式下也应先形成工具计划，由界面统一请求确认。
 若目标已经完成，不再调用工具，返回 completed=true；否则调用一个最合适的工具并返回 completed=false。
 完成本轮后返回 JSON，包含 summary、intent、selected_skills、completed。summary 描述接下来将执行什么或基于 Observation 得出的最终结果，
+另外返回 public_summary：专门向用户展示的 2 到 3 句简短说明，不是内部推理记录。
+首次决策说明“我理解你希望达成的结果”以及关键约束，再说明处理方式的简要依据；不要只是复述步骤。
+后续决策说明真实结果意味着什么、为何继续或调整方式；信息不足时明确不确定性，不要补造事实。
+使用用户的业务语言，不包含工具名、内部 ID、代码、隐藏思维链或逐步推导。不得声称尚未执行的操作已完成。
 不得把尚未执行的动作说成已经完成。工具失败时先根据错误选择修正参数、替代工具或重试；只有无法继续时才结束并解释原因。
 dataset.extract 会把网页 JSON/HTML 真正落为数据文件；后续 dataset.query、dataset.transform 和 dataset.open 必须使用 Observation 返回的新 datasetId，
 不得继续使用原网页 resource_id。长任务应依据已执行动作数持续收敛，优先复用已有结果，避免重复读取或重复创建同一资源。
@@ -269,13 +281,12 @@ dataset.transform 的 script 只能是单条只读 DuckDB SELECT/WITH SQL，输�
     decision = AgentDecision.model_validate({
         "summary": raw_decision.get("summary", "已根据当前工作台准备处理计划"),
         "intent": raw_decision.get("intent", "workbench-task"),
+        "public_summary": raw_decision.get("public_summary") or "",
         "selected_skills": raw_decision.get("selected_skills", sorted(deps.selected_skills)),
-        "completed": raw_decision.get("completed", request.continuation and not deps.staged_actions),
+        "completed": False if deps.staged_actions else raw_decision.get("completed", True),
     })
-    if not deps.staged_actions and not request.continuation and not decision.completed:
-        deps.staged_actions.append(AgentAction(tool="assistant.respond", title="回答你的问题",
-                                               description="结合当前项目和内容给出直接回答", arguments={"goal": request.goal}))
     return AgentPlanResponse(summary=decision.summary, intent=decision.intent,
+                             public_summary=decision.public_summary,
                              selected_skills=decision.selected_skills or sorted(deps.selected_skills),
                              steps=deps.staged_actions, mode="deep-agents", completed=decision.completed)
 

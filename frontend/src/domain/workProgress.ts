@@ -1,4 +1,4 @@
-type Progress = { type?: string; message?: string; toolName?: string; status?: string; error?: string }
+type Progress = { type?: string; message?: string; toolName?: string; status?: string; error?: string; phase?: string }
 const technical = /(?:\b(?:[a-z]+[_.])+(?:search|read|run|create|extract|delete|edit|open|list|query|parse|connect)\b|\b(?:workflow_id|resource_id|node_id|JSON|SSE|HTTP|Traceback|Exception|Service Unavailable|Unprocessable|tool_call|provenance)\b|localhost:\d+|127\.0\.0\.1|\{\s*"|[a-f0-9]{8}-[a-f0-9-]{27,}|调用工具|工具调用|加载 Skill|Agent runtime)/i
 
 export function businessError(message: string): string {
@@ -33,7 +33,10 @@ export function workProgress(event: Progress): { title: string; detail: string }
   if (type.includes('cancel')) return { title: '已停止', detail: '后续工作没有继续进行。' }
   if (type.includes('confirmation') || type.includes('review_required')) return { title: '需要你确认', detail: businessText(event.message, '这一步涉及修改内容，确认后才能继续。') }
   if (type.includes('retry')) return { title: '正在尝试解决问题', detail: '上一种方式没有完成，正在调整处理方式。' }
-  if (type.includes('thinking')) return { title: '梳理当前进展', detail: '正在检查已有结果，确定接下来需要完成的工作。' }
+  if (type.includes('thinking')) return {
+    title: event.phase === 'understanding' ? '我的理解' : event.phase === 'assessment' ? '我的判断' : '正在梳理',
+    detail: businessText(event.message, '正在结合你的要求和已有内容确定处理方式。'),
+  }
   if (type.includes('skill')) return { title: '准备处理方法', detail: '正在选择适合这项任务的处理方法。' }
   if (type.includes('tool_search')) return { title: '寻找可用的处理方式', detail: '正在查找完成当前工作所需的功能。' }
   if (type.includes('planning') || type.includes('plan_updated')) return { title: type.includes('updated') ? '调整工作安排' : '安排工作步骤', detail: businessText(event.message, '正在安排资料整理、分析和成果生成的先后顺序。') }

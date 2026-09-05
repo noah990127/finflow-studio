@@ -4,6 +4,7 @@ import com.finflow.studio.worker.WorkerClient;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
@@ -33,11 +34,11 @@ class AssistantPlannerTest {
         assertThat(captured.get()).containsEntry("execution_mode", "AUTO");
         assertThat(captured.get().get("resources")).isEqualTo(context.resources());
         assertThat(work.steps()).extracting(AssistantModels.PlanStep::tool)
-                .containsExactly("workspace.inspect", "workflow.delete");
+                .containsExactly("workflow.delete");
     }
 
     @Test
-    void rejectsUnknownAgentToolsAndFallsBackToSafePlanner() {
+    void rejectsUnknownAgentToolsWithoutInventingAFallbackTask() {
         var worker = new WorkerClient("http://127.0.0.1:9") {
             @Override
             public Map<String, Object> planAgent(Object request) {
@@ -48,10 +49,8 @@ class AssistantPlannerTest {
         };
         var planner = new AssistantPlanner(worker);
 
-        var work = planner.plan("介绍当前项目", "project-home", null);
-
-        assertThat(work.steps()).extracting(AssistantModels.PlanStep::tool)
-                .containsExactly("workspace.inspect", "assistant.respond");
+        assertThatThrownBy(() -> planner.plan("介绍当前项目", "project-home", null))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("没有返回有效操作");
     }
 
     @Test
@@ -164,12 +163,12 @@ class AssistantPlannerTest {
                         false, null, null, null, List.of(), List.of()));
 
         assertThat(work.steps()).extracting(AssistantModels.PlanStep::tool).containsExactly(
-                "workspace.inspect", "knowledge.discover_external_sources");
+                "knowledge.discover_external_sources");
         assertThat(work.dynamic()).isTrue();
     }
 
     @Test
-    void followsAWorkspaceInspectionWithAUserVisibleAnswer() {
+    void leavesTheNextDecisionToTheAgentAfterWorkspaceInspection() {
         var worker = new WorkerClient("http://127.0.0.1:9") {
             @Override
             public Map<String, Object> planAgent(Object request) {
@@ -184,7 +183,7 @@ class AssistantPlannerTest {
                         false, null, null, null, List.of(), List.of()));
 
         assertThat(work.steps()).extracting(AssistantModels.PlanStep::tool)
-                .containsExactly("workspace.inspect", "assistant.respond");
+                .containsExactly("workspace.inspect");
         assertThat(work.dynamic()).isTrue();
     }
 

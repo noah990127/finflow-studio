@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 
 import pytest
 
@@ -113,7 +114,7 @@ async def test_deep_agent_selects_workspace_tools_in_a_session(monkeypatch) -> N
     responses = iter([
         '{"tool_calls":[{"name":"inspect_workspace","arguments":{}}]}',
         '{"tool_calls":[{"name":"project_rename","arguments":{"project_id":"p1","new_name":"新项目"}}]}',
-        '{"final":{"summary":"将重命名项目","intent":"rename","selected_skills":["workspace-operations"]}}',
+        '{"final":{"summary":"将重命名项目","public_summary":"你希望只修改项目名称，保留原有资料。我会在当前项目上更新名称，不另建项目。","intent":"rename","selected_skills":["workspace-operations"]}}',
     ])
 
     async def complete(_system: str, _user: str) -> str:
@@ -135,6 +136,7 @@ async def test_deep_agent_selects_workspace_tools_in_a_session(monkeypatch) -> N
     assert result.mode == "deep-agents"
     assert result.steps[0].tool == "project.rename"
     assert result.steps[0].arguments["new_name"] == "新项目"
+    assert result.public_summary == "你希望只修改项目名称，保留原有资料。我会在当前项目上更新名称，不另建项目。"
 
 
 @pytest.mark.asyncio
@@ -146,7 +148,7 @@ async def test_deep_agent_replans_after_a_real_observation(monkeypatch) -> None:
         '{"tool_calls":[{"name":"folder_create","arguments":{"project_id":"p1","name":"临时目录","group":"knowledge"}}]}',
         '{"final":{"summary":"先创建目录","intent":"organize","completed":false}}',
         '{"tool_calls":[{"name":"folder_rename","arguments":{"project_id":"p1","folder_id":"f1","name":"最终目录"}}]}',
-        '{"final":{"summary":"继续重命名目录","intent":"organize","completed":false}}',
+        '{"final":{"summary":"继续重命名目录","public_summary":"目录已创建，接下来只需修改名称，不必重复创建。","intent":"organize","completed":false}}',
         '{"final":{"summary":"目录已经创建并重命名","intent":"organize","completed":true}}',
     ])
 
@@ -182,4 +184,32 @@ async def test_deep_agent_replans_after_a_real_observation(monkeypatch) -> None:
     assert first and [step.tool for step in first.steps] == ["folder.create"]
     assert second and [step.tool for step in second.steps] == ["folder.rename"]
     assert second.steps[0].arguments["folder_id"] == "f1"
+    assert second.public_summary == "目录已创建，接下来只需修改名称，不必重复创建。"
+    assert first.public_summary == ""
     assert final and final.completed is True and final.steps == []
+
+
+@pytest.mark.asyncio
+async def test_direct_answer_does_not_invent_a_workflow_or_summary_tool(monkeypatch) -> None:
+    answer = "当前项目包含主工作流和资料整理。未修改任何内容。"
+    public_summary = "你需要的是名称清单，项目目录足够回答，不需要生成报告或运行流程。"
+    responses = iter([
+        '{"tool_calls":[{"name":"inspect_workspace","arguments":{}}]}',
+        json.dumps({"final": {"summary": answer, "intent": "list", "public_summary": public_summary}}, ensure_ascii=False),
+    ])
+
+    async def complete(_system: str, _user: str) -> str:
+        assert '"name": "assistant_respond"' not in _system
+        return next(responses)
+
+    monkeypatch.setattr(runtime.llm, "complete", complete)
+    result = await plan_with_agent(AgentPlanRequest(
+        session_id="direct-answer-test", goal="列出工作流名称，不要修改", page="project-home",
+        resources=[{"id": "w1", "name": "主工作流", "type": "WORKFLOW", "group": "WORKFLOW"},
+                   {"id": "w2", "name": "资料整理", "type": "WORKFLOW", "group": "WORKFLOW"}],
+        capabilities=[AgentCapability(id="assistant.respond", title="回答", description="旧摘要接口",
+                                      mode="READ", risk="READ_ONLY")],
+    ), model_override=CodexCliChatModel())
+    assert result and result.completed and result.steps == []
+    assert result.summary == answer
+    assert result.public_summary == public_summary

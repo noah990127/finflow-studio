@@ -24,7 +24,11 @@ test('explains service and data errors without raw URLs or status codes', () => 
   assert.match(businessError('资料不存在'), /没有找到/)
 })
 test('thinking and recovery are public progress summaries', () => {
-  assert.equal(workProgress({type:'agent.thinking_summary',message:'internal private deliberation'}).detail, '正在检查已有结果，确定接下来需要完成的工作。')
+  const message = '你希望只修改项目名称，保留原有资料。我会在当前项目上更新名称，不另建项目。'
+  assert.deepEqual(workProgress({type:'agent.thinking_summary',phase:'understanding',status:'completed',message}), {title:'我的理解', detail:message})
+  const assessment = '目录已创建，接下来只需修改名称，不必重复创建。'
+  assert.deepEqual(workProgress({type:'agent.thinking_summary',phase:'assessment',status:'completed',message:assessment}), {title:'我的判断', detail:assessment})
+  assert.doesNotMatch(workProgress({type:'agent.thinking_summary',message:'workflow_id=123'}).detail, /workflow_id/)
   assert.match(workProgress({type:'agent.retrying'}).detail, /调整处理方式/)
   assert.equal(workProgress({type:'agent.completed',message:'报告已保存'}).title, '处理完成')
 })
