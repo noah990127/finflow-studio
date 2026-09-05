@@ -2415,9 +2415,14 @@ button {
 .assistant-activity-item small { grid-column: 2; overflow-wrap: anywhere; color: #8797a8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 8px; }
 .assistant-activity-item[data-tone="success"] span { color: #21805e; }
 .assistant-activity-item[data-tone="warning"] span { color: #9a6818; }
+.assistant-technical-detail,
 .assistant-error-detail { grid-column: 2; margin-top: 2px; }
+.assistant-technical-detail summary { color: #657078; }
 .assistant-error-detail summary { color: #b44950; }
-.assistant-error-detail pre { max-height: 120px; overflow: auto; margin: 5px 0 0; padding: 7px; border-radius: 6px; color: #8a3038; background: #fff6f6; white-space: pre-wrap; }
+.assistant-technical-detail pre,
+.assistant-error-detail pre { max-height: 120px; overflow: auto; margin: 5px 0 0; padding: 7px; border-radius: 6px; white-space: pre-wrap; }
+.assistant-technical-detail pre { color: #46525b; background: #f4f5f6; }
+.assistant-error-detail pre { color: #8a3038; background: #fff6f6; }
 .assistant-codex-panel .assistant-composer { padding: 10px 14px 13px; }
 .assistant-context-chip { margin: 0 0 7px; overflow: hidden; color: #718397; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .assistant-codex-panel .assistant-composer > div:nth-child(2) { position: relative; }

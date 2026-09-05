@@ -320,7 +320,7 @@ onBeforeUnmount(() => {
                     <p>{{ item.detail }}</p>
                     <small v-if="item.resultSummary && item.resultSummary !== item.detail">结果：{{ businessText(item.resultSummary, '已收到这一步的处理结果') }}</small>
                     <small v-if="item.provenanceSummary">来源：{{ businessText(item.provenanceSummary, '已记录所用资料') }}</small>
-                    <details v-if="item.toolName || item.technicalDetail !== item.detail" class="assistant-error-detail"><summary>技术详情</summary><code>{{ item.toolName }}<template v-if="item.argumentSummary"> · {{ item.argumentSummary }}</template></code><pre>{{ item.technicalDetail }}</pre></details>
+                    <details v-if="item.toolName || item.technicalDetail !== item.detail" class="assistant-technical-detail"><summary>技术详情</summary><code>{{ item.toolName }}<template v-if="item.argumentSummary"> · {{ item.argumentSummary }}</template></code><pre>{{ item.technicalDetail }}</pre></details>
                     <details v-if="item.error" class="assistant-error-detail"><summary>错误详情</summary><pre>{{ item.error }}</pre></details>
                   </div>
                 </article>

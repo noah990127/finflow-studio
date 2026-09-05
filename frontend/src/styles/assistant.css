@@ -277,8 +277,11 @@
 .assistant-process-entries .assistant-activity-item p { font-size: 12px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
 .assistant-activity-item code,
 .assistant-activity-item small { display: block; margin-top: 5px; overflow-wrap: anywhere; color: #8190a1; font-size: 10px; line-height: 1.45; }
+.assistant-technical-detail,
 .assistant-error-detail { margin-top: 5px; }
+.assistant-technical-detail summary,
 .assistant-error-detail summary { font-size: 11px; }
+.assistant-technical-detail pre,
 .assistant-error-detail pre { font-size: 10px; }
 
 .assistant-codex-panel .assistant-composer { padding: 10px 14px 13px; background: #fff; }
