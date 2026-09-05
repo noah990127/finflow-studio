@@ -49,7 +49,7 @@ create table if not exists assistant_plan (
     id varchar(64) primary key,
     session_id varchar(64) not null,
     context_snapshot_id varchar(64) not null,
-    goal varchar(1000) not null,
+    goal text not null,
     summary varchar(4000) not null,
     version integer not null,
     plan_hash varchar(128) not null,
@@ -63,6 +63,7 @@ create table if not exists assistant_plan (
 
 alter table assistant_plan add column if not exists execution_mode varchar(20) not null default 'APPROVAL';
 alter table assistant_plan add column if not exists dynamic_agent boolean not null default false;
+alter table assistant_plan alter column goal type text;
 
 create table if not exists assistant_plan_step (
     id varchar(64) primary key,
