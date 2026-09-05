@@ -553,6 +553,12 @@ public class AssistantWorkspaceToolGateway {
         var id = resolveWorkflowId(step, projectId, effects);
         effects.put("workflowId", id);
         effects.put("uiAction", Map.of("type", "OPEN_WORKFLOW", "projectId", projectId, "workflowId", id));
+        var workflow = workflows.get(id);
+        effects.put("workflow", workflow);
+        var schema = new LinkedHashMap<String, Object>();
+        for (var node : workflow.nodes()) schema.put(node.id(), Map.of("name", node.name(), "outputs",
+                com.finflow.studio.workflow.WorkflowVariables.outputs(node.type())));
+        effects.put("nodeOutputs", schema);
         return "已打开工作流";
     }
 

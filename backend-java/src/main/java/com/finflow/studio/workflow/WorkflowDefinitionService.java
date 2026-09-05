@@ -189,6 +189,8 @@ public class WorkflowDefinitionService {
         var incoming = new HashSet<String>();
         edges.forEach(edge -> incoming.add(edge.target()));
         for (var node : document.nodes()) {
+            try { WorkflowVariables.validate(document, node); }
+            catch (IllegalArgumentException exception) { issues.add(new ValidationIssue(node.id(), exception.getMessage())); }
             if (node.type() == NodeType.SPREADSHEET_TRANSFORM && !incoming.contains(node.id())
                     && blank(node.config(), "fileId")) {
                 issues.add(new ValidationIssue(node.id(), "请选择表格，或连接一个会产生文件的上游步骤"));

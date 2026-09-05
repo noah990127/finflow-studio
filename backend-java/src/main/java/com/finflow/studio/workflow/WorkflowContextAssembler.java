@@ -42,7 +42,7 @@ public class WorkflowContextAssembler {
                     hasParsedText = true;
                 }
             }
-            for (var item : list(output.get("refs"))) {
+            for (var item : hasParsedText ? List.of() : list(output.get("refs"))) {
                 if (item instanceof Map<?, ?> map) {
                     var value = Objects.toString(map.get("text"), "").trim();
                     if (!value.isBlank()) {
@@ -65,6 +65,17 @@ public class WorkflowContextAssembler {
         var text = result.toString().trim();
         if (text.length() <= MAX_CONTEXT_CHARS) return text;
         return text.substring(0, MAX_CONTEXT_CHARS) + "\n[工作流上下文较长，已按安全上限截断]";
+    }
+
+    public List<Map<?, ?>> sourceRefs(Map<String, Map<String, Object>> context) {
+        var result = new LinkedHashMap<String, Map<?, ?>>();
+        for (var output : context.values()) for (var item : list(output.getOrDefault("refs", output.get("sources")))) {
+            if (item instanceof Map<?, ?> ref) {
+                var id = Objects.toString(ref.get("id"), "");
+                if (!id.isBlank()) result.putIfAbsent(id, ref);
+            }
+        }
+        return List.copyOf(result.values());
     }
 
     public String referenceCatalog(Map<String, Map<String, Object>> context) {

@@ -105,9 +105,12 @@ public class WorkflowDeliverableService {
                 "正在写入 " + format + " 文件", "");
         var item = deliverables.create(new CreateRequest(projectId, compatibleOutputResource(config, format), title,
                 subtitle, format, pptSkill, includeCitations, citationStyle, List.of(section)));
-        return Map.of("deliverableId", item.id(), "name", item.name(), "format", item.format(), "outputPlan", plan,
+        var output = new LinkedHashMap<String, Object>(Map.of("deliverableId", item.id(), "name", item.name(), "format", item.format(), "outputPlan", plan,
                 "version", item.currentVersion(), "downloadUrl", "/api/deliverables/" + item.id() + "/download",
-                "analysisMode", generationMode, "planningMode", planningMode);
+                "analysisMode", generationMode, "planningMode", planningMode,
+                "refs", contextAssembler.sourceRefs(upstream), "refIds", contextAssembler.refIds(upstream)));
+        output.put("text", generatedBody);
+        return Map.copyOf(output);
     }
 
     Map<String, Object> applyOutputPreferences(Map<String, Object> modelPlan, Map<String, Object> config) {

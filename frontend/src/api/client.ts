@@ -74,6 +74,7 @@ async function request<T>(url: string, options: RequestInit = {}, timeoutMs = 0)
 }
 
 export const api = {
+  workflowVariables: () => request<Record<string, Array<{ name: string; type: string; label: string }>>>('/api/workflow-node-types/variables'),
   getSystemStatus: () => request<SystemStatus>('/api/system/status'),
   listProjects: () => request<Project[]>('/api/projects'),
   createProject: (name: string, description = '') => request<Project>('/api/projects', { method: 'POST', body: JSON.stringify({ name, description }) }, 15_000),

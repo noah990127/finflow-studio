@@ -216,6 +216,7 @@ public class WorkflowRunService {
         var run = get(runId);
         var context = new LinkedHashMap<String, Map<String, Object>>(reusable);
         var byId = document.nodes().stream().collect(java.util.stream.Collectors.toMap(NodeDefinition::id, node -> node));
+        context.replaceAll((id, value) -> byId.containsKey(id) ? WorkflowVariables.publish(byId.get(id).type(), value) : value);
         try {
             var order = definitions.topologicalOrder(document);
             var completed = 0;
@@ -233,11 +234,31 @@ public class WorkflowRunService {
                 var activityId = facts.beginActivity(runId, node.id(), activityType(node.type()),
                         capability(node), node.name(), Map.copyOf(upstream));
                 try {
+                    WorkflowVariables.validate(document, node);
+                    var resolvedConfig = WorkflowVariables.resolve(node.config() == null ? Map.of() : node.config(), context);
+                    var effectiveNode = new NodeDefinition(node.id(), node.type(), node.name(), node.x(), node.y(), resolvedConfig);
+                    for (var reference : WorkflowVariables.references(node.config() == null ? Map.of() : node.config())) {
+                        if (context.containsKey(reference.nodeId())) upstream.putIfAbsent(reference.nodeId(), context.get(reference.nodeId()));
+                    }
+                    var inputSource = WorkflowVariables.inputSource(resolvedConfig);
+                    if (inputSource != null) {
+                        var source = context.get(inputSource.nodeId());
+                        var selected = new LinkedHashMap<String, Object>();
+                        selected.put("text", WorkflowVariables.asText(WorkflowVariables.read(inputSource, context)));
+                        selected.put("refs", source.getOrDefault("sources", source.getOrDefault("refs", List.of())));
+                        selected.put("refIds", source.getOrDefault("refIds", List.of()));
+                        upstream.clear();
+                        upstream.put(inputSource.nodeId(), selected);
+                    }
+                    var actualInput = new LinkedHashMap<String, Map<String, Object>>();
+                    actualInput.put("config", resolvedConfig);
+                    actualInput.put("upstream", new LinkedHashMap<>(upstream));
+                    startNode(runId, node, node.type() == NodeType.REVIEW ? upstream : actualInput);
                     if (node.type() == NodeType.REVIEW) {
-                        waitForReview(runId, node, upstream, context, endProgress);
+                        waitForReview(runId, effectiveNode, upstream, context, endProgress);
                         return;
                     }
-                    var output = executeNode(run, runId, node, upstream, context, startProgress, endProgress);
+                    var output = WorkflowVariables.publish(node.type(), executeNode(run, runId, effectiveNode, upstream, context, startProgress, endProgress));
                     context.put(node.id(), output);
                     facts.completeActivity(activityId, "SUCCEEDED", output, "");
                     facts.recordNodeLineage(runId, node.id(), upstream, output);
@@ -431,6 +452,10 @@ public class WorkflowRunService {
         var output = new LinkedHashMap<String, Object>();
         upstream.values().forEach(output::putAll);
         output.put("upstream", upstream);
+        output.put("refs", contexts.sourceRefs(upstream));
+        output.put("refIds", contexts.refIds(upstream));
+        output.remove("sources");
+        output.remove("output");
         return output;
     }
 
@@ -550,8 +575,7 @@ public class WorkflowRunService {
 
     private Map<String, Object> searchRefs(String projectId, Map<String, Object> config) {
         var refs = knowledge.search(projectId, text(config, "query"), integer(config, "limit", 10));
-        var items = refs.stream().map(ref -> Map.<String, Object>of("id", ref.id(), "sourceName", ref.sourceName(),
-                "text", ref.text(), "location", ref.location())).toList();
+        var items = refs.stream().map(this::refMap).toList();
         return Map.of("count", items.size(), "refs", items, "refIds", refs.stream().map(ref -> ref.id()).toList());
     }
 
@@ -581,7 +605,7 @@ public class WorkflowRunService {
         var points = Arrays.stream(analysis.split("\\R"))
                 .map(String::trim).filter(line -> !line.isBlank()).toList();
         if (points.isEmpty() && !analysis.isBlank()) points = List.of(analysis);
-        return Map.of("analysis", analysis, "points", points, "refIds", refIds,
+        return Map.of("analysis", analysis, "points", points, "refIds", refIds, "refs", contexts.sourceRefs(upstream),
                 "analysisMode", mode);
     }
 
@@ -632,6 +656,8 @@ public class WorkflowRunService {
         });
         var analysis = Objects.toString(result.get("content"), "").trim();
         var snapshots = new ArrayList<Map<String, Object>>();
+        var sourceRefs = new ArrayList<Map<?, ?>>(contexts.sourceRefs(upstream));
+        var sourceIds = new LinkedHashSet<String>(contexts.refIds(upstream));
         if (result.get("used_sources") instanceof List<?> usedSources) {
             for (var raw : usedSources) {
                 if (!(raw instanceof Map<?, ?> source)) continue;
@@ -643,6 +669,11 @@ public class WorkflowRunService {
                         + "\n内容哈希：" + Objects.toString(source.get("content_hash"), "") + "\n\n" + sourceText;
                 var resource = knowledge.importBytes(projectId, title + ".md", "text/markdown",
                         markdown.getBytes(StandardCharsets.UTF_8));
+                var refId = "agent:" + resource.id();
+                sourceIds.add(refId);
+                sourceRefs.add(Map.of("id", refId, "resourceId", resource.id(), "version", resource.currentVersion(),
+                        "sourceName", title, "text", sourceText, "location", Map.of("url", url),
+                        "contentHash", Objects.toString(source.get("content_hash"), "")));
                 facts.recordExternalSource(runId, node.id(), resource.id(), resource.currentVersion(), url,
                         Objects.toString(source.get("content_hash"), ""));
                 snapshots.add(Map.of("resourceId", resource.id(), "version", resource.currentVersion(),
@@ -658,7 +689,8 @@ public class WorkflowRunService {
         output.put("sourceSnapshots", snapshots);
         output.put("externalResearch", externalResearch);
         output.put("toolCalls", result.getOrDefault("tool_calls", 0));
-        output.put("refIds", contexts.refIds(context));
+        output.put("refIds", List.copyOf(sourceIds));
+        output.put("refs", List.copyOf(sourceRefs));
         return Map.copyOf(output);
     }
 

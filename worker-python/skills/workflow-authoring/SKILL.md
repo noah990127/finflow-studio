@@ -30,6 +30,18 @@ Workflow is a tool the Agent can call, not the Agent runtime. Use workflows to m
 ## Citation And Provenance
 Workflow run outputs must preserve upstream resource, dataset, tool, node, run id, and artifact provenance.
 
+## Node Variables
+`workflow.open` returns the workflow definition and `nodeOutputs` with each node's output fields and types.
+Use stable node IDs from that response, never display names or invented IDs. Connect dependencies before referencing them.
+Text requirements (`prompt`, `generationPrompt`, `instruction`, `requirements`, `query`) support
+`{{#node_id.output#}}` and nested object/array paths such as `{{#node_id.sources.0.sourceName#}}`.
+For analysis, Agent, and deliverable nodes, bind their input content explicitly with
+`config.inputSource = {"nodeId": "analysis_id", "path": ["output"]}`.
+Omitting inputSource preserves automatic collection from directly connected upstream nodes.
+Use field selectors only from reachable ancestors. Missing variables fail validation or execution;
+never replace a missing value with invented content. Do not interpolate variables into SQL or executable scripts.
+Preserve `sources` and `refIds` across analysis and generation; switching off visible citations does not remove provenance.
+
 ## Failure Strategy
 If required inputs are missing, create a draft workflow with placeholders only when the user asked for a draft. If run fails, report failed node, logs, and recoverable next steps.
 

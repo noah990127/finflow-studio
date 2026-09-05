@@ -11,6 +11,13 @@ import java.util.Map;
 @RequestMapping("/api/workflow-node-types")
 public class WorkflowNodeRegistryController {
 
+    @GetMapping("/variables")
+    public Map<String, List<WorkflowVariables.Field>> variables() {
+        var result = new java.util.LinkedHashMap<String, List<WorkflowVariables.Field>>();
+        for (var type : WorkflowModels.NodeType.values()) result.put(type.name(), WorkflowVariables.outputs(type));
+        return result;
+    }
+
     @GetMapping
     public List<NodeTypeDescriptor> list() {
         return List.of(
