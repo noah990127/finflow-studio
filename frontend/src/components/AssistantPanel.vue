@@ -10,6 +10,7 @@ import { useAssistantStore } from '../stores/assistant'
 import type { AssistantMessage, Project } from '../api/client'
 import { businessError, businessText } from '../domain/workProgress'
 import AssistantModelSettings from './AssistantModelSettings.vue'
+import { createComposerKeyboard } from '../domain/composerKeyboard'
 
 const props = defineProps<{ project: Project | null }>()
 const emit = defineEmits<{ workbenchAction: [action: Record<string, unknown>] }>()
@@ -135,11 +136,7 @@ function clock(value: string) {
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? '' : date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
 }
-function handleComposerKeydown(event: KeyboardEvent) {
-  if (event.isComposing || event.key !== 'Enter' || event.shiftKey) return
-  event.preventDefault()
-  send()
-}
+const composerKeyboard = createComposerKeyboard(send)
 function resizeComposer() {
   const element = composer.value
   if (!element) return
@@ -369,7 +366,7 @@ onBeforeUnmount(() => {
     <footer class="assistant-composer">
       <div class="assistant-context-chip"><span></span>{{ contextLabel }}</div>
       <div class="assistant-composer-box">
-        <textarea ref="composer" v-model="assistant.input" rows="1" placeholder="向 Agent 交代任务或继续追问" @keydown="handleComposerKeydown"></textarea>
+        <textarea ref="composer" v-model="assistant.input" rows="1" placeholder="向 Agent 交代任务或继续追问" @keydown="composerKeyboard.keydown" @compositionstart="composerKeyboard.compositionStart" @compositionend="composerKeyboard.compositionEnd" @blur="composerKeyboard.blur"></textarea>
         <button v-if="assistant.canInterrupt || assistant.stopping" class="send-button stop" type="button" :title="assistant.stopping ? '正在中断' : '中断当前任务'" :disabled="assistant.stopping" @click="assistant.cancel"><LoaderCircle v-if="assistant.stopping" :size="14" class="assistant-spinner" /><Square v-else :size="14" /></button>
         <button v-else class="send-button" type="button" title="发送" :disabled="assistant.busy || assistant.stopping || !assistant.input.trim()" @click="send"><ArrowUp :size="18" /></button>
       </div>
