@@ -347,17 +347,11 @@ async function applyAssistantAction(detail: AssistantWorkbenchAction) {
 function handleAssistantAction(event: Event) {
   void applyAssistantAction((event as CustomEvent<AssistantWorkbenchAction>).detail)
 }
-let workspaceRefreshTimer: number | undefined
-function refreshVisibleWorkspace() { if (!document.hidden) void loadWorkspace() }
 onMounted(() => {
   window.addEventListener('finflow:assistant-action', handleAssistantAction)
-  window.addEventListener('focus', refreshVisibleWorkspace)
-  workspaceRefreshTimer = window.setInterval(refreshVisibleWorkspace, 5000)
 })
 onBeforeUnmount(() => {
   window.removeEventListener('finflow:assistant-action', handleAssistantAction)
-  window.removeEventListener('focus', refreshVisibleWorkspace)
-  window.clearInterval(workspaceRefreshTimer)
 })
 watch(activeTab, tab => {
   if (!tab) return
