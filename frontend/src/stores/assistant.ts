@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { api, type AssistantEvent, type AssistantMessage, type AssistantSession, type ContextSnapshot, type Plan, type Run, type Selection } from '../api/client'
 import { useProjectsStore } from './projects'
+import { businessText, workProgress } from '../domain/workProgress'
 
 type TimelineItem = {
   id: string
@@ -17,6 +18,7 @@ type TimelineItem = {
   error?: string
   status?: string
   progress?: number
+  technicalDetail?: string
 }
 
 const eventTypes = [
@@ -209,9 +211,10 @@ export const useAssistantStore = defineStore('assistant', {
       if (Number.isFinite(value)) this.progress = Math.max(0, Math.min(100, value))
       const message = String(payload.message ?? payload.result ?? payload.summary ?? '').trim()
       const title = String(payload.title ?? this.eventTitle(event.type)).trim()
+      const publicProgress = workProgress({ type: event.type, message, toolName: String(payload.toolName ?? payload.tool ?? ''), status: String(payload.status ?? ''), error: typeof payload.error === 'string' ? payload.error : undefined })
       if (message) {
-        this.progressLabel = message
-        this.streamLines.push(message)
+        this.progressLabel = publicProgress.detail
+        this.streamLines.push(publicProgress.detail)
         this.streamLines = this.streamLines.slice(-12)
       }
       if (event.type === 'assistant.request.received' || event.type === 'assistant.run.queued' || event.type === 'assistant.run.started' || event.type === 'assistant.step.started') this.streaming = true
@@ -245,9 +248,10 @@ export const useAssistantStore = defineStore('assistant', {
       const isPublicActivity = event.type.startsWith('agent.')
         || event.type === 'assistant.request.received'
         || event.type === 'assistant.context.started'
-      if (isPublicActivity && title && message) this.pushTimeline(`event-${event.eventSeq}`, title, message,
-          event.type.endsWith('completed') || event.type === 'agent.observation' || event.type === 'agent.completed' ? 'success' : event.type.includes('failed') || event.type.includes('confirmation') ? 'warning' : 'info',
+      if (isPublicActivity && title && message) this.pushTimeline(`event-${event.eventSeq}`, publicProgress.title, publicProgress.detail,
+          payload.error || String(payload.status).toLowerCase() === 'failed' || event.type.includes('failed') || event.type.includes('confirmation') ? 'warning' : event.type.endsWith('completed') ? 'success' : 'info',
           event.createdAt, {
+            technicalDetail: message,
             kind: this.eventKind(event.type),
             eventType: event.type,
             toolName: typeof payload.toolName === 'string' ? payload.toolName : typeof payload.tool === 'string' ? payload.tool : undefined,
@@ -310,7 +314,7 @@ export const useAssistantStore = defineStore('assistant', {
       if (this.timeline.some(item => item.id === id)) return
       const latest = this.timeline.at(-1)
       if (latest?.title === title && latest.detail === detail) return
-      this.timeline.push({ id, title, detail, tone, time, kind: 'thinking', ...extra })
+      this.timeline.push({ id, title: businessText(title, '处理当前工作'), detail: businessText(detail), tone, time, kind: 'thinking', technicalDetail: detail, ...extra })
       this.timeline.sort((left, right) => new Date(left.time).getTime() - new Date(right.time).getTime())
     },
     async refreshPlan(planId: string) {

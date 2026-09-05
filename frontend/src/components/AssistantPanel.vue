@@ -8,6 +8,7 @@ import {
 } from 'lucide-vue-next'
 import { useAssistantStore } from '../stores/assistant'
 import type { AssistantMessage, Project } from '../api/client'
+import { businessError, businessText } from '../domain/workProgress'
 
 const props = defineProps<{ project: Project | null }>()
 const emit = defineEmits<{ workbenchAction: [action: Record<string, unknown>] }>()
@@ -29,7 +30,7 @@ const running = computed(() => ['QUEUED', 'RUNNING'].includes(assistant.run?.sta
 const controlsLocked = computed(() => assistant.busy || ['QUEUED', 'RUNNING'].includes(assistant.run?.status ?? ''))
 const waitingConfirmation = computed(() => assistant.needsConfirmation && (!assistant.run || assistant.run.status === 'WAITING_CONFIRMATION'))
 const taskState = computed(() => {
-  if (assistant.error || assistant.run?.status === 'FAILED') return { code: 'failed', label: '未完成', detail: assistant.error || assistant.run?.resultSummary || '执行遇到问题' }
+  if (assistant.error || assistant.run?.status === 'FAILED') return { code: 'failed', label: '未完成', detail: businessError(assistant.error || assistant.run?.resultSummary || '执行遇到问题') }
   if (assistant.run?.status === 'CANCELED') return { code: 'canceled', label: '已停止', detail: '后续步骤没有继续执行' }
   if (assistant.run?.status === 'ROLLED_BACK') return { code: 'completed', label: '已撤销', detail: '已恢复到执行前状态' }
   if (assistant.run?.status === 'SUCCEEDED') return { code: 'completed', label: '已完成', detail: '' }
@@ -282,7 +283,7 @@ onBeforeUnmount(() => {
             <AlertCircle v-else-if="taskState.code === 'failed' || taskState.code === 'canceled'" :size="16" />
             <Circle v-else :size="14" />
             <strong>{{ taskState.label }}</strong>
-            <span v-if="taskState.detail">{{ taskState.detail }}</span>
+            <span v-if="taskState.detail">{{ businessText(taskState.detail) }}</span>
           </div>
 
           <div v-if="assistant.plan" class="assistant-inline-progress">
@@ -297,7 +298,7 @@ onBeforeUnmount(() => {
             <div class="assistant-live-list">
               <article v-for="item in liveActivities" :key="item.id" :data-tone="item.tone">
                 <span><component :is="activityIcon(item.kind)" :size="13" /></span>
-                <div><strong>{{ item.title }}</strong><p>{{ item.detail }}</p><code v-if="item.toolName">{{ item.toolName }}<template v-if="item.argumentSummary"> · {{ item.argumentSummary }}</template></code></div>
+                <div><strong>{{ item.title }}</strong><p>{{ item.detail }}</p></div>
                 <small>{{ activityStatus(item) }}</small>
               </article>
               <article v-if="!liveActivities.length" class="assistant-live-placeholder">
@@ -308,7 +309,7 @@ onBeforeUnmount(() => {
           </section>
 
           <p v-if="assistant.assistantMessage && assistant.run?.status === 'SUCCEEDED'" class="assistant-final-answer">{{ assistant.assistantMessage }}</p>
-          <div v-if="assistant.error" class="assistant-error"><AlertCircle :size="15" /><span>{{ assistant.error }}</span></div>
+          <div v-if="assistant.error" class="assistant-error"><AlertCircle :size="15" /><span>{{ businessError(assistant.error) }}</span><details><summary>问题详情</summary><pre>{{ assistant.error }}</pre></details></div>
 
           <section v-if="assistant.plan" class="assistant-tool-group">
             <button type="button" @click="showSteps = !showSteps">
@@ -323,7 +324,7 @@ onBeforeUnmount(() => {
                   <AlertCircle v-else-if="stepState(step.order) === 'failed' || stepState(step.order) === 'canceled'" :size="14" />
                   <Circle v-else :size="10" />
                 </span>
-                <div><strong>{{ step.title }}</strong><p>{{ step.description }}</p><code>{{ step.tool }}</code></div><small>{{ stepLabel(step.order) }}</small>
+                <div><strong>{{ businessText(step.title, '处理当前步骤') }}</strong><p>{{ businessText(step.description) }}</p><details><summary>技术详情</summary><code>{{ step.tool }}</code><pre>{{ step.description }}</pre></details></div><small>{{ stepLabel(step.order) }}</small>
               </div>
             </div>
           </section>
@@ -341,9 +342,9 @@ onBeforeUnmount(() => {
                 <div>
                   <header><strong>{{ item.title }}</strong><time>{{ clock(item.time) }}</time></header>
                   <p>{{ item.detail }}</p>
-                  <code v-if="item.toolName">{{ item.toolName }}<template v-if="item.argumentSummary"> · {{ item.argumentSummary }}</template></code>
-                  <small v-if="item.resultSummary && item.resultSummary !== item.detail">结果：{{ item.resultSummary }}</small>
-                  <small v-if="item.provenanceSummary">来源：{{ item.provenanceSummary }}</small>
+                  <small v-if="item.resultSummary && item.resultSummary !== item.detail">结果：{{ businessText(item.resultSummary, '已收到这一步的处理结果') }}</small>
+                  <small v-if="item.provenanceSummary">来源：{{ businessText(item.provenanceSummary, '已记录所用资料') }}</small>
+                  <details v-if="item.toolName || item.technicalDetail" class="assistant-error-detail"><summary>技术详情</summary><code>{{ item.toolName }}<template v-if="item.argumentSummary"> · {{ item.argumentSummary }}</template></code><pre>{{ item.technicalDetail }}</pre></details>
                   <details v-if="item.error" class="assistant-error-detail"><summary>错误详情</summary><pre>{{ item.error }}</pre></details>
                 </div>
               </article>
