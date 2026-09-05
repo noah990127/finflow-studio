@@ -9,6 +9,7 @@ import {
 import { useAssistantStore } from '../stores/assistant'
 import type { AssistantMessage, Project } from '../api/client'
 import { businessError, businessText } from '../domain/workProgress'
+import AssistantModelSettings from './AssistantModelSettings.vue'
 
 const props = defineProps<{ project: Project | null }>()
 const emit = defineEmits<{ workbenchAction: [action: Record<string, unknown>] }>()
@@ -247,6 +248,7 @@ onBeforeUnmount(() => {
           <button type="button" :class="{ active: assistant.executionMode === 'APPROVAL' }" :disabled="controlsLocked" title="修改前需要确认" @click="assistant.setExecutionMode('APPROVAL')"><ShieldCheck :size="13" />审批</button>
         </div>
       </div>
+      <AssistantModelSettings :session-id="assistant.sessionId" :disabled="controlsLocked || waitingConfirmation || assistant.stopping" />
     </header>
 
     <div ref="conversation" class="assistant-body assistant-conversation" @scroll.passive="handleConversationScroll" @wheel.passive="handleConversationWheel">

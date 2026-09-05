@@ -420,3 +420,11 @@ create table if not exists workspace_resource_location (
 
 create index if not exists idx_workspace_folder_project on workspace_folder(project_id, root_kind, parent_id, sort_order);
 create index if not exists idx_workspace_location_folder on workspace_resource_location(folder_id);
+
+create table if not exists assistant_model_settings (
+    session_id varchar(64) primary key references assistant_session(id) on delete cascade,
+    mode varchar(16) not null,
+    base_url varchar(2000) not null,
+    model varchar(200) not null,
+    encrypted_key text not null
+);

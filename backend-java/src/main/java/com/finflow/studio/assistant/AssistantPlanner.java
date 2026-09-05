@@ -18,8 +18,12 @@ import java.util.regex.Pattern;
 @Component
 public class AssistantPlanner {
     private final WorkerClient worker;
+    private final AssistantModelSettings models;
 
-    public AssistantPlanner(WorkerClient worker) { this.worker = worker; }
+    public AssistantPlanner(WorkerClient worker) { this(worker, null); }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public AssistantPlanner(WorkerClient worker, AssistantModelSettings models) { this.worker = worker; this.models = models; }
 
     public PlannedWork plan(String goal, String page, Selection selection) {
         return plan(goal, page, selection, WorkspaceContext.empty());
@@ -165,6 +169,8 @@ public class AssistantPlanner {
                     false, Map.of(), 0));
         } catch (RuntimeException exception) {
             if (Thread.currentThread().isInterrupted()) throw new java.util.concurrent.CancellationException();
+            if (models != null && "CUSTOM".equals(models.get(sessionId).mode()))
+                throw new IllegalStateException("自定义模型请求失败，请检查连接、模型名称和工具调用支持；未切换到默认模型。");
             return null;
         }
         var steps = parseAgentSteps(response, goal, page, context);
@@ -214,6 +220,10 @@ public class AssistantPlanner {
         request.put("continuation", continuation);
         request.put("observation", observation == null ? Map.of() : observation);
         request.put("completed_actions", completedActions);
+        if (models != null) {
+            var model = models.resolve(sessionId);
+            if (!model.isEmpty()) request.put("model_config", model);
+        }
         return request;
     }
 

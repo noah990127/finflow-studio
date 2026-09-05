@@ -8,6 +8,7 @@ from typing import Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, Request
 from ..runtime.interruptions import ClientDisconnected, until_disconnected
+from ..agent.model_config import AgentModelConfig, test_model
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from starlette.background import BackgroundTask
 
@@ -138,12 +139,19 @@ async def plan_agent_task(request: AgentPlanRequest, http_request: Request) -> A
         result = await until_disconnected(plan_with_agent(request), http_request.is_disconnected)
     except ClientDisconnected as exception:
         raise HTTPException(status_code=499, detail="Agent request interrupted") from exception
-    except RuntimeError as exception:
+    except Exception as exception:
+        if request.model_config_override is not None:
+            raise HTTPException(status_code=503, detail="自定义模型请求失败，请检查连接与工具调用支持") from None
         logger.exception("Agent planning failed for session %s", request.session_id)
         raise HTTPException(status_code=503, detail=str(exception)) from exception
     if result is None:
         raise HTTPException(status_code=503, detail="Agent 模型尚未配置")
     return result
+
+
+@app.post("/v1/agent/model/test")
+async def test_agent_model(config: AgentModelConfig):
+    return await test_model(config)
 
 
 @app.post("/v1/agent/tasks/stream")

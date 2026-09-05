@@ -111,6 +111,7 @@ public class AssistantService {
 
     @Transactional
     public MessageResponse sendMessage(String sessionId, MessageRequest request) {
+        jdbc.sql("select id from assistant_session where id = :id for update").param("id", sessionId).query(String.class).single();
         var session = getSession(sessionId);
         var requestId = request.requestId() == null ? UUID.randomUUID().toString() : request.requestId();
         var interruption = interruptions.token(sessionId, requestId);

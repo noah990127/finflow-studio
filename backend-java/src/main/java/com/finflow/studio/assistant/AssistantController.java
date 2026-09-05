@@ -17,13 +17,45 @@ public class AssistantController {
     private final AssistantExecutionService execution;
     private final AssistantEventService events;
     private final AgentMemoryService memory;
+    private final AssistantModelSettings models;
+    private final com.finflow.studio.worker.WorkerClient worker;
 
     public AssistantController(AssistantService assistant, AssistantExecutionService execution,
-                               AssistantEventService events, AgentMemoryService memory) {
+                               AssistantEventService events, AgentMemoryService memory, AssistantModelSettings models,
+                               com.finflow.studio.worker.WorkerClient worker) {
         this.assistant = assistant;
         this.execution = execution;
         this.events = events;
         this.memory = memory;
+        this.models = models;
+        this.worker = worker;
+    }
+
+    @GetMapping("/assistant/sessions/{sessionId}/model")
+    AssistantModelSettings.Settings model(@PathVariable String sessionId) {
+        assistant.getSession(sessionId);
+        return models.get(sessionId);
+    }
+
+    @PutMapping("/assistant/sessions/{sessionId}/model")
+    AssistantModelSettings.Settings saveModel(@PathVariable String sessionId, @RequestBody AssistantModelSettings.Update update) {
+        assistant.getSession(sessionId);
+        return models.save(sessionId, update);
+    }
+
+    @DeleteMapping("/assistant/sessions/{sessionId}/model")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    void clearModel(@PathVariable String sessionId) {
+        assistant.getSession(sessionId);
+        models.clear(sessionId);
+    }
+
+    @PostMapping("/assistant/sessions/{sessionId}/model/test")
+    Map<String, Object> testModel(@PathVariable String sessionId, @RequestBody AssistantModelSettings.Update update) {
+        assistant.getSession(sessionId);
+        var config = models.testConfiguration(sessionId, update);
+        try { return worker.testAgentModel(config); }
+        catch (RuntimeException ignored) { throw new IllegalStateException("连接测试失败，请检查服务地址、密钥和模型名称"); }
     }
 
     @PostMapping("/projects/{projectId}/assistant/sessions")

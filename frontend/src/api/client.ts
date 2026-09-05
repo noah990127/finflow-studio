@@ -23,6 +23,8 @@ export type MessageResponse = { sessionId: string; assistantMessage: string; con
 export type AssistantEvent = { eventId: string; eventSeq: number; sessionId: string; runId?: string; type: string; payload: Record<string, unknown>; createdAt: string }
 export type AssistantMessage = { id: string; role: 'USER' | 'ASSISTANT' | 'SYSTEM'; content: string; modelName?: string; traceId: string; createdAt: string }
 export type AssistantSession = { id: string; projectId: string; title: string; status: string; createdAt: string; updatedAt: string }
+export type AgentModelSettings = { mode: 'DEFAULT' | 'CUSTOM'; baseUrl: string; model: string; hasKey: boolean }
+export type AgentModelUpdate = { mode: 'DEFAULT' | 'CUSTOM'; baseUrl?: string; model?: string; apiKey?: string }
 export type WorkflowNodeType = 'RESOURCE' | 'ACQUIRE' | 'PROCESS' | 'AGENT_TASK' | 'TOOL' | 'CONTROL' | 'SUB_WORKFLOW' | 'OUTPUT' | 'FILE_INPUT' | 'LINK_INPUT' | 'DATASET_INPUT' | 'DATA_EXTRACT' | 'DATA_TRANSFORM' | 'SPREADSHEET_TRANSFORM' | 'REF_SEARCH' | 'AI_ANALYSIS' | 'REVIEW' | 'DELIVERABLE'
 export type WorkflowNode = { id: string; type: WorkflowNodeType; name: string; x: number; y: number; config: Record<string, unknown> }
 export type WorkflowEdge = { id: string; source: string; target: string }
@@ -74,6 +76,10 @@ async function request<T>(url: string, options: RequestInit = {}, timeoutMs = 0)
 }
 
 export const api = {
+  getAgentModel: (id: string) => request<AgentModelSettings>(`/api/assistant/sessions/${id}/model`),
+  saveAgentModel: (id: string, body: AgentModelUpdate) => request<AgentModelSettings>(`/api/assistant/sessions/${id}/model`, { method: 'PUT', body: JSON.stringify(body) }),
+  clearAgentModel: (id: string) => request<void>(`/api/assistant/sessions/${id}/model`, { method: 'DELETE' }),
+  testAgentModel: (id: string, body: AgentModelUpdate) => request<{ success: boolean; message: string }>(`/api/assistant/sessions/${id}/model/test`, { method: 'POST', body: JSON.stringify(body) }, 40_000),
   workflowVariables: () => request<Record<string, Array<{ name: string; type: string; label: string }>>>('/api/workflow-node-types/variables'),
   getSystemStatus: () => request<SystemStatus>('/api/system/status'),
   listProjects: () => request<Project[]>('/api/projects'),

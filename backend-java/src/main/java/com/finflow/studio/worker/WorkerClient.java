@@ -164,6 +164,15 @@ public class WorkerClient {
         return result;
     }
 
+    public Map<String, Object> testAgentModel(Object request) {
+        var result = client.post().uri("/v1/agent/model/test").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(request).retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {})
+                .timeout(Duration.ofSeconds(35)).block();
+        if (result == null) throw new IllegalStateException("模型未返回测试结果");
+        return result;
+    }
+
     static String workerError(int statusCode, String body) {
         try {
             var detail = OBJECT_MAPPER.readTree(body).path("detail");

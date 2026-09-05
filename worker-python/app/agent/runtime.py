@@ -10,6 +10,7 @@ from ..config import settings
 from ..llm import llm
 from ..research import fetch_web, search_web
 from ..skills.loader import Skill, load_skills
+from .model_config import AgentModelConfig, custom_model
 
 
 _AGENT_CHECKPOINTER = None
@@ -47,6 +48,7 @@ class AgentMessage(BaseModel):
 
 
 class AgentPlanRequest(BaseModel):
+    model_config_override: Optional[AgentModelConfig] = Field(default=None, alias="model_config", repr=False)
     session_id: str = ""
     execution_mode: str = "APPROVAL"
     continuation: bool = False
@@ -171,9 +173,9 @@ def build_workbench_tools(deps: AgentDependencies):
 
 
 async def plan_with_agent(request: AgentPlanRequest, model_override: Any = None) -> Optional[AgentPlanResponse]:
-    if not settings.agent_enabled or (not llm.configured and model_override is None):
+    if not settings.agent_enabled or (not llm.configured and model_override is None and request.model_config_override is None):
         return None
-    model = model_override or _model()
+    model = model_override or (custom_model(request.model_config_override) if request.model_config_override else _model())
     if model is None:
         return None
 
