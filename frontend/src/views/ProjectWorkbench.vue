@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { Braces, ChevronDown, ChevronRight, Database, File, FileOutput, FileSpreadsheet, FileText, Folder, FolderInput, FolderOpen, FolderPlus, Globe2, LayoutGrid, MoreHorizontal, Pencil, Plus, Search, Server, Trash2, Upload, Workflow as WorkflowIcon, X } from 'lucide-vue-next'
+import { Braces, ChevronDown, ChevronRight, Database, File, FileOutput, FileSpreadsheet, FileText, Folder, FolderInput, FolderOpen, FolderPlus, Globe2, LayoutGrid, LogOut, MoreHorizontal, Pencil, Plus, Search, Server, Trash2, Upload, Workflow as WorkflowIcon, X } from 'lucide-vue-next'
 import AssistantPanel from '../components/AssistantPanel.vue'
 import ResourceWorkbench from '../components/ResourceWorkbench.vue'
 import ResourceTreeFolder from '../components/ResourceTreeFolder.vue'
@@ -13,6 +13,7 @@ import { useAssistantStore } from '../stores/assistant'
 type Tab = { id: string; title: string; kind: 'home' | 'workflow' | 'data' | 'resource'; resource?: WorkspaceResource; workflowId?: string }
 type UiRoot = 'DATA' | 'KNOWLEDGE' | 'OUTPUT'
 const props = defineProps<{ project: Project | null; loading: boolean; error: string }>()
+const emit = defineEmits<{ logout: [] }>()
 const projectStore = useProjectsStore()
 const assistant = useAssistantStore()
 const workspace = ref<ProjectWorkspace | null>(null), search = ref(''), notice = ref(''), loadingWorkspace = ref(false), workflowKey = ref(0)
@@ -373,7 +374,7 @@ watch(() => props.project?.id, (id, previousId) => {
 <template>
   <div class="project-shell" :class="{ 'workflow-mode': activeTab?.kind === 'workflow', 'assistant-open': assistant.open }">
     <aside class="resource-sidebar">
-      <div class="workbench-brand"><span>F</span><div><strong>FinBTP Studio</strong><small>个人专注工作台</small></div></div>
+      <div class="workbench-brand"><span>F</span><div><strong>FinBTP Studio</strong><small>个人专注工作台</small></div><button class="workbench-logout" type="button" title="退出登录" @click="emit('logout')"><LogOut :size="16"/></button></div>
       <button class="project-switcher" type="button" @click="openProjectManager"><div><small>当前项目</small><strong>{{ project?.name ?? '正在打开' }}</strong></div><ChevronDown :size="15"/></button>
       <div class="resource-search-row"><label class="resource-search"><Search :size="15"/><input v-model="search" placeholder="查找项目内容"></label><button type="button" title="新建目录" @click="startFolder('FILES')"><FolderPlus :size="16"/></button></div>
       <section class="workflow-navigator"><header><WorkflowIcon :size="15"/><strong>工作流</strong><span>{{ workspace?.workflows?.length ?? 0 }}</span><button type="button" title="新建工作流" @click="createWorkflow"><Plus :size="13"/></button></header><div><article v-for="item in workspace?.workflows ?? []" :key="item.id" :class="{ active: activeTab?.workflowId === item.id }"><button type="button" @click="openWorkflow(item.id)"><span>{{ item.name }}</span><small>第 {{ item.currentVersion }} 版 · {{ item.status === 'READY' ? '可运行' : '草稿' }}</small></button><button class="workflow-delete" type="button" title="删除工作流" @click="deleteWorkflow(item.id, item.name)"><Trash2 :size="12"/></button></article></div></section>

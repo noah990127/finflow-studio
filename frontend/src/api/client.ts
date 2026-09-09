@@ -9,6 +9,7 @@ export type ExtractJob = { id: string; name: string; connectionId: string; statu
 export type FileResource = { id: string; projectId: string; name: string; mediaType: string; status: string; currentVersion: number; sizeBytes: number; checksum: string; parseStatus: string; parseMessage: string; updatedAt: string }
 export type KnowledgeRef = { id: string; resourceId: string; sourceName: string; text: string; location: Record<string, unknown>; score: number }
 export type Deliverable = { id: string; name: string; format: string; currentVersion: number; status: string; sizeBytes: number; updatedAt: string }
+export type ArtifactQuality = { passed?: boolean; score?: number; issueCount?: number; validatorVersion?: string }
 export type PptSkill = { id: string; name: string; description: string; formats: string[]; theme: string; source: string }
 export type SpreadsheetProfile = { file_name: string; format: string; has_macros: boolean; sheets: Array<{ name: string; rows: number; columns: number; formula_count: number; merged_range_count: number }>; warnings: string[] }
 export type CsvPreview = { columns: string[]; rows: string[][]; rowOffset: number; nextCursor?: string; hasMore: boolean }
@@ -116,6 +117,7 @@ export const api = {
   previewDeliverableCsv: (id: string, cursor?: string) => request<CsvPreview>(`/api/deliverables/${id}/csv-preview?limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`),
   getFinancialReport: (id: string) => request<FinancialReportSpec>(`/api/deliverables/${id}/report-spec`),
   getDeliverableCitations: (id: string, version?: number) => request<CitationSource[]>(`/api/deliverables/${id}/citations${version ? `?version=${version}` : ''}`),
+  getDeliverableQuality: (id: string, version?: number) => request<ArtifactQuality>(`/api/deliverables/${id}/quality${version ? `?version=${version}` : ''}`),
   createSession: (projectId: string, title = '新对话') => request<AssistantSession>(`/api/projects/${projectId}/assistant/sessions`, { method: 'POST', body: JSON.stringify({ title }) }),
   listAssistantSessions: (projectId: string) => request<AssistantSession[]>(`/api/projects/${projectId}/assistant/sessions`),
   getAssistantSession: (sessionId: string) => request<AssistantSession>(`/api/assistant/sessions/${sessionId}`),

@@ -262,6 +262,13 @@ class AssistantWebDatasetFlowTest {
                 }
 
                 @Override
+                public DeliverableArtifact generateDeliverableArtifact(String format, Object request) {
+                    return new DeliverableArtifact(generateDeliverable(format, request),
+                            Map.of("passed", true, "score", 100, "issueCount", 0,
+                                    "validatorVersion", "test"));
+                }
+
+                @Override
                 public Map<String, Object> sampleDataTransform(List<DataTransformInput> inputs,
                                                                String metadataJson, String script) {
                     assertThat(inputs).singleElement().satisfies(input -> {

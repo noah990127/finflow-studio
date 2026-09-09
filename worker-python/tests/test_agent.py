@@ -22,6 +22,12 @@ def test_loads_reusable_skills_from_markdown() -> None:
         "deliverable-generation",
         "workflow-authoring",
         "workspace-operations",
+        "presentation-authoring",
+        "document-authoring",
+        "pdf-publishing",
+        "dashboard-authoring",
+        "diagram-authoring",
+        "whiteboard-authoring",
     }
     assert all(skill.instructions for skill in skills)
     assert all("Human Confirmation Boundary" in skill.instructions for skill in skills)

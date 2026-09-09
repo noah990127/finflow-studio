@@ -14,6 +14,7 @@ import org.springframework.web.reactive.function.BodyInserters;
 import java.time.Duration;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
@@ -86,19 +87,36 @@ public class WorkerClient {
         return result;
     }
 
+    public record DeliverableArtifact(byte[] content, Map<String, Object> quality) { }
+
     public byte[] generateDeliverable(String format, Object request) {
+        return generateDeliverableArtifact(format, request).content();
+    }
+
+    public DeliverableArtifact generateDeliverableArtifact(String format, Object request) {
         if (!List.of("pptx", "html_slides", "docx", "pdf", "mermaid", "excalidraw", "financial_report").contains(format)) {
             throw new IllegalArgumentException("不支持的输出格式");
         }
-        var result = client.post().uri("/v1/deliverables/" + format)
+        var response = client.post().uri("/v1/deliverables/" + format)
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(request)
                 .retrieve()
-                .bodyToMono(byte[].class)
+                .toEntity(byte[].class)
                 .timeout(Duration.ofMinutes(5))
                 .block();
-        if (result == null || result.length == 0) throw new IllegalStateException("输出文件生成失败");
-        return result;
+        var content = response == null ? null : response.getBody();
+        if (content == null || content.length == 0) throw new IllegalStateException("输出文件生成失败");
+        var quality = new LinkedHashMap<String, Object>();
+        quality.put("passed", Boolean.parseBoolean(response.getHeaders().getFirst("X-FinFlow-Quality-Passed")));
+        quality.put("score", parseHeaderInt(response.getHeaders().getFirst("X-FinFlow-Quality-Score")));
+        quality.put("issueCount", parseHeaderInt(response.getHeaders().getFirst("X-FinFlow-Quality-Issues")));
+        quality.put("validatorVersion", String.valueOf(response.getHeaders().getFirst("X-FinFlow-Validator-Version")));
+        return new DeliverableArtifact(content, Map.copyOf(quality));
+    }
+
+    private int parseHeaderInt(String value) {
+        try { return Integer.parseInt(value); }
+        catch (NumberFormatException exception) { return 0; }
     }
 
     public List<Map<String, Object>> listPptSkills() {

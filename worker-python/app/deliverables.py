@@ -8,6 +8,7 @@ from typing import Iterable, List, Optional
 
 from docx import Document
 from lxml.etree import SubElement
+from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Inches as DocxInches, Pt, RGBColor
 from pptx import Presentation
@@ -181,13 +182,13 @@ def _first_metric(value: str) -> str:
 def _html_slides_document(title: str, slides: str, chart_data: str) -> str:
     return f"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="generator" content="FinBTP Studio · Frontend Slides inspired"><title>{escape(title)}</title>
+<meta name="generator" content="FinBTP Studio"><title>{escape(title)}</title>
 <style>
 :root{{--paper:#f7f8fa;--ink:#18202c;--muted:#647286;--line:#dce2e9;--blue:#1769e0;--teal:#0b9f91;--coral:#f05a47;--yellow:#f2bd42}}
 *{{box-sizing:border-box}}html,body{{width:100%;height:100%;margin:0;overflow:hidden;background:#0f1722;color:var(--ink);font-family:Inter,"Microsoft YaHei","PingFang SC",Arial,sans-serif}}
 .deck{{position:relative;width:100%;height:100%;display:grid;place-items:center}}.stage{{position:relative;width:min(100vw,calc(100vh * 16 / 9));height:min(100vh,calc(100vw * 9 / 16));overflow:hidden;background:var(--paper);box-shadow:0 28px 90px #0008}}
 .slide{{position:absolute;inset:0;display:none;padding:5.8% 6.6% 5.2%;background:var(--paper);overflow:hidden}}.slide.active{{display:block}}.slide.active .layout>*{{animation:rise .55s cubic-bezier(.2,.8,.2,1) both}}.slide.active .layout>*:nth-child(2){{animation-delay:.09s}}@keyframes rise{{from{{opacity:0;transform:translateY(18px)}}to{{opacity:1;transform:none}}}}
-.cover{{padding:8% 8.4%;background:linear-gradient(120deg,#f8fbff 0 68%,#e8f1ff 68%)}}.cover:after{{content:"";position:absolute;right:6%;bottom:7%;width:28%;height:9px;background:linear-gradient(90deg,var(--blue) 0 58%,var(--coral) 58% 78%,var(--yellow) 78%)}}.cover-kicker{{font-size:clamp(11px,1vw,19px);font-weight:800;color:var(--blue);letter-spacing:.12em}}.cover-rule{{width:8%;height:7px;margin:4.5% 0 3%;background:var(--coral)}}.cover h1{{max-width:78%;margin:0;font-size:clamp(38px,5vw,82px);line-height:1.12;letter-spacing:0}}.cover p{{max-width:68%;margin:2.2% 0 0;color:var(--muted);font-size:clamp(16px,1.7vw,29px);line-height:1.5}}.cover-meta{{position:absolute;left:8.4%;bottom:8%;display:flex;gap:28px;color:var(--muted);font-size:clamp(10px,.85vw,15px)}}
+.cover{{padding:8% 8.4%;background:linear-gradient(120deg,#f8fbff 0 68%,#e8f1ff 68%)}}.cover:after{{content:"";position:absolute;right:6%;bottom:7%;width:28%;height:9px;background:linear-gradient(90deg,var(--blue) 0 58%,var(--coral) 58% 78%,var(--yellow) 78%)}}.cover-kicker{{font-size:clamp(11px,1vw,19px);font-weight:800;color:var(--blue);letter-spacing:0}}.cover-rule{{width:8%;height:7px;margin:4.5% 0 3%;background:var(--coral)}}.cover h1{{max-width:78%;margin:0;font-size:clamp(38px,5vw,82px);line-height:1.12;letter-spacing:0}}.cover p{{max-width:68%;margin:2.2% 0 0;color:var(--muted);font-size:clamp(16px,1.7vw,29px);line-height:1.5}}.cover-meta{{position:absolute;left:8.4%;bottom:8%;display:flex;gap:28px;color:var(--muted);font-size:clamp(10px,.85vw,15px)}}
 .slide-header{{height:12%;display:grid;grid-template-columns:4.5% 1fr auto;align-items:start;gap:1.4%;border-bottom:2px solid var(--line)}}.slide-header span{{padding-top:4px;color:var(--coral);font-weight:800;font-size:clamp(12px,1vw,19px)}}.slide-header h2{{margin:0;font-size:clamp(24px,2.7vw,45px);line-height:1.1;letter-spacing:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}.slide-header em{{font-style:normal;font-weight:800;font-size:clamp(9px,.8vw,14px)}}.layout{{height:76%;padding-top:4.2%}}
 .statement-layout{{display:grid;grid-template-columns:1.12fr .88fr;gap:7%;align-items:stretch}}.statement{{border-left:9px solid var(--coral);padding:4% 4% 3% 6%;display:flex;flex-direction:column;justify-content:center}}small,.insights h3{{color:var(--blue);font-weight:800;font-size:clamp(11px,1vw,18px)}}.statement h3,.editorial-lead h3{{margin:7% 0 0;font-size:clamp(26px,3.15vw,52px);line-height:1.27;letter-spacing:0}}.evidence,.insights ol,.editorial-layout ol{{list-style:none;margin:0;padding:0;display:grid;align-content:center}}.evidence li,.insights li,.editorial-layout li{{display:grid;grid-template-columns:11% 1fr;gap:4%;padding:6% 0;border-bottom:2px solid var(--line)}}.evidence span,.insights span,.editorial-layout span{{color:var(--coral);font-weight:800}}li p{{margin:0;font-size:clamp(15px,1.45vw,25px);line-height:1.45}}
 .chart-layout{{display:grid;grid-template-columns:1.65fr .75fr;gap:5%}}.chart{{min-width:0;height:100%;background:#fff;border-left:7px solid var(--blue);padding:3%}}.chart svg{{width:100%;height:100%;overflow:visible}}.chart-title{{font-size:23px;font-weight:800;fill:var(--ink)}}.chart-label{{font-size:13px;fill:var(--muted)}}.insights{{padding-top:2%}}.insights h3{{margin:0 0 4%}}.insights li{{grid-template-columns:13% 1fr;padding:8% 0}}
@@ -197,7 +198,7 @@ def _html_slides_document(title: str, slides: str, chart_data: str) -> str:
 .controls{{position:absolute;z-index:20;left:50%;bottom:14px;transform:translateX(-50%);display:flex;align-items:center;gap:10px;padding:7px 10px;border:1px solid #ffffff2e;background:#111a27d9;color:#fff;backdrop-filter:blur(10px)}}.controls button{{width:32px;height:28px;border:0;background:transparent;color:#fff;font-size:18px;cursor:pointer}}.controls span{{min-width:64px;text-align:center;font-size:12px}}.progress{{position:absolute;z-index:21;left:0;bottom:0;height:4px;background:var(--coral);transition:width .3s ease}}.format-note{{position:absolute;z-index:20;right:14px;top:12px;padding:6px 9px;background:#111a27c9;color:#dce7f6;font-size:10px}}
 @media(max-width:720px){{.controls{{bottom:7px}}.format-note{{display:none}}}}
 @media(prefers-reduced-motion:reduce){{.slide.active .layout>*{{animation:none}}}}
-</style></head><body><main class="deck"><div class="stage" id="stage">{slides}</div><div class="format-note">网页演示 · HTML + JS · 非 PowerPoint 文件</div><nav class="controls" aria-label="演示控制"><button id="prev" aria-label="上一页">‹</button><span id="counter"></span><button id="next" aria-label="下一页">›</button><button id="full" aria-label="全屏">⛶</button></nav><div class="progress" id="progress"></div></main>
+</style></head><body><main class="deck"><div class="stage" id="stage">{slides}</div><nav class="controls" aria-label="演示控制"><button id="prev" aria-label="上一页">‹</button><span id="counter"></span><button id="next" aria-label="下一页">›</button><button id="full" aria-label="全屏">⛶</button></nav><div class="progress" id="progress"></div></main>
 <script type="application/json" id="chart-data">{chart_data}</script><script>
 (() => {{
   const slides=[...document.querySelectorAll('.slide')], counter=document.querySelector('#counter'), progress=document.querySelector('#progress'); let index=0;
@@ -215,17 +216,35 @@ def _html_slides_document(title: str, slides: str, chart_data: str) -> str:
 def create_docx(request: DeliverableRequest) -> bytes:
     request = _normalize_document_request(request)
     document = Document()
+    document.core_properties.title = request.title
+    document.core_properties.subject = request.subtitle or "FinBTP Studio 生成成果"
+    document.core_properties.author = "FinBTP Studio"
+    page = document.sections[0]
+    page.top_margin = DocxInches(0.75)
+    page.bottom_margin = DocxInches(0.7)
+    page.left_margin = DocxInches(0.85)
+    page.right_margin = DocxInches(0.85)
     styles = document.styles
     for style_name in ("Normal", "Title", "Heading 1", "Heading 2"):
         style = styles[style_name]
         style.font.name = "Arial"
         style._element.get_or_add_rPr().get_or_add_rFonts().set(qn("w:eastAsia"), "PingFang SC")
     styles["Normal"].font.size = Pt(10.5)
+    styles["Normal"].paragraph_format.space_after = Pt(7)
+    styles["Normal"].paragraph_format.line_spacing = 1.35
+    styles["Heading 1"].font.size = Pt(16)
+    styles["Heading 1"].font.color.rgb = RGBColor(25, 72, 126)
+    styles["Heading 1"].paragraph_format.space_before = Pt(14)
+    styles["Heading 1"].paragraph_format.space_after = Pt(8)
     title = document.add_heading(request.title, 0)
     title.runs[0].font.color.rgb = RGBColor(31, 41, 55)
     if request.subtitle:
         paragraph = document.add_paragraph(request.subtitle)
         paragraph.runs[0].font.color.rgb = RGBColor(91, 105, 125)
+    if len(request.sections) >= 3:
+        document.add_page_break()
+        document.add_heading("目录", level=1)
+        _add_docx_field(document.add_paragraph(), "TOC \\o \"1-3\" \\h \\z \\u", "打开文档后可更新目录")
     for section_index, section in enumerate(request.sections):
         if section_index and valid_chart(section.chart):
             document.add_page_break()
@@ -256,16 +275,54 @@ def create_docx(request: DeliverableRequest) -> bytes:
                 run.font.size = Pt(9)
                 run.font.color.rgb = RGBColor(71, 85, 105)
     _apply_docx_fonts(document)
+    for section in document.sections:
+        header = section.header.paragraphs[0]
+        header.text = request.title
+        header.alignment = 2
+        for run in header.runs:
+            run.font.size = Pt(8.5)
+            run.font.color.rgb = RGBColor(100, 116, 139)
+        footer = section.footer.paragraphs[0]
+        footer.alignment = 1
+        _add_docx_field(footer, "PAGE", "1")
     stream = io.BytesIO()
     document.save(stream)
     return stream.getvalue()
+
+
+def _add_docx_field(paragraph, instruction: str, placeholder: str) -> None:
+    begin = OxmlElement("w:fldChar")
+    begin.set(qn("w:fldCharType"), "begin")
+    field = OxmlElement("w:instrText")
+    field.set(qn("xml:space"), "preserve")
+    field.text = instruction
+    separate = OxmlElement("w:fldChar")
+    separate.set(qn("w:fldCharType"), "separate")
+    text = OxmlElement("w:t")
+    text.text = placeholder
+    end = OxmlElement("w:fldChar")
+    end.set(qn("w:fldCharType"), "end")
+    run = paragraph.add_run()._r
+    for element in (begin, field, separate, text, end):
+        run.append(element)
+
+
+class _FinFlowPdfDocument(SimpleDocTemplate):
+    def afterFlowable(self, flowable) -> None:
+        if isinstance(flowable, Paragraph) and flowable.style.name == "FinBtpHeading":
+            title = flowable.getPlainText()
+            count = getattr(self, "_finflow_bookmark_count", 0) + 1
+            self._finflow_bookmark_count = count
+            key = f"section-{count}"
+            self.canv.bookmarkPage(key)
+            self.canv.addOutlineEntry(title, key, level=0, closed=False)
 
 
 def create_pdf(request: DeliverableRequest) -> bytes:
     request = _normalize_document_request(request)
     stream = io.BytesIO()
     font_name = _pdf_font()
-    document = SimpleDocTemplate(
+    document = _FinFlowPdfDocument(
         stream,
         pagesize=A4,
         rightMargin=20 * mm,
@@ -322,6 +379,45 @@ def create_pdf(request: DeliverableRequest) -> bytes:
 
 def create_financial_report(request: DeliverableRequest) -> bytes:
     request = _normalize_document_request(request)
+    metrics = []
+    views = []
+    for index, section in enumerate(request.sections, start=1):
+        question = section.core_message or next(iter(section.paragraphs), section.heading)
+        if valid_chart(section.chart):
+            chart = section.chart
+            views.append({
+                "id": f"view-{index}",
+                "title": chart.title,
+                "question": question,
+                "chart_type": chart.type,
+                "dimensions": ["category"],
+                "measures": [series.name for series in chart.series],
+                "dataset": {
+                    "dimensions": ["category"] + [series.name for series in chart.series],
+                    "source": [
+                        [category] + [series.values[row] for series in chart.series]
+                        for row, category in enumerate(chart.categories)
+                    ],
+                },
+                "encode": {"x": "category", "y": [series.name for series in chart.series]},
+                "aria": {"show": True, "description": question},
+                "source_ref": normalize_markers(chart.source_ref, request) or inline_sources(request, section.refs),
+            })
+            for series in chart.series:
+                metrics.append({
+                    "name": series.name,
+                    "formula": "源数据直接聚合",
+                    "unit": "",
+                    "period": "",
+                    "source_ref": normalize_markers(chart.source_ref, request) or inline_sources(request, section.refs),
+                })
+        else:
+            views.append({
+                "id": f"view-{index}", "title": section.heading, "question": question,
+                "chart_type": "narrative", "dimensions": [], "measures": [],
+                "explanation": "\n".join(section.paragraphs + section.bullets),
+                "aria": {"show": True, "description": question},
+            })
     specification = {
         "schema_version": 2,
         "renderer": "finbtp-echarts-perspective",
@@ -329,6 +425,14 @@ def create_financial_report(request: DeliverableRequest) -> bytes:
         "subtitle": request.subtitle or "由 FinBTP Studio 工作流生成",
         "theme": request.theme,
         "sections": [section.model_dump(mode="json") for section in request.sections],
+        "semantic_layer": {"metrics": metrics, "dimensions": ["category"] if metrics else []},
+        "views": views,
+        "filters": [],
+        "states": {
+            "loading": "正在读取数据",
+            "empty": "当前筛选条件下没有可显示的数据",
+            "error": "数据读取失败，请检查来源或稍后重试",
+        },
         "references": reference_records(request),
     }
     return json.dumps(specification, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -338,7 +442,12 @@ def create_mermaid(request: DeliverableRequest) -> bytes:
     generated = _mermaid_source(request)
     if generated:
         return (generated.rstrip() + "\n").encode("utf-8")
-    lines = ["flowchart TD", '  root["%s"]' % _escape(request.title)]
+    if _looks_like_process(request):
+        return _process_mermaid(request).encode("utf-8")
+    description = "；".join(section.heading for section in request.sections[:8])
+    lines = ["flowchart TD", "  accTitle: %s" % _escape(request.title),
+             "  accDescr: %s" % _escape(description or request.title),
+             '  root["%s"]' % _escape(request.title)]
     for index, section in enumerate(request.sections, start=1):
         section_id = "section_%d" % index
         lines.append('  %s["%s"]' % (section_id, _escape(section.heading)))
@@ -349,6 +458,57 @@ def create_mermaid(request: DeliverableRequest) -> bytes:
             lines.append('  %s["%s"]' % (item_id, _escape(item)))
             lines.append("  %s --> %s" % (section_id, item_id))
     return ("\n".join(lines) + "\n").encode("utf-8")
+
+
+def _looks_like_process(request: DeliverableRequest) -> bool:
+    text = request.title + " " + " ".join(
+        section.heading + " " + " ".join(section.paragraphs + section.bullets)
+        for section in request.sections
+    )
+    return any(keyword in text for keyword in ("流程", "过程", "审批", "步骤", "节点", "流转"))
+
+
+def _process_mermaid(request: DeliverableRequest) -> str:
+    raw = "\n".join(value for section in request.sections for value in section.paragraphs + section.bullets)
+    clauses = [
+        _short_diagram_label(item)
+        for item in re.split(r"[。；;\n]+", raw)
+        if len(re.sub(r"\s+", "", item)) >= 4
+    ][:18]
+    if not clauses:
+        clauses = [_short_diagram_label(section.heading) for section in request.sections[:12]]
+    description = "从%s开始，依次完成%s。" % (clauses[0], "、".join(clauses[1:5])) if clauses else request.title
+    lines = [
+        "flowchart LR",
+        "  accTitle: %s" % _escape(request.title),
+        "  accDescr: %s" % _escape(description),
+        '  start(("开始"))',
+    ]
+    decisions: set[int] = set()
+    for index, clause in enumerate(clauses, start=1):
+        is_decision = any(word in clause for word in ("是否", "不全", "超过", "通过", "驳回", "匹配"))
+        decisions.add(index) if is_decision else None
+        wrapper = '{"%s"}' if is_decision else '["%s"]'
+        lines.append("  n%d%s" % (index, wrapper % _escape(clause)))
+    lines.append('  done(("完成"))')
+    if clauses:
+        lines.append("  start --> n1")
+    for index in range(1, len(clauses)):
+        label = "|符合/继续|" if index in decisions else ""
+        lines.append("  n%d -->%s n%d" % (index, label, index + 1))
+    if clauses:
+        label = "|通过|" if len(clauses) in decisions else ""
+        lines.append("  n%d -->%s done" % (len(clauses), label))
+    for index in sorted(decisions):
+        clause = clauses[index - 1]
+        if any(word in clause for word in ("不全", "驳回", "返回", "是否", "通过", "匹配")):
+            lines.append("  n%d -->|不通过/补充| n1" % index)
+    return "\n".join(lines) + "\n"
+
+
+def _short_diagram_label(value: str) -> str:
+    clean = re.sub(r"\s+", " ", value).strip(" ，,：:；;")
+    return clean if len(clean) <= 46 else clean[:45].rstrip("，,；;") + "…"
 
 
 def create_excalidraw(request: DeliverableRequest) -> bytes:

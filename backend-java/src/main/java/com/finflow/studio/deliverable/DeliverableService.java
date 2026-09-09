@@ -50,7 +50,9 @@ public class DeliverableService {
         var format = normalizeFormat(request.format());
         if ("csv".equals(format)) throw new IllegalArgumentException("CSV 输出件需要导入已有表格文件");
         var payload = buildPayload(request);
-        var bytes = worker.generateDeliverable(format, payload);
+        var generated = worker.generateDeliverableArtifact(format, payload);
+        var bytes = generated.content();
+        payload.put("quality_report", generated.quality());
         var newResource = request.resourceId() == null || request.resourceId().isBlank();
         var resourceId = newResource ? UUID.randomUUID().toString() : request.resourceId();
         var now = Instant.now();
@@ -254,6 +256,21 @@ public class DeliverableService {
                     result.putIfAbsent(Objects.toString(citation.get("id")), citation));
         }
         return List.copyOf(result.values());
+    }
+
+    public Map<String, Object> qualityReport(String id, Integer version) {
+        get(id);
+        var sql = version == null
+                ? "select v.source_spec_json from deliverable_resource r join deliverable_version v on v.resource_id = r.id and v.version_number = r.current_version where r.id = :id"
+                : "select source_spec_json from deliverable_version where resource_id = :id and version_number = :version";
+        var query = jdbc.sql(sql).param("id", id);
+        if (version != null) query.param("version", version);
+        var specification = readMap(query.query(String.class).optional()
+                .orElseThrow(() -> new IllegalArgumentException("输出版本不存在")));
+        if (!(specification.get("quality_report") instanceof Map<?, ?> raw)) return Map.of();
+        var report = new LinkedHashMap<String, Object>();
+        raw.forEach((key, value) -> report.put(Objects.toString(key), value));
+        return Map.copyOf(report);
     }
 
     private Map<String, Object> buildPayload(CreateRequest request) {

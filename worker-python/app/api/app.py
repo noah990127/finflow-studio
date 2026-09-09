@@ -41,8 +41,7 @@ from ..services import generate_content, generate_content_stream, profile_datase
 from ..document_parser import parse_document
 from ..document_preview import preview_document
 from ..office_preview import render_office_html
-from ..deliverables import create_docx, create_excalidraw, create_financial_report, create_html_slides, create_mermaid, create_pdf, create_pptx
-from ..services.presentation import prepare_presentation
+from ..artifacts import generate_artifact
 from ..ppt_skills import catalog as ppt_skill_catalog
 from ..spreadsheet_files import profile_spreadsheet, transform_spreadsheet
 from ..data_transform import generate_transform, profile_tabular, run_transform, sample_transform
@@ -386,14 +385,12 @@ async def data_transform_run(files: list[UploadFile] = File(...), metadata: str 
 
 @app.post("/v1/deliverables/pptx")
 async def generate_pptx(request: DeliverableRequest) -> Response:
-    planned = await prepare_presentation(request)
-    return Response(create_pptx(planned), media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation")
+    return await _artifact_response("pptx", request, "application/vnd.openxmlformats-officedocument.presentationml.presentation")
 
 
 @app.post("/v1/deliverables/html_slides")
 async def generate_html_slides(request: DeliverableRequest) -> Response:
-    planned = await prepare_presentation(request)
-    return Response(create_html_slides(planned), media_type="text/html; charset=utf-8")
+    return await _artifact_response("html_slides", request, "text/html; charset=utf-8")
 
 
 @app.get("/v1/ppt-skills")
@@ -403,24 +400,37 @@ async def list_ppt_skills() -> list[dict[str, object]]:
 
 @app.post("/v1/deliverables/docx")
 async def generate_docx(request: DeliverableRequest) -> Response:
-    return Response(create_docx(request), media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+    return await _artifact_response("docx", request, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
 
 @app.post("/v1/deliverables/pdf")
 async def generate_pdf(request: DeliverableRequest) -> Response:
-    return Response(create_pdf(request), media_type="application/pdf")
+    return await _artifact_response("pdf", request, "application/pdf")
 
 
 @app.post("/v1/deliverables/financial_report")
 async def generate_financial_report(request: DeliverableRequest) -> Response:
-    return Response(create_financial_report(request), media_type="application/json; charset=utf-8")
+    return await _artifact_response("financial_report", request, "application/json; charset=utf-8")
 
 
 @app.post("/v1/deliverables/mermaid")
 async def generate_mermaid(request: DeliverableRequest) -> Response:
-    return Response(create_mermaid(request), media_type="text/plain; charset=utf-8")
+    return await _artifact_response("mermaid", request, "text/plain; charset=utf-8")
 
 
 @app.post("/v1/deliverables/excalidraw")
 async def generate_excalidraw(request: DeliverableRequest) -> Response:
-    return Response(create_excalidraw(request), media_type="application/json; charset=utf-8")
+    return await _artifact_response("excalidraw", request, "application/json; charset=utf-8")
+
+
+async def _artifact_response(output_format: str, request: DeliverableRequest, media_type: str) -> Response:
+    try:
+        result = await generate_artifact(output_format, request)
+    except ValueError as exception:
+        raise HTTPException(status_code=422, detail=str(exception)) from exception
+    return Response(result.content, media_type=media_type, headers={
+        "X-FinFlow-Quality-Passed": str(result.quality.passed).lower(),
+        "X-FinFlow-Quality-Score": str(result.quality.score),
+        "X-FinFlow-Quality-Issues": str(len(result.quality.issues)),
+        "X-FinFlow-Validator-Version": result.quality.validator_version,
+    })

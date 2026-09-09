@@ -105,6 +105,8 @@ def enforce_presentation_rules(request: DeliverableRequest, max_slides: int = 16
             if any(_similar(core, existing.core_message) for existing in sections):
                 continue
             heading = source.heading if page_index == 0 else core
+            if _generic_heading(heading):
+                heading = core
             sections.append(source.model_copy(update={
                 "heading": _compact(heading, 28),
                 "chapter": _compact(source.chapter or _chapter_for(source_index, source_count), 40),
@@ -369,3 +371,10 @@ def _chapter_for(index: int, total: int) -> str:
     if index == total:
         return "行动与展望"
     return "分析与证据"
+
+
+def _generic_heading(value: str) -> bool:
+    compact = _clean(value).replace(" ", "")
+    return compact in {
+        "资料", "已核验资料", "分析", "分析结果", "结果", "结论", "摘要", "内容", "详情",
+    }

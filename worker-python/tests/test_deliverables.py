@@ -177,7 +177,8 @@ def test_generates_self_contained_frontend_slides_html() -> None:
     html = create_html_slides(item).decode("utf-8")
 
     assert html.startswith("<!doctype html>")
-    assert "HTML + JS · 非 PowerPoint 文件" in html
+    assert 'aria-label="演示控制"' in html
+    assert "非 PowerPoint 文件" not in html
     assert "data-chart=\"0\"" in html
     assert "requestFullscreen" in html and "ArrowRight" in html
     assert "https://" not in html

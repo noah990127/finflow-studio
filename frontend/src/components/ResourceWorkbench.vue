@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, ref, watch } from 'vue'
 import { BookOpen, Braces, CheckCircle2, ChevronDown, ChevronRight, Database, Download, ExternalLink, Eye, FilePenLine, FileText, Globe2, LoaderCircle, Pencil, Play, Plus, RefreshCw, Save, Search, Server, ShieldAlert, Trash2, X } from 'lucide-vue-next'
-import { api, deliverableContentUrl, downloadFile, inlineContentUrl, renderedOfficePreviewUrl, type CitationSource, type ConnectionPreview, type CsvPreview, type DataConnection, type DatabaseCatalog, type DatabaseTable, type DocumentPreview, type WebEmbedStatus, type WebPreview, type WorkspaceResource } from '../api/client'
+import { api, deliverableContentUrl, downloadFile, inlineContentUrl, renderedOfficePreviewUrl, type ArtifactQuality, type CitationSource, type ConnectionPreview, type CsvPreview, type DataConnection, type DatabaseCatalog, type DatabaseTable, type DocumentPreview, type WebEmbedStatus, type WebPreview, type WorkspaceResource } from '../api/client'
 import DiagramPreview from './DiagramPreview.vue'
 import OfficeEditor from './OfficeEditor.vue'
 import CitationAnchor from './CitationAnchor.vue'
@@ -17,6 +17,7 @@ const webEmbedStatus = ref<WebEmbedStatus>({ status: 'CHECKING', reason: '' })
 const webEmbedOverride = ref(false)
 const connection = ref<DataConnection | null>(null), connectionPreview = ref<ConnectionPreview | null>(null)
 const citations = ref<CitationSource[]>([]), citationError = ref('')
+const quality = ref<ArtifactQuality>({})
 const citationsOpen = ref(false)
 const previewQuery = ref(''), previewLoading = ref(false), testLoading = ref(false), connectionMessage = ref('')
 const connectionEditing = ref(false), connectionSaving = ref(false), catalogLoading = ref(false), catalog = ref<DatabaseCatalog | null>(null)
@@ -102,6 +103,11 @@ async function loadCitations() {
   try { citations.value = await api.getDeliverableCitations(props.resource.id, props.resource.currentVersion) }
   catch (reason) { citationError.value = reason instanceof Error ? reason.message : '引用信息没有加载成功' }
 }
+async function loadQuality() {
+  quality.value = {}
+  if (props.resource.resourceType !== 'DELIVERABLE') return
+  quality.value = await api.getDeliverableQuality(props.resource.id, props.resource.currentVersion).catch(() => ({}))
+}
 async function downloadCurrent() {
   downloadLoading.value = true; downloadMessage.value = ''
   try { await downloadFile(sourceKind.value, props.resource.id, props.resource.name) }
@@ -155,6 +161,7 @@ watch(() => props.resource.id, () => {
   citationsOpen.value = false
   load()
   loadCitations()
+  loadQuality()
 }, { immediate: true })
 watch(editing, value => { if (!value) load() })
 function officeUnavailable(mode: 'view' | 'edit') { if (mode === 'view') officeFallback.value = true }
@@ -193,7 +200,7 @@ async function previewData() {
 <template>
   <section class="resource-workbench">
     <header class="resource-toolbar">
-      <div><span>{{ resource.group === 'DATA' ? '数据' : resource.group === 'OUTPUT' ? '输出件' : '资料' }}</span><strong>{{ resource.name }}</strong></div>
+      <div><span>{{ resource.group === 'DATA' ? '数据' : resource.group === 'OUTPUT' ? '输出件' : '资料' }}</span><strong>{{ resource.name }}</strong><small v-if="quality.score" class="artifact-quality-summary"><CheckCircle2 :size="13"/>质量检查 {{ quality.score }} 分</small></div>
       <nav>
         <div v-if="isEditable" class="view-mode-switch"><button type="button" :class="{ active: !editing }" title="查看" @click="editing = false"><Eye :size="15"/></button><button type="button" :class="{ active: editing }" title="在线编辑" @click="editing = true"><FilePenLine :size="15"/></button></div>
         <button class="secondary-button" type="button" @click="$emit('addToWorkflow', resource)"><Plus :size="15"/>{{ resource.inProjectWorkflow ? '已在工作流' : '加入工作流' }}</button>
@@ -290,7 +297,7 @@ async function previewData() {
     <OfficeEditor v-else-if="editing && isEditable" :key="`${resource.id}-${resource.currentVersion}-edit`" :resource-id="resource.id" :kind="officeKind" mode="edit" />
     <iframe v-else-if="isPdf" class="inline-pdf" :src="resource.resourceType === 'DELIVERABLE' ? deliverableContentUrl(resource.id) : inlineContentUrl(resource.id)" :title="resource.name"></iframe>
     <InteractiveFinancialReport v-else-if="isFinancialReport" :project-id="resource.projectId" :deliverable-id="resource.id" :report-name="resource.name" @open-source="$emit('openSource', $event)"/>
-    <section v-else-if="isHtmlSlides" class="html-slides-workbench"><div class="html-slides-badge">网页演示 · HTML + JS · 非 PowerPoint 文件</div><iframe :src="deliverableContentUrl(resource.id)" :title="resource.name" sandbox="allow-scripts" allow="fullscreen"></iframe></section>
+    <section v-else-if="isHtmlSlides" class="html-slides-workbench"><div class="html-slides-badge">网页演示</div><iframe :src="deliverableContentUrl(resource.id)" :title="resource.name" sandbox="allow-scripts" allow="fullscreen"></iframe></section>
     <div v-else-if="csv" class="inline-csv"><table><thead><tr><th class="row-number">#</th><th v-for="(column, index) in csv.columns" :key="`${column}-${index}`">{{ column || `第 ${index + 1} 列` }}</th></tr></thead><tbody><tr v-for="(row, rowIndex) in csv.rows" :key="rowIndex"><td class="row-number">{{ csv.rowOffset + rowIndex + 1 }}</td><td v-for="(_, columnIndex) in csv.columns" :key="columnIndex" :title="row[columnIndex]">{{ row[columnIndex] }}</td></tr></tbody></table><footer>在线显示前 {{ csv.rows.length }} 行<span v-if="csv.hasMore">，文件还有更多数据</span></footer></div>
     <DiagramPreview v-else-if="document && diagramType" :kind="diagramType" :source="diagramSource" />
     <div v-else-if="document" class="inline-document" :data-kind="document.kind"><p v-for="warning in document.warnings" :key="warning" class="preview-warning">{{ warning }}</p><article v-for="page in document.pages" :key="page.number" class="document-page"><span v-if="document.kind === 'presentation'" class="page-number">{{ page.number }}</span><h2 v-if="page.title">{{ page.title }}</h2><template v-for="(block, index) in page.blocks" :key="index"><h3 v-if="block.type === 'heading'">{{ block.text }}</h3><p v-else-if="block.type === 'text'">{{ block.text }}</p><div v-else class="table-wrap"><table><tbody><tr v-for="(row, rowIndex) in block.rows" :key="rowIndex"><td v-for="(cell, cellIndex) in row" :key="cellIndex">{{ cell }}</td></tr></tbody></table></div></template></article></div>

@@ -134,6 +134,12 @@ public class DeliverableController {
         return deliverables.citations(id, version);
     }
 
+    @GetMapping("/deliverables/{id}/quality")
+    public Map<String, Object> quality(@PathVariable String id,
+                                       @RequestParam(required = false) Integer version) {
+        return deliverables.qualityReport(id, version);
+    }
+
     @GetMapping("/deliverables/{id}/rendered-preview")
     public void renderedPreview(@PathVariable String id, @RequestParam(required = false) Integer version,
                                 HttpServletResponse response) throws IOException {
