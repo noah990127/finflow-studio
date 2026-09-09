@@ -351,6 +351,24 @@ def test_huawei_skill_adds_timeline_priority_and_comparison_layouts() -> None:
     assert "数据中心占比领先" in slide_texts[3]
 
 
+def test_huawei_skill_honors_model_selected_layout_without_title_keywords() -> None:
+    section = DeliverableSection(
+        heading="落地安排",
+        core_message="第一阶段完成数据核验",
+        layout="timeline",
+        paragraphs=["第一阶段完成数据核验"],
+        bullets=["第二阶段修复异常", "第三阶段完成验收"],
+    )
+    item = request().model_copy(update={
+        "ppt_skill": "guizang-huawei-style-c", "include_citations": False, "sections": [section],
+    }, deep=True)
+
+    deck = Presentation(BytesIO(create_pptx(item)))
+    slide_text = "\n".join(shape.text for shape in deck.slides[1].shapes if hasattr(shape, "text"))
+
+    assert "关键节点" in slide_text
+
+
 def test_pptx_recovers_legacy_page_outline_without_showing_page_labels() -> None:
     outline = """第1页｜账实净差异需要核验
 账面金额233.28万元

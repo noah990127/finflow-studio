@@ -53,11 +53,11 @@ def create_pptx(request: DeliverableRequest) -> bytes:
               20, MUTED, False, min_size=15, single_line=True)
     _add_brand(title_slide, 1)
     slide_number = 2
-    for section in request.sections:
+    for section_index, section in enumerate(request.sections, start=1):
         points = _content_points(section)
         if valid_chart(section.chart):
             slide = presentation.slides.add_slide(presentation.slide_layouts[6])
-            _add_slide_heading(slide, section.heading, slide_number)
+            _add_slide_heading(slide, section.heading, slide_number, section.chapter)
             add_native_ppt_chart(slide, section.chart, 0.85, 1.72, 7.5, 4.7)
             _add_compact_points(slide, points[:3], 8.75, 1.9, 3.65)
             _add_brand(slide, slide_number)
@@ -66,11 +66,13 @@ def create_pptx(request: DeliverableRequest) -> bytes:
                 _add_text(slide, "参考：" + reference[:240], 0.85, 6.82, 11.45, 0.24, 9, MUTED, False)
             slide_number += 1
             continue
-        for page_index, group in enumerate(_chunks(points, 4), start=1):
+        layout = section.layout
+        groups = [points[:4]] if section.layout != "auto" else list(_chunks(points, 4))
+        for page_index, group in enumerate(groups, start=1):
             slide = presentation.slides.add_slide(presentation.slide_layouts[6])
             heading = section.heading if page_index == 1 else f"{section.heading}（续）"
-            _add_slide_heading(slide, heading, slide_number)
-            _add_point_list(slide, group)
+            _add_slide_heading(slide, heading, slide_number, section.chapter)
+            _add_planned_layout(slide, group, layout)
             _add_brand(slide, slide_number)
             reference = inline_sources(request, section.refs)
             if reference:
@@ -104,7 +106,7 @@ def create_html_slides(request: DeliverableRequest) -> bytes:
             if valid_chart(section.chart):
                 chart_index = len(charts)
                 charts.append(section.chart.model_dump())
-            body = _html_slide_body(heading, group, section_index, chart_index)
+            body = _html_slide_body(heading, group, section_index, chart_index, section.layout)
             source_html = f'<div class="slide-source">参考：{escape(source[:180])}</div>' if source else ""
             slides.append(f"""
       <section class="slide" data-kind="content">
@@ -129,7 +131,7 @@ def create_html_slides(request: DeliverableRequest) -> bytes:
 
 
 def _html_slide_body(heading: str, points: List[str], section_index: int,
-                     chart_index: Optional[int]) -> str:
+                     chart_index: Optional[int], requested_layout: str = "auto") -> str:
     if chart_index is not None:
         insights = "".join(
             f'<li><span>{index:02d}</span><p>{_html_rich_text(point)}</p></li>'
@@ -139,20 +141,20 @@ def _html_slide_body(heading: str, points: List[str], section_index: int,
     lead = points[0] if points else "工作流已完成处理。"
     supporting = points[1:4]
     normalized = heading.lower()
-    if section_index == 1 or any(keyword in normalized for keyword in ("摘要", "总体", "核心结论")):
+    if requested_layout == "statement" or section_index == 1 or any(keyword in normalized for keyword in ("摘要", "总体", "核心结论")):
         evidence = "".join(
             f'<li><span>{index:02d}</span><p>{_html_rich_text(point)}</p></li>'
             for index, point in enumerate(supporting, start=1)
         )
         return f'<div class="layout statement-layout"><div class="statement"><small>核心判断</small><h3>{_html_rich_text(lead)}</h3></div><ol class="evidence">{evidence}</ol></div>'
-    if any(keyword in normalized for keyword in ("行动", "责任", "计划", "建议", "下一步")):
+    if requested_layout in {"timeline", "process"} or any(keyword in normalized for keyword in ("行动", "责任", "计划", "建议", "下一步")):
         items = "".join(
             f'<li><span>{index:02d}</span><p>{_html_rich_text(point)}</p></li>'
             for index, point in enumerate(points[:4], start=1)
         )
         return f'<div class="layout action-layout"><div class="action-line"></div><ol>{items}</ol></div>'
     metric = _first_metric(lead)
-    if metric:
+    if requested_layout == "metric" or metric:
         detail = lead.replace(metric, "", 1).strip("，,：:；; ") or lead
         items = "".join(f'<li>{_html_rich_text(point)}</li>' for point in supporting)
         return f'<div class="layout metric-layout"><div class="metric"><small>关键指标</small><strong>{escape(metric)}</strong><p>{_html_rich_text(detail)}</p></div><ul>{items}</ul></div>'
@@ -516,7 +518,10 @@ def _add_brand(slide, page_number: int) -> None:
     shape.line.fill.background()
 
 
-def _add_slide_heading(slide, heading: str, page_number: int) -> None:
+def _add_slide_heading(slide, heading: str, page_number: int, chapter: str = "") -> None:
+    if chapter:
+        _add_text(slide, chapter, 0.85, 0.38, 5.0, 0.22, 9, DARK_BLUE, True,
+                  min_size=8, single_line=True)
     _add_text(slide, heading, 0.85, 0.72, 11.0, 0.62, 32, DARK, True,
               min_size=24, single_line=True)
     line = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0.85), Inches(1.43), Inches(11.65), Inches(0.02))
@@ -562,8 +567,65 @@ def _add_compact_points(slide, points: List[str], left: float, top: float, width
         top += 1.35
 
 
+def _add_planned_layout(slide, points: List[str], layout: str) -> None:
+    if layout == "statement":
+        lead = points[0] if points else "本页结论"
+        _shape(slide, 0.9, 1.82, 0.1, 4.65, BLUE)
+        _add_text(slide, "核心观点", 1.3, 1.95, 2.0, 0.3, 11, DARK_BLUE, True)
+        _add_text(slide, lead, 1.3, 2.48, 5.25, 2.2, 25, DARK, True, min_size=18)
+        _add_compact_points(slide, points[1:4], 7.0, 2.0, 5.0)
+        return
+    if layout == "metric":
+        lead = points[0] if points else "本页指标"
+        metric = _first_metric(lead)
+        _shape(slide, 0.9, 1.82, 4.25, 4.65, DARK)
+        _add_text(slide, "关键指标", 1.3, 2.2, 2.0, 0.3, 11, PALE_BLUE, True)
+        _add_text(slide, metric or "重点关注", 1.3, 2.8, 3.4, 0.8, 31, PptColor(255, 255, 255), True,
+                  min_size=22, single_line=True)
+        _add_text(slide, lead, 1.3, 3.85, 3.35, 1.5, 17, PptColor(255, 255, 255), True,
+                  min_size=14)
+        _add_compact_points(slide, points[1:4], 5.75, 2.0, 6.15)
+        return
+    if layout in {"timeline", "process"}:
+        items = points[:4] or ["完成当前步骤"]
+        _shape(slide, 1.25, 3.05, 10.4, 0.04, LIGHT_LINE)
+        width = 10.8 / len(items)
+        for index, point in enumerate(items):
+            left = 1.0 + index * width
+            _shape(slide, left + 0.1, 2.72, 0.58, 0.58, BLUE)
+            _add_text(slide, f"{index + 1:02d}", left + 0.1, 2.85, 0.58, 0.22, 12,
+                      PptColor(255, 255, 255), True, min_size=10, single_line=True)
+            _add_text(slide, point, left + 0.1, 3.72, width - 0.28, 1.65, 15, DARK, index == 0,
+                      min_size=12)
+        return
+    if layout in {"comparison", "matrix"}:
+        positions = [(0.9, 1.8), (6.75, 1.8), (0.9, 4.22), (6.75, 4.22)]
+        for index, point in enumerate(points[:4]):
+            left, top = positions[index]
+            _shape(slide, left, top, 5.45, 1.95, PALE_BLUE if index == 0 else PptColor(248, 250, 252), LIGHT_LINE)
+            _add_text(slide, f"{index + 1:02d}", left + 0.3, top + 0.25, 0.55, 0.3, 12, DARK_BLUE, True)
+            _add_text(slide, point, left + 0.3, top + 0.78, 4.78, 0.85, 16, DARK, index == 0,
+                      min_size=13)
+        return
+    _add_point_list(slide, points[:4])
+
+
+def _shape(slide, left: float, top: float, width: float, height: float, fill: PptColor,
+           line: Optional[PptColor] = None):
+    shape = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(left), Inches(top), Inches(width), Inches(height))
+    shape.fill.solid()
+    shape.fill.fore_color.rgb = fill
+    if line:
+        shape.line.color.rgb = line
+    else:
+        shape.line.fill.background()
+    return shape
+
+
 def _content_points(section: DeliverableSection) -> List[str]:
     raw: List[str] = []
+    if section.core_message:
+        raw.append(section.core_message)
     for paragraph in section.paragraphs:
         if section.bullets and len(section.paragraphs) == 1 and len(paragraph) <= 72:
             raw.append(paragraph)
@@ -654,6 +716,12 @@ def _json_ppt_sections(value: str, source: DeliverableSection,
                 })
             result.append(DeliverableSection(
                 heading=heading,
+                chapter=_clean_ppt_text(str(slide.get("chapter") or "")),
+                core_message=summary,
+                layout=str(slide.get("layout") or "auto").lower()
+                if str(slide.get("layout") or "auto").lower() in
+                   {"auto", "statement", "metric", "chart", "comparison", "timeline", "process", "matrix", "list"}
+                else "auto",
                 paragraphs=[summary] if summary else [],
                 bullets=clean_bullets,
                 refs=slide_refs,

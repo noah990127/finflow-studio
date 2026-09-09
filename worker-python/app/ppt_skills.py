@@ -66,13 +66,13 @@ def render(request: DeliverableRequest) -> bytes:
             slide = deck.slides.add_slide(deck.slide_layouts[6])
             _background(slide, PAPER)
             heading = section.heading if page_index == 1 else f"{section.heading}（续）"
-            _chrome(slide, slide_number, section_index)
+            _chrome(slide, slide_number, section_index, section.chapter)
             _text(slide, heading, 1.82, 0.62, 10.45, 0.58, 27, INK, bold=True,
                   min_size=22, single_line=True)
             if valid_chart(section.chart):
                 _chart_layout(slide, section.chart, group)
             else:
-                _render_content(slide, heading, group, section_index)
+                _render_content(slide, heading, group, section_index, section.layout)
             refs = inline_sources(request, section.refs)
             if refs and not (valid_chart(section.chart) and section.chart.source_ref):
                 _text(slide, "参考：" + refs[:180], 0.95, 6.93, 10.55, 0.2, 8, MUTED,
@@ -100,10 +100,13 @@ def _cover(deck: Presentation, request: DeliverableRequest) -> None:
           fill=RED, vertical=MSO_ANCHOR.MIDDLE)
 
 
-def _chrome(slide, page_number: int, section_number: int) -> None:
+def _chrome(slide, page_number: int, section_number: int, chapter: str = "") -> None:
     _rect(slide, 0.95, 0.78, 0.18, 0.18, RED)
     _text(slide, f"{section_number:02d}", 1.22, 0.7, 0.45, 0.3, 10, RED, bold=True,
           min_size=10, single_line=True)
+    if chapter:
+        _text(slide, chapter, 1.72, 0.7, 2.8, 0.3, 10, MUTED, bold=True,
+              min_size=9, single_line=True)
     _text(slide, "FINBTP STUDIO", 10.72, 0.26, 1.65, 0.22, 9, INK, bold=True,
           align=PP_ALIGN.RIGHT, min_size=9, single_line=True)
     _rect(slide, 0.95, 1.38, 11.42, 0.018, LINE)
@@ -121,23 +124,32 @@ def _cards(slide, points: List[str]) -> None:
         _text(slide, point, left + 0.36, top + 0.79, 4.45, 0.98, 16, INK, bold=False)
 
 
-def _render_content(slide, heading: str, points: List[str], section_index: int) -> None:
+def _render_content(slide, heading: str, points: List[str], section_index: int,
+                    requested_layout: str = "auto") -> None:
+    layout = requested_layout
     normalized = heading.lower()
-    if section_index == 1 or any(keyword in normalized for keyword in ("摘要", "总体", "核心结论")):
+    if layout == "statement" or (layout == "auto" and
+            (section_index == 1 or any(keyword in normalized for keyword in ("摘要", "总体", "核心结论")))):
         _summary_layout(slide, points)
-    elif any(keyword in normalized for keyword in ("行动", "责任", "闭环", "计划", "要求")):
+    elif layout == "process" or (layout == "auto" and
+            any(keyword in normalized for keyword in ("行动", "责任", "闭环", "计划", "要求"))):
         _action_layout(slide, points)
-    elif any(keyword in normalized for keyword in ("时间", "时点", "阶段", "路线", "里程碑", "演进")):
+    elif layout == "timeline" or (layout == "auto" and
+            any(keyword in normalized for keyword in ("时间", "时点", "阶段", "路线", "里程碑", "演进"))):
         _timeline_layout(slide, points)
-    elif any(keyword in normalized for keyword in ("风险", "准备度", "优先级", "矩阵", "暴露")):
+    elif layout == "matrix" or (layout == "auto" and
+            any(keyword in normalized for keyword in ("风险", "准备度", "优先级", "矩阵", "暴露"))):
         _priority_layout(slide, points)
-    elif any(keyword in normalized for keyword in ("对比", "结构", "组合", "场景", "区域", "平台")):
+    elif layout == "comparison" or (layout == "auto" and
+            any(keyword in normalized for keyword in ("对比", "结构", "组合", "场景", "区域", "平台"))):
         _comparison_layout(slide, points)
-    elif any(keyword in normalized for keyword in ("top", "物料", "清单", "事项")):
+    elif layout == "list" or (layout == "auto" and
+            any(keyword in normalized for keyword in ("top", "物料", "清单", "事项"))):
         _ranked_layout(slide, points)
-    elif any(keyword in normalized for keyword in ("仓", "品类", "成因", "原因")):
+    elif layout == "auto" and any(keyword in normalized for keyword in ("仓", "品类", "成因", "原因")):
         _split_layout(slide, points)
-    elif any(keyword in normalized for keyword in ("差异", "库龄", "减值", "金额", "占比")):
+    elif layout == "metric" or (layout == "auto" and
+            any(keyword in normalized for keyword in ("差异", "库龄", "减值", "金额", "占比"))):
         _metric_layout(slide, points)
     else:
         (_metric_layout if section_index % 3 == 0 else _split_layout)(slide, points)
@@ -206,8 +218,7 @@ def _metric_layout(slide, points: List[str]) -> None:
           min_size=11, single_line=True)
     _text(slide, metric or "重点关注", 1.35, 2.78, 3.2, 0.72, 30 if metric else 23, RED_DARK,
           bold=True, min_size=22, single_line=True)
-    lead_text = lead.replace(metric, "", 1).strip("，,：:；; ") if metric else lead
-    _text(slide, lead_text or lead, 1.38, 3.78, 3.12, 1.55, 17, INK, bold=True, min_size=15)
+    _text(slide, lead, 1.38, 3.78, 3.12, 1.55, 17, INK, bold=True, min_size=15)
     _text(slide, "数据口径以工作流上游结果为准", 1.38, 5.85, 3.1, 0.28, 10, MUTED)
     supporting = points[1:4]
     for index, point in enumerate(supporting):

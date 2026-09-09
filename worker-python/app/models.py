@@ -145,6 +145,12 @@ class DeliverableChart(BaseModel):
 
 class DeliverableSection(BaseModel):
     heading: str
+    chapter: str = Field(default="", max_length=80)
+    core_message: str = Field(default="", max_length=240)
+    layout: str = Field(
+        default="auto",
+        pattern=r"^(auto|statement|metric|chart|comparison|timeline|process|matrix|list)$",
+    )
     paragraphs: List[str] = Field(default_factory=list)
     bullets: List[str] = Field(default_factory=list)
     refs: List[DeliverableRef] = Field(default_factory=list)

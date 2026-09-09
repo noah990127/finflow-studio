@@ -42,6 +42,7 @@ from ..document_parser import parse_document
 from ..document_preview import preview_document
 from ..office_preview import render_office_html
 from ..deliverables import create_docx, create_excalidraw, create_financial_report, create_html_slides, create_mermaid, create_pdf, create_pptx
+from ..services.presentation import prepare_presentation
 from ..ppt_skills import catalog as ppt_skill_catalog
 from ..spreadsheet_files import profile_spreadsheet, transform_spreadsheet
 from ..data_transform import generate_transform, profile_tabular, run_transform, sample_transform
@@ -385,12 +386,14 @@ async def data_transform_run(files: list[UploadFile] = File(...), metadata: str 
 
 @app.post("/v1/deliverables/pptx")
 async def generate_pptx(request: DeliverableRequest) -> Response:
-    return Response(create_pptx(request), media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation")
+    planned = await prepare_presentation(request)
+    return Response(create_pptx(planned), media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation")
 
 
 @app.post("/v1/deliverables/html_slides")
 async def generate_html_slides(request: DeliverableRequest) -> Response:
-    return Response(create_html_slides(request), media_type="text/html; charset=utf-8")
+    planned = await prepare_presentation(request)
+    return Response(create_html_slides(planned), media_type="text/html; charset=utf-8")
 
 
 @app.get("/v1/ppt-skills")
