@@ -26,6 +26,11 @@ public class ApiExceptionHandler {
         return response(HttpStatus.CONFLICT, "STATE_CONFLICT", ex.getMessage());
     }
 
+    @ExceptionHandler(SecurityException.class)
+    ResponseEntity<Map<String, Object>> forbidden(SecurityException ex) {
+        return response(HttpStatus.UNAUTHORIZED, "UNAUTHENTICATED", ex.getMessage());
+    }
+
     @ExceptionHandler(Exception.class)
     ResponseEntity<Map<String, Object>> unexpected(Exception ex) {
         log.error("Unexpected API error", ex);

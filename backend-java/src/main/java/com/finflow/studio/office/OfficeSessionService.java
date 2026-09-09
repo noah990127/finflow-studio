@@ -1,5 +1,6 @@
 package com.finflow.studio.office;
 
+import com.finflow.studio.auth.ActorContext;
 import com.auth0.jwt.JWT;
 import com.auth0.jwt.algorithms.Algorithm;
 import com.finflow.studio.data.ExtractJobService;
@@ -121,7 +122,7 @@ public class OfficeSessionService {
         if (!readOnly) editor.put("callbackUrl", callbackUrl);
         editor.put("lang", "zh-CN");
         editor.put("mode", mode);
-        editor.put("user", Map.of("id", "default_user", "name", "我"));
+        editor.put("user", Map.of("id", ActorContext.current(), "name", ActorContext.current()));
         editor.put("customization", readOnly
                 ? Map.of("compactHeader", true, "hideRightMenu", true, "toolbarNoTabs", false)
                 : Map.of("autosave", true, "compactHeader", true, "forcesave", true));

@@ -27,6 +27,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 @SpringBootTest(properties = {
         "spring.datasource.url=jdbc:h2:mem:finflow-workflow-test;MODE=PostgreSQL;DB_CLOSE_DELAY=-1",
+        "finflow.auth.enabled=false",
         "finflow.ai.enabled=false",
         "finflow.storage.root=${java.io.tmpdir}/finflow-workflow-test"
 })

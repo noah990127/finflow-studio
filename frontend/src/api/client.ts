@@ -1,4 +1,5 @@
 export type Project = { id: string; name: string; description: string; status: string; createdAt: string; updatedAt: string }
+export type AuthUser = { username: string }
 export type Selection = { type: string; resourceId: string; range: string[] }
 export type DataConnection = { id: string; projectId: string; name: string; sourceType: string; jdbcUrl: string; username: string; secretRef: string; options: Record<string, string>; status: string; lastTestMessage: string; lastTestedAt?: string }
 export type ConnectionPreview = { columns: string[]; rows: string[][]; rowCount: number; truncated: boolean; source: string }
@@ -63,10 +64,13 @@ async function request<T>(url: string, options: RequestInit = {}, timeoutMs = 0)
   const timeout = timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined
   const signal = options.signal && timeout ? AbortSignal.any([options.signal, timeout]) : options.signal ?? timeout
   try {
-    const response = await fetch(url, { ...options, headers, signal })
+    const response = await fetch(url, { ...options, headers, signal, credentials: 'same-origin' })
     if (!response.ok) {
       const raw = await response.text()
       const body = (() => { try { return JSON.parse(raw) as { message?: string; detail?: string } } catch { return {} } })()
+      if (response.status === 401 && url !== '/api/auth/login') {
+        window.dispatchEvent(new Event('finflow:unauthorized'))
+      }
       throw new Error(body.message ?? body.detail ?? `请求没有完成（HTTP ${response.status}）`)
     }
     return response.status === 204 ? (undefined as T) : response.json() as Promise<T>
@@ -77,6 +81,9 @@ async function request<T>(url: string, options: RequestInit = {}, timeoutMs = 0)
 }
 
 export const api = {
+  login: (username: string, password: string) => request<AuthUser>('/api/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
+  me: () => request<AuthUser>('/api/auth/me'),
+  logout: () => request<void>('/api/auth/logout', { method: 'POST' }),
   getAgentModel: (id: string) => request<AgentModelSettings>(`/api/assistant/sessions/${id}/model`),
   saveAgentModel: (id: string, body: AgentModelUpdate) => request<AgentModelSettings>(`/api/assistant/sessions/${id}/model`, { method: 'PUT', body: JSON.stringify(body) }),
   clearAgentModel: (id: string) => request<void>(`/api/assistant/sessions/${id}/model`, { method: 'DELETE' }),

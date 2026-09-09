@@ -27,7 +27,10 @@ import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-@SpringBootTest(properties = "spring.datasource.url=jdbc:h2:mem:assistant-interrupt;MODE=PostgreSQL;DB_CLOSE_DELAY=-1")
+@SpringBootTest(properties = {
+        "spring.datasource.url=jdbc:h2:mem:assistant-interrupt;MODE=PostgreSQL;DB_CLOSE_DELAY=-1",
+        "finflow.auth.enabled=false"
+})
 @AutoConfigureMockMvc
 class AssistantInterruptionTest {
     @Autowired MockMvc mvc;

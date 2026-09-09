@@ -1,5 +1,6 @@
 package com.finflow.studio.knowledge;
 
+import com.finflow.studio.auth.ActorContext;
 import com.finflow.studio.knowledge.KnowledgeModels.FileResourceResponse;
 import com.finflow.studio.knowledge.KnowledgeModels.RefResponse;
 import com.finflow.studio.project.ProjectService;
@@ -193,8 +194,10 @@ public class KnowledgeService {
     }
 
     public FileResourceResponse get(String resourceId) {
-        return jdbc.sql(latestFileSql() + " where r.id = :id").param("id", resourceId).query(this::mapFile).optional()
+        var response = jdbc.sql(latestFileSql() + " where r.id = :id").param("id", resourceId).query(this::mapFile).optional()
                 .orElseThrow(() -> new IllegalArgumentException("资料不存在"));
+        projects.get(response.projectId());
+        return response;
     }
 
     @Transactional
@@ -211,6 +214,7 @@ public class KnowledgeService {
     }
 
     public Path filePath(String resourceId, Integer version) {
+        get(resourceId);
         var sql = version == null
                 ? "select v.storage_path from file_resource r join file_version v on v.resource_id = r.id and v.version_number = r.current_version where r.id = :id"
                 : "select storage_path from file_version where resource_id = :id and version_number = :version";
@@ -347,11 +351,13 @@ public class KnowledgeService {
     }
 
     private void scheduleParse(String versionId) {
+        var actor = ActorContext.current();
+        var task = (Runnable) () -> ActorContext.runAs(actor, () -> parse(versionId));
         if (TransactionSynchronizationManager.isActualTransactionActive()) {
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                @Override public void afterCommit() { taskExecutor.execute(() -> parse(versionId)); }
+                @Override public void afterCommit() { taskExecutor.execute(task); }
             });
-        } else taskExecutor.execute(() -> parse(versionId));
+        } else taskExecutor.execute(task);
     }
 
     private void afterCommit(Runnable action) {

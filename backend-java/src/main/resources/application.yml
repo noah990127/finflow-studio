@@ -27,6 +27,14 @@ management:
         include: health,info,metrics
 
 finflow:
+  auth:
+    enabled: ${FINFLOW_AUTH_ENABLED:true}
+    default-username: ${FINFLOW_AUTH_DEFAULT_USERNAME:default}
+    default-password: ${FINFLOW_AUTH_DEFAULT_PASSWORD:Pr0d1234}
+    accounts-file: ${FINFLOW_AUTH_ACCOUNTS_FILE:}
+    jwt-secret: ${FINFLOW_AUTH_JWT_SECRET:finflow-local-session-secret-change-before-production}
+    session-hours: ${FINFLOW_AUTH_SESSION_HOURS:12}
+    secure-cookie: ${FINFLOW_AUTH_SECURE_COOKIE:false}
   agent:
     max-dynamic-actions: ${FINFLOW_AGENT_MAX_DYNAMIC_ACTIONS:80}
     gateway-base-url: ${FINFLOW_AGENT_GATEWAY_BASE_URL:http://127.0.0.1:8080}

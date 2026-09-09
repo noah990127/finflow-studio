@@ -136,15 +136,18 @@ public class WorkflowDefinitionService {
     }
 
     public WorkflowResponse get(String id) {
-        return jdbc.sql("""
+        var response = jdbc.sql("""
                 select d.*, v.definition_json from workflow_definition d
                 join workflow_version v on v.workflow_id = d.id and v.version_number = d.current_version
                 where d.id = :id
                 """).param("id", id).query(this::map).optional()
                 .orElseThrow(() -> new IllegalArgumentException("工作流不存在"));
+        projects.get(response.projectId());
+        return response;
     }
 
     public WorkflowDocument version(String id, int version) {
+        get(id);
         var json = jdbc.sql("select definition_json from workflow_version where workflow_id = :id and version_number = :version")
                 .param("id", id).param("version", version).query(String.class).optional()
                 .orElseThrow(() -> new IllegalArgumentException("工作流版本不存在"));

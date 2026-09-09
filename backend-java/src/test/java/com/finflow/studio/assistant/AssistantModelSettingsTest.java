@@ -20,6 +20,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @SpringBootTest(properties = {"spring.datasource.url=jdbc:h2:mem:model-settings;MODE=PostgreSQL;DB_CLOSE_DELAY=-1",
+        "finflow.auth.enabled=false",
         "finflow.agent.key-file=./target/model-settings-test.key"})
 @AutoConfigureMockMvc
 class AssistantModelSettingsTest {

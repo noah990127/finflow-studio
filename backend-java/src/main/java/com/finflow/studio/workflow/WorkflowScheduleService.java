@@ -1,5 +1,6 @@
 package com.finflow.studio.workflow;
 
+import com.finflow.studio.auth.ActorContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -27,12 +28,13 @@ public class WorkflowScheduleService {
     public void runDueWorkflows() {
         var now = Instant.now();
         var due = jdbc.sql("""
-                select id, next_run_at from workflow_definition
-                where next_run_at is not null and next_run_at <= :now
+                select d.id, d.next_run_at, p.owner_id from workflow_definition d
+                join project p on p.id = d.project_id
+                where d.next_run_at is not null and d.next_run_at <= :now and p.deleted = false
                 order by next_run_at limit 20
                 """).param("now", now).query(this::mapDue).list();
         for (var item : due) {
-            try {
+            try (var ignored = ActorContext.bind(item.ownerId())) {
                 var workflow = definitions.get(item.id());
                 var document = definitions.version(item.id(), workflow.currentVersion());
                 var next = WorkflowScheduleSupport.nextRun(workflow.executionMode(), workflow.schedule(), now);
@@ -48,8 +50,9 @@ public class WorkflowScheduleService {
     }
 
     private DueWorkflow mapDue(ResultSet rs, int rowNum) throws SQLException {
-        return new DueWorkflow(rs.getString("id"), rs.getTimestamp("next_run_at").toInstant());
+        return new DueWorkflow(rs.getString("id"), rs.getTimestamp("next_run_at").toInstant(),
+                rs.getString("owner_id"));
     }
 
-    private record DueWorkflow(String id, Instant due) { }
+    private record DueWorkflow(String id, Instant due, String ownerId) { }
 }

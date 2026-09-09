@@ -1,27 +1,51 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
 import ProjectWorkbench from './views/ProjectWorkbench.vue'
 import LoginView from './views/LoginView.vue'
 import { useProjectsStore } from './stores/projects'
+import { api, type AuthUser } from './api/client'
 
-const SESSION_KEY = 'finflow.authenticated'
 const projects = useProjectsStore()
-const authenticated = ref(sessionStorage.getItem(SESSION_KEY) === 'true')
+const user = ref<AuthUser | null>(null)
+const resolvingSession = ref(true)
 
-if (authenticated.value) void projects.initialize()
+async function resolveSession() {
+  try {
+    user.value = await api.me()
+    await projects.initialize()
+  } catch {
+    user.value = null
+    projects.reset()
+  } finally {
+    resolvingSession.value = false
+  }
+}
 
-function login() {
-  sessionStorage.setItem(SESSION_KEY, 'true')
-  authenticated.value = true
+function login(authenticatedUser: AuthUser) {
+  user.value = authenticatedUser
   void projects.initialize()
 }
 
-function logout() {
-  sessionStorage.removeItem(SESSION_KEY)
-  authenticated.value = false
+async function logout() {
+  try { await api.logout() } finally {
+    user.value = null
+    projects.reset()
+  }
 }
+
+function unauthorized() {
+  user.value = null
+  projects.reset()
+}
+
+onMounted(() => {
+  window.addEventListener('finflow:unauthorized', unauthorized)
+  void resolveSession()
+})
+onBeforeUnmount(() => window.removeEventListener('finflow:unauthorized', unauthorized))
 </script>
 <template>
-  <LoginView v-if="!authenticated" @login="login" />
-  <ProjectWorkbench v-else :project="projects.current" :loading="projects.loading" :error="projects.error" @logout="logout" />
+  <main v-if="resolvingSession" class="session-loading">正在打开工作台</main>
+  <LoginView v-else-if="!user" @login="login" />
+  <ProjectWorkbench v-else :project="projects.current" :loading="projects.loading" :error="projects.error" :account="user.username" @logout="logout" />
 </template>

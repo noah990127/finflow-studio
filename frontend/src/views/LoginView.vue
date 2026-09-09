@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { Eye, EyeOff, LockKeyhole, LogIn, UserRound } from 'lucide-vue-next'
 import { ref } from 'vue'
+import { api, type AuthUser } from '../api/client'
 
-const emit = defineEmits<{ login: [credentials: { username: string; password: string }] }>()
+const emit = defineEmits<{ login: [user: AuthUser] }>()
 const username = ref('')
 const password = ref('')
 const showPassword = ref(false)
@@ -16,14 +17,15 @@ async function submit() {
     return
   }
   submitting.value = true
-  await new Promise(resolve => window.setTimeout(resolve, 180))
-  if (username.value.trim() !== 'test1' || password.value !== 'Pr0d1234') {
-    error.value = '账号或密码不正确'
+  try {
+    const user = await api.login(username.value.trim(), password.value)
+    emit('login', user)
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : '登录没有完成，请稍后重试'
     password.value = ''
+  } finally {
     submitting.value = false
-    return
   }
-  emit('login', { username: username.value.trim(), password: password.value })
 }
 </script>
 

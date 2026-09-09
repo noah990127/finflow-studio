@@ -39,3 +39,4 @@ scripts/__pycache__/
 !.env.example
 
 .env
+.finflow-test-accounts

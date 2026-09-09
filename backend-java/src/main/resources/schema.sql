@@ -8,6 +8,9 @@ create table if not exists project (
     updated_at timestamp with time zone not null
 );
 
+alter table project add column if not exists owner_id varchar(64) not null default 'default';
+create index if not exists idx_project_owner on project(owner_id, updated_at);
+
 create table if not exists assistant_session (
     id varchar(64) primary key,
     project_id varchar(64) not null,
@@ -20,6 +23,8 @@ create table if not exists assistant_session (
     updated_at timestamp with time zone not null,
     constraint fk_session_project foreign key (project_id) references project(id)
 );
+
+update assistant_session set default_user_id = 'default' where default_user_id = 'default_user';
 
 create table if not exists assistant_message (
     id varchar(64) primary key,

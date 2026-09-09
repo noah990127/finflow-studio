@@ -1,5 +1,6 @@
 package com.finflow.studio.assistant;
 
+import com.finflow.studio.auth.ActorContext;
 import com.finflow.studio.assistant.AssistantModels.PlanStep;
 import com.finflow.studio.assistant.AssistantModels.RunResponse;
 import com.finflow.studio.deliverable.DeliverableModels.CitationRequest;
@@ -141,16 +142,18 @@ public class AssistantExecutionService {
     }
 
     private void scheduleAfterCommit(String runId) {
+        var actor = ActorContext.current();
+        var task = (Runnable) () -> ActorContext.runAs(actor, () -> execute(runId));
         if (TransactionSynchronizationManager.isActualTransactionActive()) {
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                 @Override
                 public void afterCommit() {
-                    taskExecutor.execute(() -> execute(runId));
+                    taskExecutor.execute(task);
                 }
             });
             return;
         }
-        taskExecutor.execute(() -> execute(runId));
+        taskExecutor.execute(task);
     }
 
     private void execute(String runId) {
@@ -322,6 +325,19 @@ public class AssistantExecutionService {
     }
 
     public Map<String, Object> callContinuousTool(String runId, String gatewayToken, Map<String, Object> request) {
+        var actor = jdbc.sql("""
+                select p.owner_id from assistant_run r
+                join assistant_session s on s.id = r.session_id
+                join project p on p.id = s.project_id
+                where r.id = :id and p.deleted = false
+                """).param("id", runId).query(String.class).optional()
+                .orElseThrow(() -> new IllegalArgumentException("助手任务不存在"));
+        try (var ignored = ActorContext.bind(actor)) {
+            return callContinuousToolAsActor(runId, gatewayToken, request);
+        }
+    }
+
+    private Map<String, Object> callContinuousToolAsActor(String runId, String gatewayToken, Map<String, Object> request) {
         var run = get(runId);
         var stored = jdbc.sql("select gateway_token from assistant_run where id = :id")
                 .param("id", runId).query(String.class).single();
@@ -876,11 +892,15 @@ public class AssistantExecutionService {
     }
 
     public RunResponse get(String id) {
-        return jdbc.sql("select * from assistant_run where id = :id")
+        var response = jdbc.sql("select * from assistant_run where id = :id")
                 .param("id", id)
                 .query(this::mapRun)
                 .optional()
                 .orElseThrow(() -> new IllegalArgumentException("助手任务不存在"));
+        var projectId = jdbc.sql("select project_id from assistant_session where id = :id")
+                .param("id", response.sessionId()).query(String.class).single();
+        projects.get(projectId);
+        return response;
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -915,6 +935,9 @@ public class AssistantExecutionService {
     public void cancelPlan(String planId) {
         var sessionId = jdbc.sql("select session_id from assistant_plan where id = :id for update")
                 .param("id", planId).query(String.class).single();
+        var projectId = jdbc.sql("select project_id from assistant_session where id = :id")
+                .param("id", sessionId).query(String.class).single();
+        projects.get(projectId);
         var runId = jdbc.sql("select id from assistant_run where plan_id = :id order by created_at desc limit 1")
                 .param("id", planId).query(String.class).optional();
         if (runId.isPresent()) {

@@ -1,5 +1,6 @@
 package com.finflow.studio.project;
 
+import com.finflow.studio.auth.ActorContext;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -18,14 +19,16 @@ public class ProjectService {
     }
 
     public List<Project> list() {
-        return jdbc.sql("select * from project where deleted = false order by updated_at desc")
+        return jdbc.sql("select * from project where owner_id = :owner and deleted = false order by updated_at desc")
+                .param("owner", ActorContext.current())
                 .query(this::map)
                 .list();
     }
 
     public Project get(String id) {
-        return jdbc.sql("select * from project where id = :id and deleted = false")
+        return jdbc.sql("select * from project where id = :id and owner_id = :owner and deleted = false")
                 .param("id", id)
+                .param("owner", ActorContext.current())
                 .query(this::map)
                 .optional()
                 .orElseThrow(() -> new IllegalArgumentException("项目不存在"));
@@ -35,10 +38,11 @@ public class ProjectService {
         var id = UUID.randomUUID().toString();
         var now = Instant.now();
         jdbc.sql("""
-                insert into project(id, name, description, status, deleted, created_at, updated_at)
-                values (:id, :name, :description, 'ACTIVE', false, :createdAt, :updatedAt)
+                insert into project(id, owner_id, name, description, status, deleted, created_at, updated_at)
+                values (:id, :owner, :name, :description, 'ACTIVE', false, :createdAt, :updatedAt)
                 """)
                 .param("id", id)
+                .param("owner", ActorContext.current())
                 .param("name", name)
                 .param("description", description == null ? "" : description)
                 .param("createdAt", now)

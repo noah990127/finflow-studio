@@ -1,5 +1,6 @@
 package com.finflow.studio.data;
 
+import com.finflow.studio.auth.ActorContext;
 import com.finflow.studio.data.DataModels.*;
 import com.finflow.studio.project.ProjectService;
 import com.finflow.studio.storage.BlobStore;
@@ -107,8 +108,10 @@ public class ExtractJobService {
     }
 
     public ExtractJobResponse get(String id) {
-        return jdbc.sql("select * from extract_job where id = :id").param("id", id).query(this::map).optional()
+        var response = jdbc.sql("select * from extract_job where id = :id").param("id", id).query(this::map).optional()
                 .orElseThrow(() -> new IllegalArgumentException("抽取任务不存在"));
+        projects.get(response.projectId());
+        return response;
     }
 
     public List<ExtractJobResponse> list(String projectId) {
@@ -357,12 +360,14 @@ public class ExtractJobService {
     }
 
     private void scheduleAfterCommit(String id) {
+        var actor = ActorContext.current();
+        var task = (Runnable) () -> ActorContext.runAs(actor, () -> execute(id));
         if (TransactionSynchronizationManager.isActualTransactionActive()) {
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                @Override public void afterCommit() { taskExecutor.execute(() -> execute(id)); }
+                @Override public void afterCommit() { taskExecutor.execute(task); }
             });
         } else {
-            taskExecutor.execute(() -> execute(id));
+            taskExecutor.execute(task);
         }
     }
 

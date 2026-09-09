@@ -14,19 +14,18 @@ export const useProjectsStore = defineStore('projects', {
       this.error = ''
       try {
         this.projects = await api.listProjects()
-        if (this.projects.length === 0) {
-          const project = await api.createProject(
-            '8 月经营复盘',
-            '整理经营数据、结合资料形成分析并生成汇报',
-          )
-          this.projects = [project]
-        }
-        this.current = this.projects[0]
+        this.current = this.projects[0] ?? null
       } catch (error) {
         this.error = error instanceof Error ? error.message : '暂时无法打开工作空间'
       } finally {
         this.loading = false
       }
+    },
+    reset() {
+      this.projects = []
+      this.current = null
+      this.loading = false
+      this.error = ''
     },
     async refresh(selectId?: string) {
       this.projects = await api.listProjects()

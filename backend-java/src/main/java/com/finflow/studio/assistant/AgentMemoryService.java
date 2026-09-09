@@ -2,6 +2,8 @@ package com.finflow.studio.assistant;
 
 import com.finflow.studio.assistant.AssistantModels.MemoryRequest;
 import com.finflow.studio.assistant.AssistantModels.MemoryResponse;
+import com.finflow.studio.auth.ActorContext;
+import com.finflow.studio.project.ProjectService;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import tools.jackson.core.JacksonException;
@@ -18,14 +20,15 @@ import java.util.UUID;
 
 @Service
 public class AgentMemoryService {
-    private static final String ACTOR = "default_user";
     private static final Set<String> SCOPES = Set.of("SESSION", "PROJECT", "USER_PREFERENCE");
     private final JdbcClient jdbc;
     private final ObjectMapper objectMapper;
+    private final ProjectService projects;
 
-    public AgentMemoryService(JdbcClient jdbc, ObjectMapper objectMapper) {
+    public AgentMemoryService(JdbcClient jdbc, ObjectMapper objectMapper, ProjectService projects) {
         this.jdbc = jdbc;
         this.objectMapper = objectMapper;
+        this.projects = projects;
     }
 
     public List<MemoryResponse> list(String projectId) {
@@ -33,7 +36,7 @@ public class AgentMemoryService {
                 select * from agent_memory where actor_id = :actor and status = 'ACTIVE'
                     and (project_id = :projectId or project_id = '')
                 order by case memory_scope when 'USER_PREFERENCE' then 2 else 1 end, updated_at desc
-                """).param("actor", ACTOR).param("projectId", normalizeProject(projectId))
+                """).param("actor", ActorContext.current()).param("projectId", authorizedProject(projectId))
                 .query(this::map).list();
     }
 
@@ -42,10 +45,11 @@ public class AgentMemoryService {
         if (!SCOPES.contains(scope)) throw new IllegalArgumentException("不支持的记忆范围");
         var projectId = "USER_PREFERENCE".equals(scope) ? "" : normalizeProject(request.projectId());
         if (!"USER_PREFERENCE".equals(scope) && projectId.isBlank()) throw new IllegalArgumentException("项目记忆必须属于一个项目");
+        if (!projectId.isBlank()) projects.get(projectId);
         var existing = jdbc.sql("""
                 select id from agent_memory where actor_id = :actor and project_id = :projectId
                     and memory_scope = :scope and memory_key = :key
-                """).param("actor", ACTOR).param("projectId", projectId).param("scope", scope)
+                """).param("actor", ActorContext.current()).param("projectId", projectId).param("scope", scope)
                 .param("key", request.key().trim()).query(String.class).optional();
         var now = Instant.now();
         var id = existing.orElseGet(() -> UUID.randomUUID().toString());
@@ -60,7 +64,7 @@ public class AgentMemoryService {
                     insert into agent_memory(id, actor_id, project_id, memory_scope, memory_key, value_json,
                         source_ref, status, created_at, updated_at)
                     values (:id, :actor, :projectId, :scope, :key, :value, :sourceRef, 'ACTIVE', :now, :now)
-                    """).param("id", id).param("actor", ACTOR).param("projectId", projectId).param("scope", scope)
+                    """).param("id", id).param("actor", ActorContext.current()).param("projectId", projectId).param("scope", scope)
                     .param("key", request.key().trim()).param("value", writeJson(request.value()))
                     .param("sourceRef", safe(request.sourceRef())).param("now", now).update();
         }
@@ -75,7 +79,7 @@ public class AgentMemoryService {
 
     private MemoryResponse get(String id) {
         return jdbc.sql("select * from agent_memory where id = :id and actor_id = :actor")
-                .param("id", id).param("actor", ACTOR).query(this::map).optional()
+                .param("id", id).param("actor", ActorContext.current()).query(this::map).optional()
                 .orElseThrow(() -> new IllegalArgumentException("记忆不存在"));
     }
 
@@ -87,6 +91,11 @@ public class AgentMemoryService {
     }
 
     private String normalizeProject(String value) { return value == null ? "" : value.trim(); }
+    private String authorizedProject(String value) {
+        var projectId = normalizeProject(value);
+        if (!projectId.isBlank()) projects.get(projectId);
+        return projectId;
+    }
     private String safe(String value) { return value == null ? "" : value.trim(); }
     private String writeJson(Object value) {
         try { return objectMapper.writeValueAsString(value); }

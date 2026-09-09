@@ -1,5 +1,6 @@
 package com.finflow.studio.workflow;
 
+import com.finflow.studio.auth.ActorContext;
 import com.finflow.studio.data.DataModels.CreateExtractRequest;
 import com.finflow.studio.data.ExtractJobService;
 import com.finflow.studio.data.DataTransformService;
@@ -137,8 +138,10 @@ public class WorkflowRunService {
     }
 
     public RunResponse get(String id) {
-        return jdbc.sql("select * from workflow_run where id = :id").param("id", id).query(this::mapRun).optional()
+        var response = jdbc.sql("select * from workflow_run where id = :id").param("id", id).query(this::mapRun).optional()
                 .orElseThrow(() -> new IllegalArgumentException("工作流运行不存在"));
+        projects.get(response.projectId());
+        return response;
     }
 
     public WorkflowPatch proposeSolidification(String id) {
@@ -779,7 +782,8 @@ public class WorkflowRunService {
     }
 
     private void schedule(String id, WorkflowDocument document, Map<String, Map<String, Object>> reusable) {
-        var task = (Runnable) () -> execute(id, document, reusable);
+        var actor = ActorContext.current();
+        var task = (Runnable) () -> ActorContext.runAs(actor, () -> execute(id, document, reusable));
         if (TransactionSynchronizationManager.isActualTransactionActive()) {
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                 @Override public void afterCommit() { taskExecutor.execute(task); }

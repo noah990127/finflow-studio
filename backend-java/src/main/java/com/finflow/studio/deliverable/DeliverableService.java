@@ -148,8 +148,10 @@ public class DeliverableService {
     }
 
     public Response get(String id) {
-        return jdbc.sql(latestSql() + " where r.id = :id").param("id", id).query(this::map).optional()
+        var response = jdbc.sql(latestSql() + " where r.id = :id").param("id", id).query(this::map).optional()
                 .orElseThrow(() -> new IllegalArgumentException("输出文件不存在"));
+        projects.get(response.projectId());
+        return response;
     }
 
     @Transactional
@@ -213,6 +215,7 @@ public class DeliverableService {
     }
 
     public Path path(String id, Integer version) {
+        get(id);
         var sql = version == null
                 ? "select v.storage_path from deliverable_resource r join deliverable_version v on v.resource_id = r.id and v.version_number = r.current_version where r.id = :id"
                 : "select storage_path from deliverable_version where resource_id = :id and version_number = :version";

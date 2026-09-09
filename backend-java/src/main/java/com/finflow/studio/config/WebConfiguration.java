@@ -21,6 +21,7 @@ public class WebConfiguration {
         config.setAllowedOriginPatterns(List.of("http://localhost:*", "http://127.0.0.1:*"));
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
         config.setAllowedHeaders(List.of("*"));
+        config.setAllowCredentials(true);
         config.setExposedHeaders(List.of("Last-Event-ID", "Content-Disposition", "Content-Range", "Accept-Ranges"));
         var source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/api/**", config);

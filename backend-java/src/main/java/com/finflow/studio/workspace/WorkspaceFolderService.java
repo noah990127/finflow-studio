@@ -2,6 +2,7 @@ package com.finflow.studio.workspace;
 
 import com.finflow.studio.workspace.WorkspaceModels.Folder;
 import com.finflow.studio.workspace.WorkspaceModels.FolderRequest;
+import com.finflow.studio.project.ProjectService;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -17,17 +18,21 @@ import java.util.UUID;
 public class WorkspaceFolderService {
     private static final List<String> ROOT_KINDS = List.of("FILES", "DATABASES", "WEB_URLS", "APIS", "OUTPUTS");
     private final JdbcClient jdbc;
+    private final ProjectService projects;
 
-    public WorkspaceFolderService(JdbcClient jdbc) {
+    public WorkspaceFolderService(JdbcClient jdbc, ProjectService projects) {
         this.jdbc = jdbc;
+        this.projects = projects;
     }
 
     public List<Folder> list(String projectId) {
+        projects.get(projectId);
         return jdbc.sql("select * from workspace_folder where project_id = :projectId order by sort_order, name")
                 .param("projectId", projectId).query(this::map).list();
     }
 
     public Map<String, String> locations(String projectId) {
+        projects.get(projectId);
         return jdbc.sql("select resource_type, resource_id, folder_id from workspace_resource_location where project_id = :projectId")
                 .param("projectId", projectId)
                 .query((rs, row) -> Map.entry(key(rs.getString("resource_type"), rs.getString("resource_id")), rs.getString("folder_id")))
@@ -35,6 +40,7 @@ public class WorkspaceFolderService {
     }
 
     public Folder create(String projectId, FolderRequest request) {
+        projects.get(projectId);
         var name = cleanName(request.name());
         var rootKind = cleanRoot(request.rootKind());
         validateParent(projectId, request.parentId(), rootKind, null);
@@ -49,6 +55,7 @@ public class WorkspaceFolderService {
     }
 
     public Folder update(String projectId, String id, FolderRequest request) {
+        projects.get(projectId);
         var current = get(projectId, id);
         var rootKind = request.rootKind() == null || request.rootKind().isBlank() ? current.rootKind() : cleanRoot(request.rootKind());
         var parentId = request.parentId();
@@ -63,6 +70,7 @@ public class WorkspaceFolderService {
 
     @Transactional
     public void delete(String projectId, String id) {
+        projects.get(projectId);
         get(projectId, id);
         var childCount = jdbc.sql("select count(*) from workspace_folder where project_id = :projectId and parent_id = :id")
                 .param("projectId", projectId).param("id", id).query(Integer.class).single();
@@ -74,6 +82,7 @@ public class WorkspaceFolderService {
     }
 
     public void moveResource(String projectId, String resourceType, String resourceId, String expectedRoot, String folderId) {
+        projects.get(projectId);
         if (folderId == null || folderId.isBlank()) {
             jdbc.sql("delete from workspace_resource_location where project_id = :projectId and resource_type = :type and resource_id = :resourceId")
                     .param("projectId", projectId).param("type", resourceType).param("resourceId", resourceId).update();

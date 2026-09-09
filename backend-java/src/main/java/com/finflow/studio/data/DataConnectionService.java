@@ -122,11 +122,13 @@ public class DataConnectionService {
     }
 
     public ConnectionResponse get(String id) {
-        return jdbc.sql("select * from data_connection where id = :id")
+        var response = jdbc.sql("select * from data_connection where id = :id")
                 .param("id", id)
                 .query(this::map)
                 .optional()
                 .orElseThrow(() -> new IllegalArgumentException("数据连接不存在"));
+        projects.get(response.projectId());
+        return response;
     }
 
     public ConnectionResponse safeForDisplay(ConnectionResponse definition) {

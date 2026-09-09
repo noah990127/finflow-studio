@@ -12,7 +12,7 @@ import { useAssistantStore } from '../stores/assistant'
 
 type Tab = { id: string; title: string; kind: 'home' | 'workflow' | 'data' | 'resource'; resource?: WorkspaceResource; workflowId?: string }
 type UiRoot = 'DATA' | 'KNOWLEDGE' | 'OUTPUT'
-const props = defineProps<{ project: Project | null; loading: boolean; error: string }>()
+const props = defineProps<{ project: Project | null; loading: boolean; error: string; account: string }>()
 const emit = defineEmits<{ logout: [] }>()
 const projectStore = useProjectsStore()
 const assistant = useAssistantStore()
@@ -369,12 +369,15 @@ watch(() => props.project?.id, (id, previousId) => {
   if (previousId && id !== previousId) { tabs.value = [{ id: 'home', title: '项目概览', kind: 'home' }]; activeTabId.value = 'home' }
   void loadWorkspace()
 }, { immediate: true })
+watch(() => [props.loading, props.project?.id] as const, ([loading, projectId]) => {
+  if (!loading && !projectId) projectManagerOpen.value = true
+}, { immediate: true })
 </script>
 
 <template>
   <div class="project-shell" :class="{ 'workflow-mode': activeTab?.kind === 'workflow', 'assistant-open': assistant.open }">
     <aside class="resource-sidebar">
-      <div class="workbench-brand"><span>F</span><div><strong>FinBTP Studio</strong><small>个人专注工作台</small></div><button class="workbench-logout" type="button" title="退出登录" @click="emit('logout')"><LogOut :size="16"/></button></div>
+      <div class="workbench-brand"><span>F</span><div><strong>FinBTP Studio</strong><small>{{ account }}</small></div><button class="workbench-logout" type="button" title="退出登录" @click="emit('logout')"><LogOut :size="16"/></button></div>
       <button class="project-switcher" type="button" @click="openProjectManager"><div><small>当前项目</small><strong>{{ project?.name ?? '正在打开' }}</strong></div><ChevronDown :size="15"/></button>
       <div class="resource-search-row"><label class="resource-search"><Search :size="15"/><input v-model="search" placeholder="查找项目内容"></label><button type="button" title="新建目录" @click="startFolder('FILES')"><FolderPlus :size="16"/></button></div>
       <section class="workflow-navigator"><header><WorkflowIcon :size="15"/><strong>工作流</strong><span>{{ workspace?.workflows?.length ?? 0 }}</span><button type="button" title="新建工作流" @click="createWorkflow"><Plus :size="13"/></button></header><div><article v-for="item in workspace?.workflows ?? []" :key="item.id" :class="{ active: activeTab?.workflowId === item.id }"><button type="button" @click="openWorkflow(item.id)"><span>{{ item.name }}</span><small>第 {{ item.currentVersion }} 版 · {{ item.status === 'READY' ? '可运行' : '草稿' }}</small></button><button class="workflow-delete" type="button" title="删除工作流" @click="deleteWorkflow(item.id, item.name)"><Trash2 :size="12"/></button></article></div></section>

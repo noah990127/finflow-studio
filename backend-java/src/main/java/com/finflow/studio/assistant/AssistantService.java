@@ -4,6 +4,7 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 import com.finflow.studio.assistant.AssistantModels.*;
+import com.finflow.studio.auth.ActorContext;
 import com.finflow.studio.project.ProjectService;
 import com.finflow.studio.workspace.WorkspaceResourceService;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -53,10 +54,11 @@ public class AssistantService {
         jdbc.sql("""
                 insert into assistant_session(id, project_id, default_user_id, title, summary, status,
                                               last_context_version, created_at, updated_at)
-                values (:id, :projectId, 'default_user', :title, '', 'ACTIVE', 0, :createdAt, :updatedAt)
+                values (:id, :projectId, :actor, :title, '', 'ACTIVE', 0, :createdAt, :updatedAt)
                 """)
                 .param("id", id)
                 .param("projectId", projectId)
+                .param("actor", ActorContext.current())
                 .param("title", safeTitle)
                 .param("createdAt", now)
                 .param("updatedAt", now)
@@ -65,7 +67,7 @@ public class AssistantService {
     }
 
     public SessionResponse getSession(String id) {
-        return jdbc.sql("select * from assistant_session where id = :id")
+        var session = jdbc.sql("select * from assistant_session where id = :id")
                 .param("id", id)
                 .query((rs, rowNum) -> new SessionResponse(
                         rs.getString("id"),
@@ -77,6 +79,8 @@ public class AssistantService {
                 ))
                 .optional()
                 .orElseThrow(() -> new IllegalArgumentException("助手会话不存在"));
+        projects.get(session.projectId());
+        return session;
     }
 
     public List<SessionResponse> listSessions(String projectId) {
@@ -285,6 +289,7 @@ public class AssistantService {
                 ))
                 .optional()
                 .orElseThrow(() -> new IllegalArgumentException("助手计划不存在"));
+        getSession(row.sessionId());
         return new PlanResponse(row.id(), row.sessionId(), row.goal(), row.summary(), row.version(),
                 row.planHash(), row.risk(), row.status(), row.affectedResources(), loadSteps(id), row.expiresAt());
     }

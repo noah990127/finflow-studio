@@ -27,7 +27,10 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-@SpringBootTest(properties = "spring.datasource.url=jdbc:h2:mem:continuous-agent;MODE=PostgreSQL;DB_CLOSE_DELAY=-1")
+@SpringBootTest(properties = {
+        "spring.datasource.url=jdbc:h2:mem:continuous-agent;MODE=PostgreSQL;DB_CLOSE_DELAY=-1",
+        "finflow.auth.enabled=false"
+})
 @AutoConfigureMockMvc
 @Import(ContinuousAssistantFlowTest.Configuration.class)
 class ContinuousAssistantFlowTest {
