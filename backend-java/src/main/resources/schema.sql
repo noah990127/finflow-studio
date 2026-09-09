@@ -95,6 +95,9 @@ create table if not exists assistant_run (
 );
 
 alter table assistant_run add column if not exists effects_json text not null default '{}';
+alter table assistant_run add column if not exists gateway_token varchar(128) not null default '';
+alter table assistant_run add column if not exists continuous_agent boolean not null default false;
+alter table assistant_run add column if not exists approval_count integer not null default 0;
 
 create table if not exists assistant_event (
     id varchar(64) primary key,

@@ -113,6 +113,9 @@ public class AssistantService {
     public MessageResponse sendMessage(String sessionId, MessageRequest request) {
         jdbc.sql("select id from assistant_session where id = :id for update").param("id", sessionId).query(String.class).single();
         var session = getSession(sessionId);
+        if (!session.projectId().equals(request.projectId())) {
+            throw new IllegalArgumentException("当前对话属于其他项目，请切换到对应项目或在当前项目中新建对话");
+        }
         var requestId = request.requestId() == null ? UUID.randomUUID().toString() : request.requestId();
         var interruption = interruptions.token(sessionId, requestId);
         var executionPolicy = ExecutionPolicy.from(request.executionMode());
@@ -166,8 +169,16 @@ public class AssistantService {
                 recentMessages(sessionId, session.projectId()));
         AssistantPlanner.PlannedWork plannedWork;
         try {
-            plannedWork = interruption.await(() -> planner.plan(request.text(), request.page(), request.selection(), workspaceContext,
-                    sessionId, executionPolicy.name()));
+            if (execution.continuousAgentAvailable()) {
+                var agentStep = new PlanStep(UUID.randomUUID().toString(), 1, "agent.execute", "READ",
+                        "自主处理任务", "Agent 会持续选择工具、检查结果并在必要时调整方式",
+                        Map.of(), RiskLevel.READ_ONLY, false, "PENDING");
+                plannedWork = new AssistantPlanner.PlannedWork("正在持续处理这项任务", List.of(agentStep), true,
+                        "我会结合当前工作区理解你想要的结果，连续执行所需操作，并在报告完成前检查真实产出。");
+            } else {
+                plannedWork = interruption.await(() -> planner.plan(request.text(), request.page(), request.selection(), workspaceContext,
+                        sessionId, executionPolicy.name()));
+            }
         } catch (CancellationException exception) {
             return interruptedResponse(sessionId, requestId, context, traceId);
         }

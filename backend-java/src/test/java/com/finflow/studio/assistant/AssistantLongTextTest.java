@@ -51,7 +51,7 @@ class AssistantLongTextTest {
         var session = assistant.createSession(project.id(), "长文本");
         var response = mvc.perform(post("/api/assistant/sessions/" + session.id() + "/messages")
                         .contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsBytes(Map.of(
-                                "text", text, "page", "project-home", "executionMode", "APPROVAL"))))
+                                "projectId", project.id(), "text", text, "page", "project-home", "executionMode", "APPROVAL"))))
                 .andExpect(status().isOk()).andReturn().getResponse();
         var plan = json.readTree(response.getContentAsByteArray()).get("plan");
         assertThat(plan.get("goal").asText()).isEqualTo(text);

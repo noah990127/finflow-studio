@@ -1,10 +1,12 @@
 import json
 import asyncio
 import re
+import httpx
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from pathlib import Path
+from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field, create_model
+from pydantic import BaseModel, ConfigDict, Field, create_model
 
 from ..config import settings
 from ..llm import llm
@@ -32,6 +34,8 @@ class AgentCapability(BaseModel):
     mode: str
     risk: str
     arguments: list[str] = Field(default_factory=list)
+    input_schema: dict[str, Any] = Field(default_factory=dict, alias="inputSchema")
+    output_schema: dict[str, Any] = Field(default_factory=dict, alias="outputSchema")
 
 
 class AgentResource(BaseModel):
@@ -62,6 +66,16 @@ class AgentPlanRequest(BaseModel):
     resources: list[AgentResource] = Field(default_factory=list)
     recent_messages: list[AgentMessage] = Field(default_factory=list)
     capabilities: list[AgentCapability]
+
+
+class ContinuousAgentRequest(AgentPlanRequest):
+    run_id: str
+    gateway_url: str
+    gateway_token: str = Field(repr=False)
+    resume: bool = False
+    approval_count: int = 0
+    max_tool_calls: int = 80
+    timeout_seconds: int = 900
 
 
 class AgentAction(BaseModel):
@@ -145,17 +159,25 @@ def build_workbench_tools(deps: AgentDependencies):
         if capability.id == "assistant.respond":
             continue
         safe_name = capability.id.replace(".", "_").replace("-", "_")
-        fields = {name: (Any, Field(default=None, description=f"{capability.id} 的 {name} 参数"))
-                  for name in capability.arguments}
+        schema = capability.input_schema or {"type": "object", "properties": {
+            name: {"type": "string"} for name in capability.arguments}, "required": capability.arguments}
+        required = set(schema.get("required", []))
+        properties = schema.get("properties", {})
+        fields = {}
+        for name, property_schema in properties.items():
+            annotation = _schema_type(property_schema, f"{safe_name}_{name}")
+            default = ... if name in required else None
+            fields[name] = (annotation if name in required else Optional[annotation], _schema_field(property_schema, default))
         fields["action_summary"] = (str, Field(default="", description="向用户简短说明目标理解和选择此动作的依据；不要内部推理"))
-        args_schema = create_model(f"{safe_name.title().replace('_', '')}Input", **fields)
+        args_schema = create_model(f"{safe_name.title().replace('_', '')}Input",
+                                   __config__=ConfigDict(extra="forbid"), **fields)
 
         def make_invoke(item: AgentCapability):
             async def invoke(**arguments: Any) -> str:
                 if deps.staged_actions:
                     return "本轮已经选择了一个真实工作台动作。请等待执行结果，不要继续调用其他工作台工具"
                 deps.public_summary = str(arguments.pop("action_summary", ""))[:1200]
-                clean_arguments = {key: value for key, value in arguments.items() if value is not None}
+                clean_arguments = {key: _plain_value(value) for key, value in arguments.items() if value is not None}
                 deps.staged_actions.append(AgentAction(
                     tool=item.id,
                     title=item.title,
@@ -174,6 +196,164 @@ def build_workbench_tools(deps: AgentDependencies):
             return_direct=True,
         ))
     return tools
+
+
+def _capability_input_model(capability: AgentCapability):
+    safe_name = capability.id.replace(".", "_").replace("-", "_")
+    schema = capability.input_schema or {
+        "type": "object",
+        "properties": {name: {"type": "string"} for name in capability.arguments},
+        "required": capability.arguments,
+    }
+    required = set(schema.get("required", []))
+    fields = {}
+    for name, property_schema in schema.get("properties", {}).items():
+        annotation = _schema_type(property_schema, f"{safe_name}_{name}")
+        default = ... if name in required else None
+        fields[name] = (
+            annotation if name in required else Optional[annotation],
+            _schema_field(property_schema, default),
+        )
+    return create_model(
+        f"{safe_name.title().replace('_', '')}ContinuousInput",
+        __config__=ConfigDict(extra="forbid"),
+        **fields,
+    )
+
+
+async def _call_java_gateway(request: ContinuousAgentRequest, call_id: str,
+                             capability: AgentCapability, arguments: dict[str, Any]) -> dict[str, Any]:
+    async with httpx.AsyncClient(timeout=180) as client:
+        response = await client.post(
+            f"{request.gateway_url.rstrip('/')}/internal/assistant/runs/{request.run_id}/tools/call",
+            headers={"X-Agent-Gateway-Token": request.gateway_token},
+            json={"callId": call_id, "tool": capability.id, "arguments": arguments},
+        )
+        response.raise_for_status()
+        return response.json()
+
+
+def build_continuous_workbench_tools(request: ContinuousAgentRequest,
+                                     queue: asyncio.Queue[dict[str, Any]]):
+    """Expose the Java workbench through strict tools; reads may overlap, writes are serialized."""
+    from langchain_core.tools import StructuredTool
+
+    tools = []
+    write_lock = asyncio.Lock()
+    sequence = 0
+
+    for capability in request.capabilities:
+        if capability.id == "assistant.respond":
+            continue
+        safe_name = capability.id.replace(".", "_").replace("-", "_")
+
+        def make_invoke(item: AgentCapability):
+            async def invoke(**arguments: Any) -> dict[str, Any]:
+                nonlocal sequence
+                sequence += 1
+                if sequence > request.max_tool_calls:
+                    return {
+                        "success": False,
+                        "failureType": "BUDGET_EXHAUSTED",
+                        "retryable": False,
+                        "recoveryHint": "停止继续调用工具，向用户说明已完成内容和剩余工作",
+                    }
+                clean_arguments = {key: _plain_value(value) for key, value in arguments.items() if value is not None}
+                call_id = f"{request.run_id}:{sequence}"
+                await queue.put({
+                    "type": "tool_call", "status": "running", "activity_id": call_id,
+                    "toolName": item.id, "argumentSummary": _summarize_arguments(clean_arguments),
+                    "message": item.title, "progress": min(92, 20 + sequence * 2),
+                })
+                try:
+                    if item.mode == "READ":
+                        result = await _call_java_gateway(request, call_id, item, clean_arguments)
+                    else:
+                        async with write_lock:
+                            result = await _call_java_gateway(request, call_id, item, clean_arguments)
+                except (httpx.HTTPError, OSError) as exception:
+                    result = {
+                        "success": False, "error": str(exception), "failureType": "NETWORK",
+                        "retryable": True, "recoveryHint": "Java 工具网关暂时不可用，可以有限重试",
+                    }
+                await queue.put({
+                    "type": "observation", "status": "completed" if result.get("success") else "failed",
+                    "activity_id": call_id, "toolName": item.id,
+                    "resultSummary": result.get("result") or result.get("error") or "工具已返回",
+                    "message": result.get("result") or result.get("error") or "工具已返回",
+                    "output": result.get("output", {}), "provenance": result.get("provenance", {}),
+                    "failureType": result.get("failureType"), "retryable": result.get("retryable"),
+                    "recoveryHint": result.get("recoveryHint"),
+                    "progress": min(94, 22 + sequence * 2),
+                })
+                if result.get("taskComplete"):
+                    await queue.put({
+                        "type": "_task_complete",
+                        "content": result.get("completionSummary") or result.get("result") or "任务已完成",
+                    })
+                return result
+            return invoke
+
+        tools.append(StructuredTool.from_function(
+            coroutine=make_invoke(capability),
+            name=safe_name,
+            description=(f"{capability.description}。模式：{capability.mode}；风险：{capability.risk}。"
+                         "参数必须符合 schema；返回的 Observation 是真实执行结果。"),
+            args_schema=_capability_input_model(capability),
+        ))
+    return tools
+
+
+def _summarize_arguments(arguments: dict[str, Any]) -> str:
+    value = json.dumps(arguments, ensure_ascii=False, default=str)
+    return value if len(value) <= 500 else value[:497] + "..."
+
+
+def _schema_type(schema: dict[str, Any], name: str):
+    values = schema.get("enum")
+    if isinstance(values, list) and values:
+        return Literal.__getitem__(tuple(values))
+    kind = schema.get("type", "string")
+    if kind == "integer":
+        return int
+    if kind == "number":
+        return float
+    if kind == "boolean":
+        return bool
+    if kind == "array":
+        return list[_schema_type(schema.get("items", {}), name + "_item")]
+    if kind == "object":
+        properties = schema.get("properties")
+        if not isinstance(properties, dict) or not properties:
+            return dict[str, Any]
+        required = set(schema.get("required", []))
+        fields = {}
+        for field_name, field_schema in properties.items():
+            annotation = _schema_type(field_schema, name + "_" + field_name)
+            default = ... if field_name in required else None
+            fields[field_name] = (annotation if field_name in required else Optional[annotation],
+                                  _schema_field(field_schema, default))
+        return create_model(name.title().replace("_", ""),
+                            __config__=ConfigDict(extra="forbid" if schema.get("additionalProperties") is False else "allow"),
+                            **fields)
+    return str
+
+
+def _schema_field(schema: dict[str, Any], default: Any):
+    options: dict[str, Any] = {"default": default, "description": schema.get("description", "")}
+    if isinstance(schema.get("minimum"), (int, float)):
+        options["ge"] = schema["minimum"]
+    if isinstance(schema.get("minLength"), int):
+        options["min_length"] = schema["minLength"]
+    return Field(**options)
+
+
+def _plain_value(value: Any) -> Any:
+    if isinstance(value, BaseModel):
+        return {key: _plain_value(item) for key, item in value.model_dump(exclude_none=True).items()}
+    if isinstance(value, list):
+        return [_plain_value(item) for item in value]
+    return value
 
 
 async def plan_with_agent(request: AgentPlanRequest, model_override: Any = None) -> Optional[AgentPlanResponse]:
@@ -242,8 +422,12 @@ async def plan_with_agent(request: AgentPlanRequest, model_override: Any = None)
 用户提供的节点 Prompt 必须完整写入相应配置，包含规则、权重、输出格式和出处要求；不能只写名称或截取开头。
 workflow.edit 的 patch 必须是结构化对象；nodes 按 id 合并，edges 为完整连线列表。不要使用自然语言 patch 或 JSON Patch 数组。
 Observation 已返回 workflow 时直接使用其节点和版本，不要重复打开核对同一内容。changed=false 表示没有修改，不得重复尝试同样操作。
+工具失败时必须读取 failureType、retryable 和 recoveryHint：PARAMETER 要按契约修参，RESOURCE_MISSING 要重新查找真实对象或资料，
+CONFLICT 要先读取最新版本，AUTHORIZATION 要说明需要用户处理的权限；只有 NETWORK 且 retryable=true 才能使用相同参数有限重试。
 禁止提前编排整条固定步骤，也禁止只描述计划或捏造工具名称。工具结果由 Java 权限网关真实执行。
-不要因为用户提到分析就自动创建财务报告，也不要在缺少结构化数据时创建数据加工或图表报告。
+研究、分析、总结类任务如果用户没有明确指定成果格式，默认生成一份 PPTX，不要只在对话中返回长篇结论。
+只有用户明确要求交互报告、自助分析、数据看板或图表报告时才能选择 FINANCIAL_REPORT，并且必须先确认项目中已有可读取的 CSV 或数据采集结果。
+不要因为用户提到“分析”或“报告”就选择 FINANCIAL_REPORT，也不要为了满足前置条件而凭空创建数据集。
 根据用户选择的 Auto 或审批策略决定是否等待确认；风险分类由后端最终强制执行。
 当前执行模式可从 inspect_workspace 的 execution_mode 读取。AUTO 模式下不得要求用户再次确认；当工作区快照中能按名称唯一匹配对象时，
 必须自行使用其 ID 调用工具，不得向用户索要 workflow_id、resource_id、folder_id 等内部标识。APPROVAL 模式下也应先形成工具计划，由界面统一请求确认。
@@ -302,6 +486,152 @@ dataset.transform 的 script 只能是单条只读 DuckDB SELECT/WITH SQL，输�
                              public_summary=deps.public_summary or decision.public_summary,
                              selected_skills=decision.selected_skills or sorted(deps.selected_skills),
                              steps=deps.staged_actions, mode="deep-agents", completed=decision.completed)
+
+
+def _continuous_instructions(request: ContinuousAgentRequest) -> str:
+    return """你是 FinFlow 工作台的自主 Agent。你负责从理解目标到验证结果的完整任务循环，不要在每个工具之后结束任务。
+先读取必要的项目上下文，按需发现 Skill 和工具，再连续执行、检查真实 Observation、修正参数或更换策略，直到用户的任务真正完成。
+Skill 说明“怎么做”，Tool 表示“能做什么”。仅在需要时加载 Skill，不要把 Skill 当成工具执行。
+相互独立的读取可以在同一轮并行调用；有依赖的操作等待上游返回后再执行。
+已经成功返回的读取结果应直接复用；工作区未发生相关变化时，不要使用相同或等价参数重复调用 workspace.inspect、project.list、source.search、knowledge.read 等读取工具。
+公开资料搜索结果只是候选。加入网址时优先使用 source.add_verified；该工具会先验证并保存快照。禁止把未成功读取的 URL 当作正式来源。
+已明确的节点、配置和连线优先使用 workflow.edit 一次批量保存；会冲突的写操作必须顺序执行。
+研究、分析、总结类任务如果用户没有明确指定成果格式，默认生成 PPTX，不要只在对话中返回长篇结论。
+只有用户明确要求交互报告、自助分析、数据看板或图表报告时才能选择 FINANCIAL_REPORT，并且必须先通过项目上下文确认已有可读取的 CSV 或数据采集结果。
+不要因为用户提到“分析”或“报告”就选择 FINANCIAL_REPORT，也不要为了生成交互报告而凭空创建数据集。
+工具参数必须严格遵守 schema。失败时根据 failureType、retryable 和 recoveryHint 恢复：参数错误修参数，资料缺失先查找，版本冲突先重读，只有可重试的网络错误才可用同参数有限重试。
+执行成功不等于任务完成。创建或编辑后必须检查对象存在、内容有效、关键要求完整，涉及研究与交付件时检查 citation/provenance。
+deliverable.create 已负责打开新成果；成功后不要再调用 deliverable.open。若工具返回 taskComplete，立即结束任务。
+不要为了理解当前任务打开无关的历史交付件。生成成果失败时先根据明确错误修正参数或引用，不要原样重复创建。
+用户按名称描述对象时，自行读取工作区并解析内部 ID，不得要求用户提供 workflow_id 等内部标识。
+除非用户确实要求可复用流程，不要为普通任务自动创建 Workflow。
+最终回答使用业务用户能读懂的语言，明确已完成内容、产出位置、重要来源和仍存在的限制。不暴露隐藏思维链，不宣称未验证的操作已完成。
+""".strip()
+
+
+def _interrupt_payload(result: dict[str, Any]) -> list[dict[str, Any]]:
+    payloads = result.get("__interrupt__", [])
+    actions: list[dict[str, Any]] = []
+    for interrupt in payloads:
+        value = getattr(interrupt, "value", interrupt)
+        if not isinstance(value, dict):
+            continue
+        for action in value.get("action_requests", []):
+            if isinstance(action, dict):
+                actions.append({
+                    "tool": action.get("name", "").replace("_", "."),
+                    "toolName": action.get("name", ""),
+                    "arguments": action.get("args", {}),
+                    "description": action.get("description", ""),
+                })
+    return actions
+
+
+async def run_continuous_agent_stream(request: ContinuousAgentRequest, model_override: Any = None):
+    """Run or resume one checkpointed DeepAgents task against the governed Java gateway."""
+    model = model_override or (custom_model(request.model_config_override) if request.model_config_override else _model())
+    if model is None:
+        raise RuntimeError("Agent 模型尚未配置")
+
+    from deepagents import create_deep_agent
+    from deepagents.backends import CompositeBackend, FilesystemBackend, StateBackend
+    from langgraph.types import Command
+
+    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    tools = build_continuous_workbench_tools(request, queue)
+    capabilities_by_name = {
+        item.id.replace(".", "_").replace("-", "_"): item
+        for item in request.capabilities if item.id != "assistant.respond"
+    }
+    interrupt_on = None
+    if request.execution_mode.upper() != "AUTO":
+        interrupt_on = {
+            name: {"allowed_decisions": ["approve", "reject"], "description": capability.description}
+            for name, capability in capabilities_by_name.items() if capability.mode != "READ"
+        }
+    skills_path = Path(settings.agent_skills_dir).resolve()
+    backend = CompositeBackend(
+        default=StateBackend(),
+        routes={"/skills/": FilesystemBackend(root_dir=skills_path, virtual_mode=True)},
+    )
+    agent = create_deep_agent(
+        model=model,
+        tools=tools,
+        system_prompt=_continuous_instructions(request),
+        skills=["/skills/"],
+        backend=backend,
+        checkpointer=_agent_checkpointer(),
+        interrupt_on=interrupt_on,
+        name="finflow-continuous-agent",
+    )
+    config = {"configurable": {"thread_id": f"continuous:{request.run_id}"},
+              "recursion_limit": max(30, request.max_tool_calls * 3)}
+    if request.resume:
+        decisions = [{"type": "approve"} for _ in range(max(1, request.approval_count))]
+        agent_input: Any = Command(resume={"decisions": decisions})
+    else:
+        history = [message.model_dump() for message in request.recent_messages
+                   if message.role in {"user", "assistant", "system"}]
+        if not history or history[-1].get("role") != "user" or history[-1].get("content") != request.goal:
+            history.append({"role": "user", "content": request.goal})
+        agent_input = {"messages": history}
+
+    await queue.put({"type": "thinking_summary", "status": "running", "activity_id": "understanding",
+                     "message": "正在理解目标、检查当前工作区并选择处理方式", "progress": 8})
+    await queue.put({"type": "skill_loading", "status": "completed", "activity_id": "skills",
+                     "message": f"已发现 {len(load_skills(settings.agent_skills_dir))} 个可按需加载的业务技能", "progress": 12})
+    await queue.put({"type": "planning", "status": "running", "activity_id": "planning",
+                     "message": "正在选择所需资料和工具，计划会随真实结果动态调整", "progress": 15})
+    invocation = asyncio.create_task(agent.ainvoke(agent_input, config=config))
+    deadline = asyncio.get_running_loop().time() + max(1, request.timeout_seconds)
+    completion_summary: str | None = None
+    try:
+        while not invocation.done() or not queue.empty():
+            if asyncio.get_running_loop().time() >= deadline:
+                raise asyncio.TimeoutError
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=0.25)
+                if event.get("type") == "_task_complete":
+                    completion_summary = str(event.get("content") or "任务已完成")
+                    invocation.cancel()
+                    break
+                yield event
+            except asyncio.TimeoutError:
+                continue
+        if completion_summary is not None:
+            try:
+                await invocation
+            except asyncio.CancelledError:
+                pass
+            yield {"type": "generating", "status": "completed", "activity_id": "deterministic-finish",
+                   "message": "成果已经验证，正在完成任务", "progress": 98}
+            yield {"type": "completed", "status": "completed", "content": completion_summary,
+                   "message": completion_summary, "mode": "deep-agents-continuous", "progress": 100}
+            return
+        result = await invocation
+    except asyncio.TimeoutError as exception:
+        invocation.cancel()
+        raise RuntimeError(f"Agent 超过 {request.timeout_seconds} 秒执行上限，已保留完成的操作") from exception
+
+    actions = _interrupt_payload(result)
+    if actions:
+        yield {"type": "waiting_confirmation", "status": "waiting", "actions": actions,
+               "approvalCount": len(actions), "message": f"有 {len(actions)} 个写入操作等待确认", "progress": 50}
+        return
+    messages = result.get("messages", [])
+    content = getattr(messages[-1], "content", "") if messages else ""
+    if not isinstance(content, str):
+        content = json.dumps(content, ensure_ascii=False, default=str)
+    try:
+        final_value = json.loads(content)
+        if isinstance(final_value, dict):
+            final_value = final_value.get("final", final_value)
+            if isinstance(final_value, dict) and isinstance(final_value.get("summary"), str):
+                content = final_value["summary"]
+    except json.JSONDecodeError:
+        pass
+    yield {"type": "completed", "status": "completed", "content": content,
+           "message": content, "mode": "deep-agents-continuous", "progress": 100}
 
 async def run_open_task_stream(request: OpenTaskRequest, model_override: Any = None):
     """Run one governed open task and expose business-readable activity events."""

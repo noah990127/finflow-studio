@@ -29,6 +29,7 @@ management:
 finflow:
   agent:
     max-dynamic-actions: ${FINFLOW_AGENT_MAX_DYNAMIC_ACTIONS:80}
+    gateway-base-url: ${FINFLOW_AGENT_GATEWAY_BASE_URL:http://127.0.0.1:8080}
   transform:
     max-output-bytes: ${FINFLOW_TRANSFORM_MAX_OUTPUT_BYTES:107374182400}
   storage:

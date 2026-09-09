@@ -45,7 +45,16 @@ from ..deliverables import create_docx, create_excalidraw, create_financial_repo
 from ..ppt_skills import catalog as ppt_skill_catalog
 from ..spreadsheet_files import profile_spreadsheet, transform_spreadsheet
 from ..data_transform import generate_transform, profile_tabular, run_transform, sample_transform
-from ..agent import AgentPlanRequest, AgentPlanResponse, OpenTaskRequest, load_skills, plan_with_agent, run_open_task_stream
+from ..agent import (
+    AgentPlanRequest,
+    AgentPlanResponse,
+    ContinuousAgentRequest,
+    OpenTaskRequest,
+    load_skills,
+    plan_with_agent,
+    run_continuous_agent_stream,
+    run_open_task_stream,
+)
 from ..research import fetch_web
 from .uploads import temporary_upload
 import json
@@ -93,6 +102,7 @@ async def health() -> dict:
         "agentEnabled": settings.agent_enabled,
         "agentFramework": "deep-agents",
         "agentRuntimeMode": runtime_mode,
+        "continuousAgent": True,
         "agentSkillCount": len(skills),
         "agentMcpConfigured": True,
         "agentGateway": "studio-mcp",
@@ -161,6 +171,19 @@ async def run_agent_task(request: OpenTaskRequest) -> StreamingResponse:
             async for event in run_open_task_stream(request):
                 yield json.dumps(event, ensure_ascii=False) + "\n"
         except Exception as exception:
+            yield json.dumps({"type": "error", "message": str(exception), "progress": 100}, ensure_ascii=False) + "\n"
+
+    return StreamingResponse(stream(), media_type="application/x-ndjson")
+
+
+@app.post("/v1/agent/runs/stream")
+async def run_continuous_agent(request: ContinuousAgentRequest) -> StreamingResponse:
+    async def stream():
+        try:
+            async for event in run_continuous_agent_stream(request):
+                yield json.dumps(event, ensure_ascii=False) + "\n"
+        except Exception as exception:
+            logger.exception("Continuous Agent failed for run %s", request.run_id)
             yield json.dumps({"type": "error", "message": str(exception), "progress": 100}, ensure_ascii=False) + "\n"
 
     return StreamingResponse(stream(), media_type="application/x-ndjson")

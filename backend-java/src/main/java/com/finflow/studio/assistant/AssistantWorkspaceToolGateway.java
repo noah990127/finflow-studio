@@ -46,6 +46,7 @@ public class AssistantWorkspaceToolGateway {
             "folder.create", "folder.rename", "folder.move", "folder.delete",
             "resource.upload", "resource.add", "resource.open", "resource.read", "resource.edit",
             "resource.rename", "resource.move", "resource.delete",
+            "source.verify", "source.add_verified",
             "knowledge.read", "knowledge.parse", "knowledge.extract_table",
             "dataset.add_source", "dataset.connect", "dataset.import", "dataset.query", "dataset.extract",
             "dataset.create", "dataset.transform", "dataset.open", "dataset.delete", "dataset.profile",
@@ -97,6 +98,7 @@ public class AssistantWorkspaceToolGateway {
     }
 
     public String execute(PlanStep step, Map<String, Object> effects) {
+        AssistantToolContracts.validate(step.tool(), step.arguments());
         return switch (step.tool()) {
             case "workspace.select" -> select(step, effects);
             case "project.list" -> listProjects(step, effects);
@@ -108,6 +110,8 @@ public class AssistantWorkspaceToolGateway {
             case "folder.delete" -> deleteFolder(step, effects);
             case "resource.upload" -> uploadResource(step, effects);
             case "resource.add" -> addResource(step, effects);
+            case "source.verify" -> verifySource(step, effects);
+            case "source.add_verified" -> addVerifiedSource(step, effects);
             case "resource.open" -> openResource(step, effects);
             case "resource.read" -> readResource(step, effects);
             case "resource.edit" -> editResource(step, effects);
@@ -236,20 +240,54 @@ public class AssistantWorkspaceToolGateway {
     private String addResource(PlanStep step, Map<String, Object> effects) {
         var url = argument(step, "url", "");
         if (url.isBlank()) return uploadResource(step, effects);
-        if (!url.startsWith("http://") && !url.startsWith("https://")) throw new IllegalArgumentException("资源地址必须使用 HTTP 或 HTTPS");
+        return addVerifiedSource(step, effects);
+    }
+
+    private String verifySource(PlanStep step, Map<String, Object> effects) {
+        var url = required(step, "url", "资料地址");
+        if (!url.startsWith("http://") && !url.startsWith("https://"))
+            throw new IllegalArgumentException("资源地址必须使用 HTTP 或 HTTPS");
+        var fetched = fetchWebUrl(url, argument(step, "name", url));
+        var verified = verifiedSource("", 0, url, fetched, null);
+        effects.put("verifiedSourceCandidate", verified);
+        return "来源已验证，可读取“" + Objects.toString(fetched.get("title"), argument(step, "name", url)) + "”";
+    }
+
+    private String addVerifiedSource(PlanStep step, Map<String, Object> effects) {
+        var url = required(step, "url", "资料地址");
+        if (!url.startsWith("http://") && !url.startsWith("https://"))
+            throw new IllegalArgumentException("资源地址必须使用 HTTP 或 HTTPS");
         var projectId = required(step, "project_id", "项目");
+        var name = argument(step, "name", url);
+        var fetched = fetchWebUrl(url, name);
         var current = workflows.getProjectWorkflow(projectId);
         var nodes = new ArrayList<>(current.nodes());
         var id = "link_" + shortId();
-        var name = argument(step, "name", url);
         nodes.add(new NodeDefinition(id, NodeType.LINK_INPUT, name, 80, 80 + nodes.size() * 90,
-                Map.of("title", name, "url", url)));
-        workflows.update(current.id(), save(current, nodes, current.edges()));
+                Map.of("title", name, "url", url, "verified", true,
+                        "finalUrl", Objects.toString(fetched.get("final_url"), url),
+                        "contentHash", Objects.toString(fetched.get("content_hash"), ""),
+                        "verifiedAt", Instant.now().toString())));
+        var updated = workflows.update(current.id(), save(current, nodes, current.edges()));
+        var snapshotBody = "来源标题：" + Objects.toString(fetched.get("title"), name)
+                + "\n原始地址：" + url
+                + "\n最终地址：" + Objects.toString(fetched.get("final_url"), url)
+                + "\n验证时间：" + Instant.now()
+                + "\n内容类型：" + Objects.toString(fetched.get("content_type"), "")
+                + "\n内容哈希：" + Objects.toString(fetched.get("content_hash"), "")
+                + "\n\n" + Objects.toString(fetched.get("text"), "");
+        var snapshot = knowledge.importBytes(projectId, name + "-网页快照.md", "text/markdown",
+                snapshotBody.getBytes(StandardCharsets.UTF_8));
+        moveIfRequested(projectId, snapshot.id(), fileResourceType(snapshot.name()), "FILES", nullable(step, "folder_id"));
+        var verified = verifiedSource(id, updated.currentVersion(), url, fetched, snapshot.id());
+        appendVerifiedSource(effects, verified);
+        appendCitation(effects, citationFromVerified(verified));
         effects.put("resourceId", id);
+        effects.put("snapshotResourceId", snapshot.id());
         effects.put("workflowId", current.id());
-        effects.put("uiAction", Map.of("type", "OPEN_WORKFLOW", "projectId", projectId,
-                "workflowId", current.id(), "refreshWorkspace", true));
-        return "已添加网页资源“" + name + "”";
+        effects.put("uiAction", Map.of("type", "REFRESH_WORKSPACE", "projectId", projectId,
+                "resourceId", id, "refreshWorkspace", true));
+        return "已验证并添加网页来源“" + name + "”，同时保存了可追溯快照";
     }
 
     private String openResource(PlanStep step, Map<String, Object> effects) {
@@ -275,6 +313,9 @@ public class AssistantWorkspaceToolGateway {
             detail.put("contentHash", Objects.toString(fetched.get("content_hash"), ""));
             detail.put("tables", fetched.getOrDefault("tables", List.of()));
             detail.put("refs", List.of(webRef(item, fetched)));
+            var verified = verifiedSource(item.id(), Math.max(1, item.currentVersion()), item.url(), fetched, null);
+            appendVerifiedSource(effects, verified);
+            appendCitation(effects, citationFromVerified(verified));
         } else if (Set.of("KNOWLEDGE_FILE", "DATA_FILE", "OFFICE_FILE").contains(item.resourceType())) {
             detail.put("refs", knowledge.currentRefs(item.id(), 20));
             var file = knowledge.filePath(item.id(), null);
@@ -715,15 +756,71 @@ public class AssistantWorkspaceToolGateway {
     }
 
     private Map<String, Object> fetchWebResource(Resource item) {
+        return fetchWebUrl(item.url(), item.name());
+    }
+
+    private Map<String, Object> fetchWebUrl(String url, String name) {
         try {
-            var fetched = worker.fetchResearchSource(item.url());
+            var fetched = worker.fetchResearchSource(url);
             if (Objects.toString(fetched.get("text"), "").isBlank()) {
                 throw new IllegalStateException("网页没有返回可读取正文");
             }
             return fetched;
         } catch (RuntimeException exception) {
-            throw new IllegalStateException("网页资源“" + item.name() + "”读取失败：" + exception.getMessage(), exception);
+            throw new IllegalStateException("网页来源“" + name + "”验证失败，未加入工作区：" + exception.getMessage(), exception);
         }
+    }
+
+    private Map<String, Object> verifiedSource(String resourceId, int version, String url,
+                                               Map<String, Object> fetched, String snapshotResourceId) {
+        var value = new LinkedHashMap<String, Object>();
+        value.put("resourceId", resourceId);
+        value.put("version", Math.max(1, version));
+        value.put("sourceName", Objects.toString(fetched.get("title"), url));
+        value.put("url", url);
+        value.put("finalUrl", Objects.toString(fetched.get("final_url"), url));
+        value.put("contentType", Objects.toString(fetched.get("content_type"), ""));
+        value.put("contentHash", Objects.toString(fetched.get("content_hash"), ""));
+        value.put("verifiedAt", Instant.now().toString());
+        value.put("excerpt", Objects.toString(fetched.get("text"), "").substring(0,
+                Math.min(1200, Objects.toString(fetched.get("text"), "").length())));
+        if (snapshotResourceId != null && !snapshotResourceId.isBlank()) value.put("snapshotResourceId", snapshotResourceId);
+        return Map.copyOf(value);
+    }
+
+    @SuppressWarnings("unchecked")
+    private void appendVerifiedSource(Map<String, Object> effects, Map<String, Object> source) {
+        var values = effects.get("verifiedSources") instanceof List<?> existing
+                ? new ArrayList<>(existing.stream().filter(Map.class::isInstance).map(item -> (Map<String, Object>) item).toList())
+                : new ArrayList<Map<String, Object>>();
+        values.removeIf(item -> Objects.equals(item.get("resourceId"), source.get("resourceId"))
+                || Objects.equals(item.get("url"), source.get("url")));
+        values.add(source);
+        effects.put("verifiedSources", List.copyOf(values));
+    }
+
+    @SuppressWarnings("unchecked")
+    private void appendCitation(Map<String, Object> effects, Map<String, Object> citation) {
+        var values = effects.get("knowledgeCitations") instanceof List<?> existing
+                ? new ArrayList<>(existing.stream().filter(Map.class::isInstance).map(item -> (Map<String, Object>) item).toList())
+                : new ArrayList<Map<String, Object>>();
+        values.removeIf(item -> Objects.equals(item.get("citationId"), citation.get("citationId")));
+        values.add(citation);
+        effects.put("knowledgeCitations", List.copyOf(values));
+    }
+
+    private Map<String, Object> citationFromVerified(Map<String, Object> source) {
+        return Map.of(
+                "citationId", "web:" + UUID.nameUUIDFromBytes(Objects.toString(source.get("url"), "").getBytes(StandardCharsets.UTF_8)),
+                "resourceId", Objects.toString(source.get("resourceId"), ""),
+                "version", source.get("version"),
+                "sourceName", Objects.toString(source.get("sourceName"), "公开网页"),
+                "excerpt", Objects.toString(source.get("excerpt"), ""),
+                "location", Map.of("url", Objects.toString(source.get("url"), ""),
+                        "finalUrl", Objects.toString(source.get("finalUrl"), ""),
+                        "verifiedAt", Objects.toString(source.get("verifiedAt"), "")),
+                "contentHash", Objects.toString(source.get("contentHash"), ""),
+                "score", 1.0);
     }
 
     @SuppressWarnings("unchecked")
@@ -745,7 +842,7 @@ public class AssistantWorkspaceToolGateway {
 
     private Map<String, Object> webRef(Resource item, Map<String, Object> fetched) {
         return Map.of("id", "web:" + UUID.nameUUIDFromBytes(item.url().getBytes(StandardCharsets.UTF_8)),
-                "resourceId", item.id(), "version", 0,
+                "resourceId", item.id(), "version", Math.max(1, item.currentVersion()),
                 "sourceName", Objects.toString(fetched.get("title"), item.name()),
                 "text", Objects.toString(fetched.get("text"), ""),
                 "location", Map.of("url", item.url(), "finalUrl", Objects.toString(fetched.get("final_url"), item.url())),

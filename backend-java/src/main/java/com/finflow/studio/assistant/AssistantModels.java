@@ -53,6 +53,7 @@ public final class AssistantModels {
     }
 
     public record MessageRequest(
+            @NotBlank String projectId,
             @NotBlank String text,
             @NotBlank String page,
             String route,

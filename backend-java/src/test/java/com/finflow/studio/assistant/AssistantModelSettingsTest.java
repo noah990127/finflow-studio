@@ -90,7 +90,8 @@ class AssistantModelSettingsTest {
         when(worker.planAgent(any())).thenReturn(Map.of("summary", "创建文件夹", "steps", List.of(Map.of(
                 "tool", "folder.create", "title", "创建", "description", "创建", "arguments", Map.of("name", "测试", "group", "knowledge")))));
         mvc.perform(post("/api/assistant/sessions/" + id + "/messages").contentType(MediaType.APPLICATION_JSON)
-                .content("{\"text\":\"新建文件夹\",\"page\":\"project-home\",\"executionMode\":\"APPROVAL\"}"))
+                .content(json.writeValueAsBytes(Map.of("projectId", assistant.getSession(id).projectId(),
+                        "text", "新建文件夹", "page", "project-home", "executionMode", "APPROVAL"))))
                 .andExpect(status().isOk());
         assertThatThrownBy(() -> settings.save(id, custom())).hasMessageContaining("中断当前任务");
     }

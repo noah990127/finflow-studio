@@ -52,6 +52,12 @@ public class AssistantEventService {
 
     public SseEmitter subscribe(String sessionId, long afterSequence) {
         var emitter = new SseEmitter(30 * 60 * 1000L);
+        try {
+            emitter.send(SseEmitter.event().comment("connected"));
+        } catch (IOException | IllegalStateException ex) {
+            emitter.completeWithError(ex);
+            return emitter;
+        }
         list(sessionId, afterSequence).forEach(event -> send(emitter, event));
         emitters.computeIfAbsent(sessionId, ignored -> new CopyOnWriteArrayList<>()).add(emitter);
         emitter.onCompletion(() -> remove(sessionId, emitter));

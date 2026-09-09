@@ -3,6 +3,7 @@ package com.finflow.studio.assistant;
 import com.finflow.studio.assistant.AssistantModels.PlanStep;
 import com.finflow.studio.assistant.AssistantModels.RiskLevel;
 import com.finflow.studio.knowledge.KnowledgeService;
+import com.finflow.studio.deliverable.DeliverableService;
 import com.finflow.studio.project.ProjectService;
 import com.finflow.studio.worker.WorkerClient;
 import com.finflow.studio.workspace.WorkspaceResourceService;
@@ -27,6 +28,7 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @SpringBootTest(properties = {
         "spring.datasource.url=jdbc:h2:mem:finflow-web-dataset-test;MODE=PostgreSQL;DB_CLOSE_DELAY=-1",
@@ -35,9 +37,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Import(AssistantWebDatasetFlowTest.WebDatasetWorkerConfiguration.class)
 class AssistantWebDatasetFlowTest {
     @Autowired AssistantExecutionService execution;
+    @Autowired AssistantWorkspaceToolGateway gateway;
     @Autowired ProjectService projects;
     @Autowired WorkspaceResourceService workspace;
     @Autowired KnowledgeService knowledge;
+    @Autowired DeliverableService deliverables;
     @Autowired ObjectMapper objectMapper;
 
     @Test
@@ -81,6 +85,139 @@ class AssistantWebDatasetFlowTest {
         assertThat(effects.get("datasetId")).isNotEqualTo(webResourceId).isNotEqualTo(datasetId);
     }
 
+    @Test
+    void rejectsAnUnreadableUrlBeforeItChangesTheWorkspace() {
+        var project = projects.create("来源验证失败", "验证失败不得入库");
+        var before = workspace.get(project.id());
+        var effects = new LinkedHashMap<String, Object>();
+
+        assertThatThrownBy(() -> gateway.execute(step("resource.add", Map.of(
+                "project_id", project.id(), "url", "https://example.test/unavailable", "name", "失效来源")), effects))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("验证失败，未加入工作区");
+
+        var after = workspace.get(project.id());
+        assertThat(after.workflow().currentVersion()).isEqualTo(before.workflow().currentVersion());
+        assertThat(after.resources()).noneMatch(item -> "失效来源".equals(item.name()));
+    }
+
+    @Test
+    void savesAVerifiedSnapshotAndCitationBeforeExposingTheSource() {
+        var project = projects.create("来源验证成功", "保存来源快照");
+        var effects = new LinkedHashMap<String, Object>();
+
+        var result = gateway.execute(step("source.add_verified", Map.of(
+                "project_id", project.id(), "url", "https://example.test/series.json", "name", "公开指标")), effects);
+
+        assertThat(result).contains("已验证并添加").contains("快照");
+        assertThat(effects).containsKeys("resourceId", "snapshotResourceId", "verifiedSources", "knowledgeCitations");
+        assertThat(workspace.get(project.id()).resources()).anySatisfy(item -> {
+            assertThat(item.id()).isEqualTo(effects.get("snapshotResourceId"));
+            assertThat(item.name()).contains("网页快照");
+        });
+        @SuppressWarnings("unchecked")
+        var citations = (List<Map<String, Object>>) effects.get("knowledgeCitations");
+        assertThat(citations).singleElement().satisfies(citation -> {
+            assertThat(citation.get("resourceId")).isEqualTo(effects.get("resourceId"));
+            assertThat(citation.get("version")).isEqualTo(2);
+            assertThat(citation.get("contentHash")).isEqualTo("sha256:test-source");
+        });
+    }
+
+    @Test
+    void bindsOnlyVerifiedSourcesToGeneratedDeliverables() {
+        var project = projects.create("可追溯成果", "验证来源与成果引用绑定");
+        var effects = new LinkedHashMap<String, Object>();
+        gateway.execute(step("source.add_verified", Map.of(
+                "project_id", project.id(), "url", "https://example.test/series.json", "name", "公开指标")), effects);
+        var sourceId = effects.get("resourceId").toString();
+
+        execution.executeStep(step("deliverable.create", Map.of(
+                "project_id", project.id(), "format", "HTML_SLIDES", "title", "公开指标分析",
+                "goal", "根据已核验来源生成简短网页",
+                "citations", List.of(Map.of("resource_id", sourceId, "usage", "月度指标数据")))), effects);
+
+        @SuppressWarnings("unchecked")
+        var outputs = (List<Map<String, Object>>) effects.get("deliverables");
+        var outputId = outputs.getLast().get("id").toString();
+        assertThat(deliverables.citations(outputId, null)).singleElement().satisfies(citation -> {
+            assertThat(citation.get("resource_id")).isEqualTo(sourceId);
+            assertThat(citation.get("version")).isEqualTo(2);
+            assertThat(citation.get("content_hash")).isEqualTo("sha256:test-source");
+        });
+    }
+
+    @Test
+    void acceptsARequestedCitationAfterTheKnowledgeSourceWasRead() {
+        var project = projects.create("已有知识来源", "读取成功的知识片段可以进入成果引用");
+        var effects = new LinkedHashMap<String, Object>();
+        gateway.execute(step("source.add_verified", Map.of(
+                "project_id", project.id(), "url", "https://example.test/series.json", "name", "公开指标")), effects);
+        @SuppressWarnings("unchecked")
+        var readRefs = (List<Map<String, Object>>) effects.get("knowledgeCitations");
+        var sourceId = readRefs.getFirst().get("resourceId").toString();
+        effects.remove("verifiedSources");
+        effects.remove("knowledgeCitations");
+        effects.put("knowledgeRefs", readRefs);
+
+        execution.executeStep(step("deliverable.create", Map.of(
+                "project_id", project.id(), "format", "HTML_SLIDES", "title", "已有资料分析",
+                "goal", "根据已读取资料生成简短网页",
+                "citations", List.of(Map.of("resource_id", sourceId, "usage", "月度指标数据")))), effects);
+
+        @SuppressWarnings("unchecked")
+        var outputs = (List<Map<String, Object>>) effects.get("deliverables");
+        var outputId = outputs.getLast().get("id").toString();
+        assertThat(deliverables.citations(outputId, null)).isNotEmpty()
+                .allSatisfy(citation -> assertThat(citation.get("resource_id")).isEqualTo(sourceId));
+    }
+
+    @Test
+    void rejectsAnUnverifiedCitationDuringDeliverableCreation() {
+        var project = projects.create("拒绝伪引用", "未读取来源不得进入成果");
+        var effects = new LinkedHashMap<String, Object>();
+
+        assertThatThrownBy(() -> execution.executeStep(step("deliverable.create", Map.of(
+                "project_id", project.id(), "format", "HTML_SLIDES", "title", "无依据分析",
+                "content", "测试内容", "citations", List.of(Map.of(
+                        "resource_id", "unknown-source", "url", "https://example.test/unknown")))), effects))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("尚未成功读取的来源");
+    }
+
+    @Test
+    void defaultsAnalysisDeliverablesToPptWhenTheModelSelectsAnInteractiveReport() {
+        var proposed = step("deliverable.create", Map.of(
+                "project_id", "project-1", "format", "FINANCIAL_REPORT", "title", "深圳文化活动分析"));
+
+        var corrected = execution.applyDeliverablePolicy(proposed, "搜索网页资料，分析一下近期深圳文化活动有哪些，怎么报名");
+
+        assertThat(corrected.arguments()).containsEntry("format", "PPTX");
+    }
+
+    @Test
+    void keepsInteractiveReportOnlyWhenTheUserExplicitlyRequestsIt() {
+        var proposed = step("deliverable.create", Map.of(
+                "project_id", "project-1", "format", "FINANCIAL_REPORT", "title", "活动数据看板"));
+
+        var corrected = execution.applyDeliverablePolicy(proposed, "根据活动 CSV 生成一个可交互的数据看板");
+
+        assertThat(corrected.arguments()).containsEntry("format", "FINANCIAL_REPORT");
+    }
+
+    @Test
+    void rejectsInteractiveReportsWithoutTabularProjectData() {
+        var project = projects.create("无表格数据", "只有文本资料");
+        var effects = new LinkedHashMap<String, Object>();
+
+        assertThatThrownBy(() -> execution.executeStep(step("deliverable.create", Map.of(
+                "project_id", project.id(), "format", "FINANCIAL_REPORT", "title", "活动交互报告",
+                "content", "已核验的活动文本资料")), effects))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("CSV、TSV 或数据采集结果")
+                .hasMessageContaining("PPTX");
+    }
+
     private PlanStep step(String tool, Map<String, Object> arguments) {
         return new PlanStep("test-" + tool, 1, tool, "WRITE", tool, tool, arguments,
                 RiskLevel.CREATE_VERSION, false, "PENDING");
@@ -94,6 +231,7 @@ class AssistantWebDatasetFlowTest {
             return new WorkerClient("http://127.0.0.1:9") {
                 @Override
                 public Map<String, Object> fetchResearchSource(String url) {
+                    if (url.contains("unavailable")) throw new IllegalStateException("404 Not Found");
                     return Map.of(
                             "title", "Public monthly series",
                             "text", """
@@ -110,6 +248,17 @@ class AssistantWebDatasetFlowTest {
                 public ParsedDocument parse(Path path, String originalName) {
                     return new ParsedDocument(originalName, "application/json", originalName,
                             0, List.of(), List.of());
+                }
+
+                @Override
+                public Map<String, Object> generateContent(String format, String requirements, String sourceText) {
+                    return Map.of("content", "<h1>公开指标分析</h1><p>数据来自已核验的月度公开指标。</p>");
+                }
+
+                @Override
+                public byte[] generateDeliverable(String format, Object request) {
+                    return "<!doctype html><html><body><h1>公开指标分析</h1></body></html>"
+                            .getBytes(StandardCharsets.UTF_8);
                 }
 
                 @Override

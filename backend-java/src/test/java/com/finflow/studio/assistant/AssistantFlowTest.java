@@ -58,6 +58,7 @@ class AssistantFlowTest {
                 Map.of("title", "测试会话")));
         var response = json(postJson("/api/assistant/sessions/" + session.get("id").asText() + "/messages",
                 Map.of(
+                        "projectId", project.get("id").asText(),
                         "text", "根据当前收入字段创建一条数据清理工作流，并生成 PPT 汇报",
                         "page", "workflow",
                         "selection", Map.of(
@@ -109,7 +110,7 @@ class AssistantFlowTest {
         var session = json(postJson("/api/projects/" + project.get("id").asText() + "/assistant/sessions",
                 Map.of("title", "事件流")));
         json(postJson("/api/assistant/sessions/" + session.get("id").asText() + "/messages",
-                Map.of("text", "打开项目概览", "page", "project-home", "clientContextVersion", 1)));
+                Map.of("projectId", project.get("id").asText(), "text", "打开项目概览", "page", "project-home", "clientContextVersion", 1)));
 
         var history = json(mockMvc.perform(get("/api/assistant/sessions/" + session.get("id").asText() + "/event-history"))
                 .andExpect(status().is2xxSuccessful())
@@ -128,7 +129,7 @@ class AssistantFlowTest {
                 Map.of("title", "Auto 会话")));
 
         var response = json(postJson("/api/assistant/sessions/" + session.get("id").asText() + "/messages",
-                Map.of("text", "根据当前项目创建一条分析工作流", "page", "project-home",
+                Map.of("projectId", project.get("id").asText(), "text", "根据当前项目创建一条分析工作流", "page", "project-home",
                         "clientContextVersion", 1, "executionMode", "AUTO")));
 
         assertThat(response.get("run").isNull()).isFalse();
@@ -155,6 +156,25 @@ class AssistantFlowTest {
 
         assertThat(sessions).extracting(item -> item.get("id").asText())
                 .containsExactly(second.get("id").asText(), first.get("id").asText());
+    }
+
+    @Test
+    void rejectsSendingAProjectMessageThroughAnotherProjectsSession() throws Exception {
+        var firstProject = json(postJson("/api/projects", Map.of("name", "项目甲", "description", "")));
+        var secondProject = json(postJson("/api/projects", Map.of("name", "项目乙", "description", "")));
+        var session = json(postJson("/api/projects/" + firstProject.get("id").asText() + "/assistant/sessions",
+                Map.of("title", "项目甲对话")));
+
+        mockMvc.perform(post("/api/assistant/sessions/" + session.get("id").asText() + "/messages")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsBytes(Map.of(
+                                "projectId", secondProject.get("id").asText(),
+                                "text", "在项目乙中新建文件", "page", "project-home"))))
+                .andExpect(status().isBadRequest());
+
+        var messages = json(mockMvc.perform(get("/api/assistant/sessions/" + session.get("id").asText() + "/messages"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+        assertThat(messages).isEmpty();
     }
 
     @Test

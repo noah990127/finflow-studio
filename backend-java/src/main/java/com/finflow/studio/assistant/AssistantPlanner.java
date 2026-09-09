@@ -227,6 +227,20 @@ public class AssistantPlanner {
         return request;
     }
 
+    public Map<String, Object> continuousRequest(String goal, String page, WorkspaceContext context,
+                                                  String sessionId, String executionMode, String runId,
+                                                  String gatewayUrl, String gatewayToken, boolean resume,
+                                                  int approvalCount) {
+        var request = agentRequest(goal, page, null, context, sessionId, executionMode,
+                false, Map.of(), 0);
+        request.put("run_id", runId);
+        request.put("gateway_url", gatewayUrl);
+        request.put("gateway_token", gatewayToken);
+        request.put("resume", resume);
+        request.put("approval_count", approvalCount);
+        return request;
+    }
+
     private ArrayList<PlanStep> parseAgentSteps(Map<String, Object> response, String goal, String page,
                                                  WorkspaceContext context) {
         var selectedSkills = response.get("selected_skills") instanceof List<?> values
@@ -335,7 +349,8 @@ public class AssistantPlanner {
         if (text.contains("mermaid")) formats.add("MERMAID");
         if (containsAny(text, "excalidraw", "手绘图")) formats.add("EXCALIDRAW");
         if (containsAny(text, "html", "网页幻灯", "网页分析", "网页报告", "html slides")) formats.add("HTML_SLIDES");
-        if (containsAny(text, "交互报告", "可交互报告", "图表报告", "财务报告")) formats.add("FINANCIAL_REPORT");
+        if (containsAny(text, "交互报告", "可交互报告", "自助分析", "数据看板", "图表报告")) formats.add("FINANCIAL_REPORT");
+        if (formats.isEmpty() && asksForAnalysis(text)) formats.add("PPTX");
         return formats.stream().distinct().toList();
     }
 

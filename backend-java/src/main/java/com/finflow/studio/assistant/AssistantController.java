@@ -88,9 +88,10 @@ public class AssistantController {
 
     @GetMapping("/assistant/sessions/{sessionId}/events")
     SseEmitter streamEvents(@PathVariable String sessionId,
-                            @RequestHeader(value = "Last-Event-ID", defaultValue = "0") long lastEventId) {
+                            @RequestHeader(value = "Last-Event-ID", defaultValue = "0") long lastEventId,
+                            @RequestParam(defaultValue = "0") long after) {
         assistant.getSession(sessionId);
-        return events.subscribe(sessionId, lastEventId);
+        return events.subscribe(sessionId, Math.max(lastEventId, after));
     }
 
     @GetMapping("/assistant/sessions/{sessionId}/event-history")

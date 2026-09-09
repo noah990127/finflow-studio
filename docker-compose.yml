@@ -21,6 +21,7 @@ services:
       FINFLOW_DEMO_DATABASE_PASSWORD: ${FINFLOW_DEMO_DATABASE_PASSWORD:-finflow}
       DATABASE_DRIVER: org.postgresql.Driver
       WORKER_BASE_URL: http://python-worker:8001
+      FINFLOW_AGENT_GATEWAY_BASE_URL: http://java-api:8080
       FINFLOW_STORAGE_PROVIDER: s3
       FINFLOW_STORAGE_CACHE_ROOT: /app/data/blob-cache
       FINFLOW_S3_ENDPOINT: http://minio:9000

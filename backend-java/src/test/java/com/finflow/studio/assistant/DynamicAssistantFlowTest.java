@@ -45,7 +45,7 @@ class DynamicAssistantFlowTest {
         var session = json(postJson("/api/projects/" + project.id() + "/assistant/sessions", Map.of("title", "Auto")));
 
         var response = json(postJson("/api/assistant/sessions/" + session.get("id").asText() + "/messages", Map.of(
-                "text", "创建临时目录后把它改名为最终目录", "page", "project-home",
+                "projectId", project.id(), "text", "创建临时目录后把它改名为最终目录", "page", "project-home",
                 "clientContextVersion", 1, "executionMode", "AUTO")));
         var run = awaitStatus(response.get("run").get("id").asText(), "SUCCEEDED");
         var plan = json(getJson("/api/assistant/plans/" + response.get("plan").get("id").asText()));
@@ -76,7 +76,7 @@ class DynamicAssistantFlowTest {
         var project = projects.create("直接回答", "公开摘要测试");
         var session = json(postJson("/api/projects/" + project.id() + "/assistant/sessions", Map.of("title", "只读回答")));
         var response = json(postJson("/api/assistant/sessions/" + session.get("id").asText() + "/messages", Map.of(
-                "text", "只读回答：当前有哪些工作流？", "page", "project-home", "executionMode", "AUTO")));
+                "projectId", project.id(), "text", "只读回答：当前有哪些工作流？", "page", "project-home", "executionMode", "AUTO")));
         var run = awaitStatus(response.get("run").get("id").asText(), "SUCCEEDED");
         assertThat(run.get("resultSummary").asText()).contains("当前没有工作流");
         assertThat(response.get("plan").get("steps")).hasSize(1);
@@ -93,7 +93,7 @@ class DynamicAssistantFlowTest {
         var session = json(postJson("/api/projects/" + project.id() + "/assistant/sessions", Map.of("title", "审批")));
 
         var response = json(postJson("/api/assistant/sessions/" + session.get("id").asText() + "/messages", Map.of(
-                "text", "审批场景：检查项目后创建审批目录", "page", "project-home",
+                "projectId", project.id(), "text", "审批场景：检查项目后创建审批目录", "page", "project-home",
                 "clientContextVersion", 1, "executionMode", "APPROVAL")));
         var runId = response.get("run").get("id").asText();
         var waitingRun = awaitStatus(runId, "WAITING_CONFIRMATION");
@@ -117,7 +117,7 @@ class DynamicAssistantFlowTest {
         var session = json(postJson("/api/projects/" + project.id() + "/assistant/sessions", Map.of("title", "长任务")));
 
         var response = json(postJson("/api/assistant/sessions/" + session.get("id").asText() + "/messages", Map.of(
-                "text", "长任务：连续检查多个工作区状态后完成", "page", "project-home",
+                "projectId", project.id(), "text", "长任务：连续检查多个工作区状态后完成", "page", "project-home",
                 "clientContextVersion", 1, "executionMode", "AUTO")));
         var run = awaitStatus(response.get("run").get("id").asText(), "SUCCEEDED");
         var plan = json(getJson("/api/assistant/plans/" + response.get("plan").get("id").asText()));
@@ -125,6 +125,24 @@ class DynamicAssistantFlowTest {
         assertThat(run.get("status").asText()).isEqualTo("SUCCEEDED");
         assertThat(plan.get("steps")).hasSize(14);
         assertThat(plan.get("steps")).filteredOn(step -> "project.list".equals(step.get("tool").asText())).hasSize(14);
+    }
+
+    @Test
+    void creatingAProjectKeepsRunningAndMovesTheConversationToTheNewProject() throws Exception {
+        var source = projects.create("创建项目入口", "验证会话跟随");
+        var session = json(postJson("/api/projects/" + source.id() + "/assistant/sessions", Map.of("title", "深圳活动调研")));
+
+        var response = json(postJson("/api/assistant/sessions/" + session.get("id").asText() + "/messages", Map.of(
+                "projectId", source.id(), "text", "创建项目场景：新建深圳文化活动分析项目并继续检查项目", "page", "project-home",
+                "clientContextVersion", 1, "executionMode", "AUTO")));
+        var run = awaitStatus(response.get("run").get("id").asText(), "SUCCEEDED");
+        var createdProjectId = run.path("result").path("createdProjectId").asText();
+
+        assertThat(createdProjectId).isNotBlank().isNotEqualTo(source.id());
+        assertThat(run.path("status").asText()).isEqualTo("SUCCEEDED");
+        assertThat(json(getJson("/api/projects/" + createdProjectId + "/assistant/sessions")))
+                .anySatisfy(item -> assertThat(item.path("id").asText()).isEqualTo(session.path("id").asText()));
+        assertThat(json(getJson("/api/projects/" + source.id() + "/assistant/sessions"))).isEmpty();
     }
 
     private JsonNode awaitStatus(String runId, String expected) throws Exception {
@@ -172,6 +190,12 @@ class DynamicAssistantFlowTest {
                             "public_summary", "你只需要工作流清单，当前项目目录已足够回答，不需要修改内容。",
                             "completed", true, "steps", List.of());
                     var completed = ((Number) request.getOrDefault("completed_actions", 0)).intValue();
+                    if (goal.contains("创建项目场景")) {
+                        if (!continuation) return action("project.create_workspace", "创建深圳活动项目", "先创建独立项目", Map.of(
+                                "project_name", "深圳文化活动分析", "description", "调研近期活动与报名方式", "topic", "深圳文化活动"));
+                        if (completed == 1) return action("project.list", "确认项目已创建", "检查新项目可继续使用", Map.of());
+                        return Map.of("summary", "新项目已创建并完成检查", "public_summary", "项目已经就绪，可以继续调研。", "completed", true, "steps", List.of());
+                    }
                     if (goal.contains("长任务")) {
                         if (completed < 14) return action("project.list", "检查工作区 " + (completed + 1),
                                 "读取当前项目状态", Map.of());

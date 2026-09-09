@@ -18,7 +18,13 @@ const mode = computed(() => props.source.kind === 'extract-jobs' || ['csv', 'tsv
 
 async function loadCsv(cursor?: string) {
   loading.value = true; error.value = ''
-  try { csv.value = props.source.kind === 'extract-jobs' ? await api.previewExtract(props.source.id, cursor) : await api.previewFileCsv(props.source.id, cursor) }
+  try {
+    csv.value = props.source.kind === 'extract-jobs'
+      ? await api.previewExtract(props.source.id, cursor)
+      : props.source.kind === 'deliverables'
+        ? await api.previewDeliverableCsv(props.source.id, cursor)
+        : await api.previewFileCsv(props.source.id, cursor)
+  }
   catch (e) { error.value = e instanceof Error ? e.message : '表格预览加载失败' }
   finally { loading.value = false }
 }

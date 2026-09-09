@@ -78,9 +78,10 @@ public class WorkspaceResourceService {
                 .forEach(node -> {
                     var config = node.config() == null ? Map.<String, Object>of() : node.config();
                     var url = Objects.toString(config.get("url"), "");
+                    var verified = Boolean.TRUE.equals(config.get("verified"));
                     if (!url.isBlank() && urls.add(node.id())) resources.add(new Resource(node.id(), projectId,
                             "WEB_URL", "KNOWLEDGE", Objects.toString(config.getOrDefault("title", node.name()), node.name()),
-                            "text/uri-list", "READY", 1, 0, true,
+                            "text/uri-list", verified ? "VERIFIED" : "UNVERIFIED", workflow.currentVersion(), 0, true,
                             locations.get(resourceKey("WEB_URL", node.id())), "FILES", workflow.updatedAt(), url));
                 }));
 

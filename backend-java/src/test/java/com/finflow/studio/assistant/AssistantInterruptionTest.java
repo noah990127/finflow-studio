@@ -34,6 +34,7 @@ class AssistantInterruptionTest {
     @Autowired ObjectMapper json;
     @Autowired ProjectService projects;
     @Autowired WorkspaceFolderService folders;
+    @Autowired AssistantService assistant;
     @MockitoBean WorkerClient worker;
 
     @Test
@@ -140,19 +141,21 @@ class AssistantInterruptionTest {
     }
 
     @Test
-    void repeatedInvalidWritesStopAfterThreeAttempts() throws Exception {
+    void repeatedIdenticalFailuresStopBeforeAThirdExecution() throws Exception {
         var session = session();
         when(worker.planAgent(any())).thenReturn(Map.of("summary", "修改工作流", "steps", List.of(Map.of(
-                "tool", "workflow.edit", "title", "修改", "description", "修改", "arguments", Map.of("workflow_id", "missing", "patch", "invalid")))));
+                "tool", "workflow.edit", "title", "修改", "description", "修改",
+                "arguments", Map.of("workflow_id", "missing", "patch", Map.of("name", "新名称"))))));
         var response = send(session, "no-progress", "AUTO");
         var id = response.get("run").get("id").asText();
         awaitStatus(id, "FAILED");
-        assertThat(getJson("/api/assistant/runs/" + id).get("resultSummary").asText()).contains("连续三次");
-        verify(worker, times(3)).planAgent(any());
+        assertThat(getJson("/api/assistant/runs/" + id).get("resultSummary").asText()).contains("相同参数连续失败 2 次");
+        verify(worker, times(2)).planAgent(any());
     }
     private JsonNode send(String session, String id, String mode) {
         try { return postJson("/api/assistant/sessions/" + session + "/messages", Map.of(
-                "text", "执行中断回归", "page", "project-home", "requestId", id, "executionMode", mode)); }
+                "projectId", assistant.getSession(session).projectId(), "text", "执行中断回归",
+                "page", "project-home", "requestId", id, "executionMode", mode)); }
         catch (Exception exception) { throw new RuntimeException(exception); }
     }
     private JsonNode postJson(String path, Object body) throws Exception {

@@ -48,6 +48,7 @@ public class DeliverableService {
     public Response create(CreateRequest request) {
         projects.get(request.projectId());
         var format = normalizeFormat(request.format());
+        if ("csv".equals(format)) throw new IllegalArgumentException("CSV 输出件需要导入已有表格文件");
         var payload = buildPayload(request);
         var bytes = worker.generateDeliverable(format, payload);
         var newResource = request.resourceId() == null || request.resourceId().isBlank();
@@ -359,7 +360,7 @@ public class DeliverableService {
 
     private String normalizeFormat(String value) {
         var format = value.toLowerCase(Locale.ROOT).trim();
-        if (!List.of("pptx", "html_slides", "docx", "pdf", "mermaid", "excalidraw", "financial_report").contains(format)) throw new IllegalArgumentException("输出格式只支持 PPTX、网页演示、DOCX、PDF、Mermaid、Excalidraw 和财务报告");
+        if (!List.of("pptx", "html_slides", "docx", "pdf", "mermaid", "excalidraw", "financial_report", "csv").contains(format)) throw new IllegalArgumentException("输出格式只支持 PPTX、网页演示、DOCX、PDF、CSV、Mermaid、Excalidraw 和财务报告");
         return format;
     }
 

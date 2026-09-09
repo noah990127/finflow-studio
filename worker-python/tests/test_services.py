@@ -6,6 +6,7 @@ from app.main import app
 from app.llm import extract_response_text
 from app.models import GenerateContentRequest
 from app.services import _generation_prompt
+from app.services.content import GeneratedContentProtocolError, _validate_generated_content
 
 
 client = TestClient(app)
@@ -90,6 +91,24 @@ def test_stream_generate_content_falls_back_without_model(monkeypatch) -> None:
     assert events[-1]["type"] == "complete"
     assert events[-1]["mode"] == "local-extractive-fallback"
     assert events[-1]["content"] == "收入增长来自云业务。"
+
+
+def test_rejects_html_or_css_source_as_slide_content() -> None:
+    try:
+        _validate_generated_content("HTML_SLIDES", "<style>body { color: red; }</style><h1>经营分析</h1>")
+    except GeneratedContentProtocolError as exception:
+        assert "合法 JSON 对象" in str(exception)
+        assert "HTML/CSS 源码" in str(exception)
+    else:
+        raise AssertionError("HTML source must not pass the structured deliverable protocol")
+
+
+def test_accepts_complete_structured_slide_payload() -> None:
+    payload = json.dumps({"slides": [{
+        "title": "经营表现改善", "summary": "收入增长", "bullets": ["云业务增长", "现金流稳定", "继续投入"], "chart": None,
+    }]}, ensure_ascii=False)
+
+    assert _validate_generated_content("PPTX", payload) == payload
 
 
 def test_research_fetch_rejects_private_network_urls() -> None:

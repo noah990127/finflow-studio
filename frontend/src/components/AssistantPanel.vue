@@ -43,7 +43,15 @@ const taskState = computed(() => {
   if (assistant.plan) return { code: 'ready', label: '计划就绪', detail: assistant.plan.summary }
   return { code: 'idle', label: '就绪', detail: '' }
 })
-const completedSteps = computed(() => assistant.plan?.steps.filter(step => step.status === 'SUCCEEDED').length ?? 0)
+const processedSteps = computed(() => assistant.plan?.steps.filter(step =>
+  ['SUCCEEDED', 'FAILED', 'CANCELED', 'SKIPPED'].includes(step.status)).length ?? 0)
+const successfulSteps = computed(() => assistant.plan?.steps.filter(step => step.status === 'SUCCEEDED').length ?? 0)
+const stepProgressLabel = computed(() => {
+  const total = assistant.plan?.steps.length ?? 0
+  if (assistant.run?.status === 'SUCCEEDED') return `${total}/${total} 已处理`
+  if (['FAILED', 'CANCELED', 'ROLLED_BACK'].includes(assistant.run?.status ?? '')) return `${processedSteps.value}/${total} 已处理`
+  return `${successfulSteps.value}/${total} 已完成`
+})
 const directReply = computed(() => assistant.plan?.steps.length === 1
   && assistant.plan.steps[0]?.tool === 'assistant.respond'
   && typeof assistant.plan.steps[0]?.arguments.prepared_answer === 'string')
@@ -64,7 +72,9 @@ const elapsedLabel = computed(() => {
     .filter(value => Number.isFinite(value))
   if (!starts.length) return '刚刚开始'
   const started = Math.min(...starts)
-  const finished = assistant.interruptedAt || assistant.run?.finishedAt
+  const terminalActivity = assistant.timeline.findLast(item =>
+    ['agent.completed', 'agent.failed', 'agent.cancelled'].includes(item.eventType ?? ''))
+  const finished = assistant.interruptedAt || assistant.run?.finishedAt || terminalActivity?.time
   const end = finished ? new Date(finished).getTime() : now.value
   const seconds = Math.max(0, Math.floor((end - started) / 1000))
   const prefix = finished ? '耗时' : '已处理'
@@ -192,8 +202,8 @@ watch(() => assistant.sessionId, () => {
   unseenActivityCount.value = 0
   void scrollToLatest(true)
 })
-watch(() => [assistant.open, props.project?.id] as const, ([open, projectId]) => {
-  if (open && projectId) void assistant.ensureSession(projectId)
+watch(() => props.project?.id, projectId => {
+  if (projectId) void assistant.ensureSession(projectId)
 }, { immediate: true })
 watch(() => assistant.run?.status, status => {
   if (status && ['SUCCEEDED', 'FAILED', 'CANCELED', 'ROLLED_BACK'].includes(status)) showSteps.value = false
@@ -233,7 +243,7 @@ onBeforeUnmount(() => {
           <select :value="assistant.sessionId" :disabled="controlsLocked" aria-label="历史对话" @change="switchSession">
             <option v-for="session in assistant.sessions" :key="session.id" :value="session.id">{{ session.title }} · {{ clock(session.updatedAt) }}</option>
           </select>
-          <button type="button" title="新对话" :disabled="controlsLocked || !props.project" @click="props.project && assistant.createNewSession(props.project.id)"><MessageSquarePlus :size="15" /></button>
+          <button type="button" :title="props.project ? `在“${props.project.name}”中新建对话` : '新建对话'" :aria-label="props.project ? `在“${props.project.name}”中新建对话` : '新建对话'" :disabled="controlsLocked || !props.project" @click="props.project && assistant.createNewSession(props.project.id)"><MessageSquarePlus :size="15" /></button>
         </label>
         <div class="assistant-mode-switch" role="group" aria-label="Agent 执行模式">
           <button type="button" :class="{ active: assistant.executionMode === 'AUTO' }" :disabled="controlsLocked" title="自动执行 LLM 选择的工具" @click="assistant.setExecutionMode('AUTO')"><Zap :size="13" />Auto</button>
@@ -295,7 +305,7 @@ onBeforeUnmount(() => {
           </div>
 
           <div v-if="assistant.plan && !directReply" class="assistant-inline-progress">
-            <i><span :style="{ width: `${assistant.progress}%` }"></span></i><small>{{ completedSteps }}/{{ assistant.plan.steps.length }} 步</small>
+            <i><span :style="{ width: `${assistant.progress}%` }"></span></i><small>{{ stepProgressLabel }}</small>
           </div>
 
           <section v-if="assistant.timeline.length || running || waitingConfirmation" class="assistant-work-process" aria-label="工作过程">
@@ -326,7 +336,7 @@ onBeforeUnmount(() => {
 
           <section v-if="assistant.plan && !directReply" class="assistant-tool-group">
             <button type="button" @click="showSteps = !showSteps">
-              <span><ListChecks :size="15" /><strong>执行步骤</strong><small>{{ completedSteps }}/{{ assistant.plan.steps.length }} 已完成</small></span>
+              <span><ListChecks :size="15" /><strong>执行步骤</strong><small>{{ stepProgressLabel }}</small></span>
               <ChevronDown v-if="showSteps" :size="16" /><ChevronRight v-else :size="16" />
             </button>
             <div v-if="showSteps" class="assistant-tool-list">

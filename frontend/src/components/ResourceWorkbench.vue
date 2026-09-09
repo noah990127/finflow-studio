@@ -63,7 +63,13 @@ async function load() {
   if (isPdf.value || isOfficeDocument.value || isFinancialReport.value || isHtmlSlides.value || editing.value) return
   loading.value = true
   try {
-    if (isCsv.value) csv.value = props.resource.resourceType === 'DATASET' ? await api.previewExtract(props.resource.id) : await api.previewFileCsv(props.resource.id)
+    if (isCsv.value) {
+      csv.value = props.resource.resourceType === 'DATASET'
+        ? await api.previewExtract(props.resource.id)
+        : props.resource.resourceType === 'DELIVERABLE'
+          ? await api.previewDeliverableCsv(props.resource.id)
+          : await api.previewFileCsv(props.resource.id)
+    }
     else document.value = props.resource.resourceType === 'DELIVERABLE' ? await api.previewDeliverable(props.resource.id) : await api.previewFile(props.resource.id)
   } catch (reason) { error.value = reason instanceof Error ? reason.message : '内容没有打开' }
   finally { loading.value = false }

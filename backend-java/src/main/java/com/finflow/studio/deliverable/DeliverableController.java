@@ -2,6 +2,8 @@ package com.finflow.studio.deliverable;
 
 import com.finflow.studio.deliverable.DeliverableModels.CreateRequest;
 import com.finflow.studio.deliverable.DeliverableModels.Response;
+import com.finflow.studio.preview.CsvPreviewService;
+import com.finflow.studio.preview.PreviewModels.CsvPreview;
 import com.finflow.studio.worker.WorkerClient;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
@@ -19,10 +21,12 @@ import java.util.Map;
 public class DeliverableController {
     private final DeliverableService deliverables;
     private final WorkerClient worker;
+    private final CsvPreviewService csvPreviews;
 
-    public DeliverableController(DeliverableService deliverables, WorkerClient worker) {
+    public DeliverableController(DeliverableService deliverables, WorkerClient worker, CsvPreviewService csvPreviews) {
         this.deliverables = deliverables;
         this.worker = worker;
+        this.csvPreviews = csvPreviews;
     }
 
     @PostMapping("/deliverables")
@@ -60,6 +64,15 @@ public class DeliverableController {
                 (item.format().equals("mermaid") ? "mmd" : item.format()));
     }
 
+    @GetMapping("/deliverables/{id}/csv-preview")
+    public CsvPreview previewCsv(@PathVariable String id, @RequestParam(required = false) Integer version,
+                                 @RequestParam(required = false) String cursor,
+                                 @RequestParam(defaultValue = "100") int limit) {
+        var item = deliverables.get(id);
+        if (!"csv".equalsIgnoreCase(item.format())) throw new IllegalArgumentException("当前输出件不是 CSV 表格");
+        return csvPreviews.preview(deliverables.path(id, version), cursor, limit);
+    }
+
     @GetMapping("/deliverables/{id}/download")
     public void download(@PathVariable String id, @RequestParam(required = false) Integer version,
                          HttpServletResponse response) throws IOException {
@@ -69,6 +82,7 @@ public class DeliverableController {
             case "pptx" -> "application/vnd.openxmlformats-officedocument.presentationml.presentation";
             case "docx" -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
             case "pdf" -> "application/pdf";
+            case "csv" -> "text/csv; charset=UTF-8";
             case "excalidraw" -> "application/json; charset=UTF-8";
             case "financial_report" -> "application/json; charset=UTF-8";
             case "html_slides" -> "text/html; charset=UTF-8";

@@ -34,6 +34,7 @@ const eventTypes = [
 ]
 let eventSource: EventSource | null = null
 let eventSessionId = ''
+let sessionLoadSequence = 0
 
 export const useAssistantStore = defineStore('assistant', {
   state: () => ({
@@ -70,6 +71,7 @@ export const useAssistantStore = defineStore('assistant', {
     historySessionId: '',
     sessions: [] as AssistantSession[],
     sessionsProjectId: '',
+    sessionProjectTarget: '',
   }),
   getters: {
     needsConfirmation: (state) =>
@@ -94,36 +96,85 @@ export const useAssistantStore = defineStore('assistant', {
       this.executionMode = mode
       localStorage.setItem('finflow.assistant.executionMode', mode)
     },
+    resetForProject(projectId: string) {
+      eventSource?.close()
+      eventSource = null
+      eventSessionId = ''
+      this.sessionProjectTarget = projectId
+      this.sessionId = ''
+      this.sessionProjectId = ''
+      this.sessions = []
+      this.sessionsProjectId = projectId
+      this.currentRequest = ''
+      this.assistantMessage = ''
+      this.plan = null
+      this.context = null
+      this.run = null
+      this.timeline = []
+      this.progress = 0
+      this.progressLabel = ''
+      this.streaming = false
+      this.busy = false
+      this.stopping = false
+      this.error = ''
+      this.history = []
+      this.historySessionId = ''
+      this.lastEventSequence = 0
+      this.interrupted = false
+      this.interruptedAt = ''
+      this.activeRequestId = ''
+    },
     async ensureSession(projectId: string) {
-      if (this.sessionsProjectId !== projectId) {
-        this.sessions = await api.listAssistantSessions(projectId)
-        this.sessionsProjectId = projectId
+      if (!projectId) return
+      const projectChanged = this.sessionProjectTarget !== projectId
+      if (!projectChanged && this.sessionId && this.sessionProjectId === projectId
+          && this.sessionsProjectId === projectId) {
+        if (this.historySessionId !== this.sessionId) await this.loadHistory(true)
+        this.connectEvents()
+        return
       }
-      if (!this.sessionId || this.sessionProjectId !== projectId) {
-        const storageKey = `finflow.assistant.session.${projectId}`
-        const storedId = localStorage.getItem(storageKey) ?? ''
-        let session = this.sessions.find(item => item.id === storedId) ?? this.sessions[0] ?? null
-        if (!session) session = await api.createSession(projectId)
-        if (!this.sessions.some(item => item.id === session.id)) this.sessions.unshift(session)
-        await this.activateSession(session)
-      }
-      if (this.historySessionId !== this.sessionId) await this.loadHistory(true)
-      this.connectEvents()
+      const sequence = ++sessionLoadSequence
+      if (projectChanged && this.canInterrupt) await this.cancel()
+      if (sequence !== sessionLoadSequence) return
+      if (projectChanged) this.resetForProject(projectId)
+      else this.sessionProjectTarget = projectId
+      const sessions = await api.listAssistantSessions(projectId)
+      if (sequence !== sessionLoadSequence || this.sessionProjectTarget !== projectId) return
+      this.sessions = sessions
+      this.sessionsProjectId = projectId
+      const storageKey = `finflow.assistant.session.${projectId}`
+      const storedId = localStorage.getItem(storageKey) ?? ''
+      let session = sessions.find(item => item.id === storedId) ?? sessions[0] ?? null
+      if (!session) session = await api.createSession(projectId)
+      if (sequence !== sessionLoadSequence || this.sessionProjectTarget !== projectId) return
+      if (session.projectId !== projectId) throw new Error('会话所属项目不一致，请重新打开当前项目')
+      if (!this.sessions.some(item => item.id === session.id)) this.sessions.unshift(session)
+      await this.activateSession(session, projectId, sequence)
     },
     async createNewSession(projectId: string) {
       if (this.busy || (this.run && ['QUEUED', 'RUNNING'].includes(this.run.status))) return
+      await this.ensureSession(projectId)
+      if (this.sessionProjectTarget !== projectId) return
+      const sequence = ++sessionLoadSequence
       const stamp = new Date().toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
       const session = await api.createSession(projectId, `新对话 ${stamp}`)
+      if (sequence !== sessionLoadSequence || this.sessionProjectTarget !== projectId) return
+      if (session.projectId !== projectId) throw new Error('新对话没有创建在当前项目中')
       this.sessions.unshift(session)
       this.sessionsProjectId = projectId
-      await this.activateSession(session)
+      await this.activateSession(session, projectId, sequence)
     },
     async switchSession(sessionId: string) {
       if (sessionId === this.sessionId || this.busy || (this.run && ['QUEUED', 'RUNNING'].includes(this.run.status))) return
       const session = this.sessions.find(item => item.id === sessionId)
-      if (session) await this.activateSession(session)
+      if (session && session.projectId === this.sessionProjectTarget) {
+        const sequence = ++sessionLoadSequence
+        await this.activateSession(session, this.sessionProjectTarget, sequence)
+      }
     },
-    async activateSession(session: AssistantSession) {
+    async activateSession(session: AssistantSession, expectedProjectId = session.projectId, sequence = sessionLoadSequence) {
+      if (session.projectId !== expectedProjectId || this.sessionProjectTarget !== expectedProjectId
+          || sequence !== sessionLoadSequence) return
       eventSource?.close()
       eventSource = null
       eventSessionId = ''
@@ -149,6 +200,7 @@ export const useAssistantStore = defineStore('assistant', {
       this.history = []
       this.historySessionId = ''
       await this.loadHistory(!this.busy)
+      if (session.id !== this.sessionId || this.sessionProjectTarget !== expectedProjectId) return
       this.connectEvents()
     },
     async loadHistory(restoreLatestRun = true) {
@@ -192,7 +244,7 @@ export const useAssistantStore = defineStore('assistant', {
       eventSource?.close()
       eventSessionId = this.sessionId
       this.eventConnection = 'connecting'
-      eventSource = new EventSource(`/api/assistant/sessions/${this.sessionId}/events`)
+      eventSource = new EventSource(`/api/assistant/sessions/${this.sessionId}/events?after=${this.lastEventSequence}`)
       eventSource.onopen = () => { this.eventConnection = 'live' }
       for (const type of eventTypes) {
         eventSource.addEventListener(type, (raw) => {
@@ -247,8 +299,10 @@ export const useAssistantStore = defineStore('assistant', {
       }
       if (event.type === 'assistant.run.completed') {
         this.streaming = false
+        this.busy = false
         this.progress = 100
         if (message) this.assistantMessage = message
+        if (event.runId) void this.refreshRun(event.runId)
         if (!replay) {
           this.publishWorkbenchAction({
             type: 'REFRESH_WORKSPACE',
@@ -259,17 +313,27 @@ export const useAssistantStore = defineStore('assistant', {
       }
       if (event.type === 'assistant.run.failed' || event.type === 'agent.failed') {
         this.streaming = false
+        this.busy = false
         this.error = String(payload.error ?? payload.message ?? 'Agent 未能完成这次任务')
+        if (event.runId) void this.refreshRun(event.runId)
       }
       if (event.type === 'assistant.run.canceled' || event.type === 'agent.cancelled') {
         this.streaming = false
+        this.busy = false
         this.interrupted = true
         this.interruptedAt = event.createdAt
+        if (event.runId) void this.refreshRun(event.runId)
       }
       const uiAction = payload.uiAction
       if (!replay && event.type === 'assistant.step.completed' && uiAction && typeof uiAction === 'object') {
-        this.pushTimeline(`action-${event.eventSeq}`, '同步工作台', '正在把这一步的结果呈现在左侧工作区', 'info', event.createdAt)
-        this.publishWorkbenchAction(uiAction as Record<string, unknown>)
+        const action = uiAction as Record<string, unknown>
+        const targetProjectId = typeof action.projectId === 'string' ? action.projectId : ''
+        const crossesProjectDuringRun = Boolean(targetProjectId && targetProjectId !== this.sessionProjectId
+          && event.runId && ['QUEUED', 'RUNNING', 'WAITING_CONFIRMATION'].includes(this.run?.status ?? 'RUNNING'))
+        this.pushTimeline(`action-${event.eventSeq}`, '同步工作台', crossesProjectDuringRun
+          ? '新项目已经准备好，任务完成后会自动打开'
+          : '正在把这一步的结果呈现在左侧工作区', 'info', event.createdAt)
+        if (!crossesProjectDuringRun) this.publishWorkbenchAction(action)
       }
       const isPublicActivity = event.type.startsWith('agent.')
         || event.type === 'assistant.request.received'
@@ -349,6 +413,16 @@ export const useAssistantStore = defineStore('assistant', {
         if (this.plan?.id === planId) this.plan = plan
       } catch { /* the run poll remains authoritative if a refresh races an update */ }
     },
+    async refreshRun(runId: string) {
+      try {
+        const run = await api.getRun(runId)
+        if (!this.run || this.run.id === runId) this.run = run
+        if (['SUCCEEDED', 'FAILED', 'CANCELED', 'ROLLED_BACK'].includes(run.status)) {
+          this.streaming = false
+          this.busy = false
+        }
+      } catch { /* the normal run poll remains authoritative */ }
+    },
     async send(projectId: string, requestText = this.input) {
       const text = requestText.trim()
       if (!text || this.busy || this.stopping) return
@@ -370,10 +444,13 @@ export const useAssistantStore = defineStore('assistant', {
       this.streamLines = ['正在接收你的需求']
       try {
         await this.ensureSession(projectId)
+        if (!this.sessionId || this.sessionProjectId !== projectId || this.sessionProjectTarget !== projectId) {
+          throw new Error('项目已切换，请在当前项目重新发送这条消息')
+        }
         if (hadCurrentRequest) await this.loadHistory(false)
         this.currentRequest = text
         if (this.interrupted) return
-        const response = await api.sendMessage(this.sessionId, text, this.pageContext, this.selection ?? undefined, this.executionMode, requestId)
+        const response = await api.sendMessage(this.sessionId, projectId, text, this.pageContext, this.selection ?? undefined, this.executionMode, requestId)
         if (this.activeRequestId !== requestId) return
         this.assistantMessage = response.assistantMessage
         this.plan = response.plan
@@ -453,7 +530,16 @@ export const useAssistantStore = defineStore('assistant', {
         const assistantResponse = typeof this.run.result?.assistantResponse === 'string' ? this.run.result.assistantResponse : ''
         if (assistantResponse) this.assistantMessage = assistantResponse
         const createdProjectId = typeof this.run.result?.createdProjectId === 'string' ? this.run.result.createdProjectId : ''
-        if (createdProjectId) await useProjectsStore().refresh(createdProjectId)
+        if (createdProjectId) {
+          this.sessionProjectId = createdProjectId
+          this.sessionProjectTarget = createdProjectId
+          this.sessionsProjectId = createdProjectId
+          this.sessions = this.sessions.map(session => session.id === this.sessionId
+            ? { ...session, projectId: createdProjectId }
+            : session)
+          localStorage.setItem(`finflow.assistant.session.${createdProjectId}`, this.sessionId)
+          await useProjectsStore().refresh(createdProjectId)
+        }
         const uiAction = this.run.result?.uiAction
         if (uiAction && typeof uiAction === 'object') {
           this.pushTimeline(`action-final-${this.run.id}`, '同步工作台', '已将最终结果呈现在工作区', 'success')

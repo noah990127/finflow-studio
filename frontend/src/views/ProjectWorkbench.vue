@@ -96,6 +96,11 @@ function iconFor(item: WorkspaceResource) {
   if (item.resourceType === 'DELIVERABLE') return FileOutput
   return item.resourceType === 'OFFICE_FILE' ? File : FileText
 }
+function resourceStatus(item: WorkspaceResource) {
+  if (item.resourceType === 'WEB_URL') return item.status === 'VERIFIED' ? '已验证并保存快照' : '尚未验证内容'
+  const labels: Record<string, string> = { READY: '可用', COMPLETED: '已完成', SUCCEEDED: '已完成', FAILED: '处理失败', PROCESSING: '处理中' }
+  return labels[item.status] ?? item.status
+}
 function openTab(tab: Tab) {
   const existing = tabs.value.find(item => item.id === tab.id)
   if (!existing) tabs.value.push(tab)
@@ -393,7 +398,7 @@ watch(() => props.project?.id, (id, previousId) => {
       </section>
     </main>
 
-    <aside class="context-sidebar"><header><strong>当前内容</strong></header><template v-if="activeTab?.resource"><component :is="iconFor(activeTab.resource)" :size="26"/><h3>{{ activeTab.resource.name }}</h3><dl><dt>状态</dt><dd>{{ activeTab.resource.status }}</dd><dt>版本</dt><dd>第 {{ activeTab.resource.currentVersion }} 版</dd><dt>工作流</dt><dd>{{ activeTab.resource.inProjectWorkflow ? '已加入' : '未加入' }}</dd></dl><button class="primary-button" type="button" @click="addToWorkflow(activeTab.resource)"><Plus :size="15"/>加入当前工作流</button></template><template v-else><WorkflowIcon :size="26"/><h3>{{ activeTab?.kind === 'workflow' ? activeTab.title : '项目空间' }}</h3><p>选中文件或数据后，这里会显示版本、状态和编排关系。</p></template></aside>
+    <aside class="context-sidebar"><header><strong>当前内容</strong></header><template v-if="activeTab?.resource"><component :is="iconFor(activeTab.resource)" :size="26"/><h3>{{ activeTab.resource.name }}</h3><dl><dt>状态</dt><dd>{{ resourceStatus(activeTab.resource) }}</dd><dt>版本</dt><dd>第 {{ activeTab.resource.currentVersion }} 版</dd><dt>工作流</dt><dd>{{ activeTab.resource.inProjectWorkflow ? '已加入' : '未加入' }}</dd></dl><button class="primary-button" type="button" @click="addToWorkflow(activeTab.resource)"><Plus :size="15"/>加入当前工作流</button></template><template v-else><WorkflowIcon :size="26"/><h3>{{ activeTab?.kind === 'workflow' ? activeTab.title : '项目空间' }}</h3><p>选中文件或数据后，这里会显示版本、状态和编排关系。</p></template></aside>
     <AssistantPanel :project="project" />
     <div v-if="addPanelOpen" class="project-form-backdrop" @click.self="addPanelOpen = false"><section class="project-form-panel add-content-panel"><header><div><strong>{{ addPanelMode === 'choose' ? `向“${addTargetRoot === 'DATA' ? '数据' : '资料'}”添加` : addPanelMode === 'url' ? '添加网站地址' : connectionForm.sourceType === 'HTTP_API' ? '接入数据服务' : '连接数据库' }}</strong><small v-if="addTargetFolderId">内容会保存在当前目录</small></div><button class="icon-button" type="button" title="关闭" @click="addPanelOpen = false"><X :size="17"/></button></header>
       <div v-if="addPanelMode === 'choose'" class="add-source-list">

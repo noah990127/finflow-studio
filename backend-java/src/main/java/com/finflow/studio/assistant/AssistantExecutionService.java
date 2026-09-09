@@ -28,6 +28,9 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.ArrayList;
@@ -37,6 +40,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import tools.jackson.core.JacksonException;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
@@ -58,6 +63,8 @@ public class AssistantExecutionService {
     private final AssistantPlanner planner;
     private final int maxDynamicActions;
     private final AssistantInterruptions interruptions;
+    private final String gatewayBaseUrl;
+    private final Map<String, ReentrantReadWriteLock> runLocks = new ConcurrentHashMap<>();
 
     public AssistantExecutionService(JdbcClient jdbc, AssistantEventService events,
                                      @Qualifier("applicationTaskExecutor") TaskExecutor taskExecutor,
@@ -67,6 +74,7 @@ public class AssistantExecutionService {
                                      DeliverableService deliverables, WorkflowRunService workflowRuns,
                                      AssistantWorkspaceToolGateway workspaceTools, AssistantPlanner planner,
                                      @Value("${finflow.agent.max-dynamic-actions:80}") int maxDynamicActions,
+                                     @Value("${finflow.agent.gateway-base-url:http://127.0.0.1:8080}") String gatewayBaseUrl,
                                      AssistantInterruptions interruptions) {
         this.jdbc = jdbc;
         this.events = events;
@@ -82,6 +90,7 @@ public class AssistantExecutionService {
         this.workspaceTools = workspaceTools;
         this.planner = planner;
         this.maxDynamicActions = Math.max(12, maxDynamicActions);
+        this.gatewayBaseUrl = gatewayBaseUrl;
         this.interruptions = interruptions;
     }
 
@@ -96,17 +105,22 @@ public class AssistantExecutionService {
 
         var id = UUID.randomUUID().toString();
         var traceId = UUID.randomUUID().toString();
+        var gatewayToken = UUID.randomUUID() + "." + UUID.randomUUID();
+        var continuous = jdbc.sql("select count(*) from assistant_plan_step where plan_id = :id and tool_name = 'agent.execute'")
+                .param("id", planId).query(Integer.class).single() > 0;
         var now = Instant.now();
         jdbc.sql("""
                 insert into assistant_run(id, session_id, plan_id, idempotency_key, trace_id, status,
-                                          current_step, result_summary, created_at)
-                values (:id, :sessionId, :planId, :key, :traceId, 'QUEUED', 0, '', :createdAt)
+                                          current_step, result_summary, created_at, gateway_token, continuous_agent)
+                values (:id, :sessionId, :planId, :key, :traceId, 'QUEUED', 0, '', :createdAt, :gatewayToken, :continuous)
                 """)
                 .param("id", id)
                 .param("sessionId", sessionId)
                 .param("planId", planId)
                 .param("key", idempotencyKey)
                 .param("traceId", traceId)
+                .param("gatewayToken", gatewayToken)
+                .param("continuous", continuous)
                 .param("createdAt", now)
                 .update();
         events.publish(sessionId, id, "assistant.run.queued", Map.of(
@@ -153,7 +167,11 @@ public class AssistantExecutionService {
                 "runId", runId, "progress", 25,
                 "message", runtime.dynamic() ? "开始动态执行，Agent 会根据每一步结果继续决策" : "开始执行计划"));
         try {
-            int stalledActions = 0;
+            if (isContinuousRun(runId)) {
+                executeContinuous(run, runtime, effects);
+                return;
+            }
+            var failureAttempts = new LinkedHashMap<String, Integer>();
             while (true) {
                 if (isCanceled(runId)) return;
                 var pending = loadSteps(run.planId()).stream().filter(step -> "PENDING".equals(step.status())).toList();
@@ -170,10 +188,20 @@ public class AssistantExecutionService {
                         throw new IllegalStateException(Objects.toString(observation.get("error"), "工具执行失败"));
                     }
                     if (!runtime.dynamic()) continue;
-                    var output = observation.get("output") instanceof Map<?, ?> values ? values : Map.of();
-                    if (!Boolean.TRUE.equals(observation.get("success")) || Boolean.FALSE.equals(output.get("changed"))) stalledActions++;
-                    else if (!"READ".equals(step.mode())) stalledActions = 0;
-                    if (stalledActions >= 3) throw new IllegalStateException("连续三次修改或重试未取得进展，已停止重复操作；已保存的结果保留，请检查节点配置后继续。");
+                    var recovery = AssistantFailurePolicy.assess(step, observation, failureAttempts);
+                    if (recovery != null) {
+                        observation.put("failureType", recovery.failure().category().name());
+                        observation.put("retryable", recovery.failure().retryable());
+                        observation.put("recoveryHint", recovery.failure().recoveryHint());
+                        observation.put("attempt", recovery.attempt());
+                        events.publish(run.sessionId(), run.id(), "agent.retrying", Map.of(
+                                "status", recovery.failure().retryable() ? "running" : "adjusting",
+                                "toolName", step.tool(), "failureType", recovery.failure().category().name(),
+                                "retryable", recovery.failure().retryable(), "attempt", recovery.attempt(),
+                                "message", recovery.failure().recoveryHint(),
+                                "progress", dynamicProgress(completedActionCount(run.planId()))));
+                        if (recovery.stop()) throw new IllegalStateException(recovery.stopMessage());
+                    }
                     var completedActions = completedActionCount(run.planId());
                     events.publish(run.sessionId(), runId, "agent.thinking_summary", Map.of(
                             "status", "running", "progress", dynamicProgress(completedActions),
@@ -232,8 +260,162 @@ public class AssistantExecutionService {
         }
     }
 
+    public boolean continuousAgentAvailable() {
+        var health = worker.health();
+        return "online".equals(health.get("status"))
+                && "deep-agents".equals(health.get("agentRuntimeMode"))
+                && Boolean.TRUE.equals(health.get("continuousAgent"));
+    }
+
+    @SuppressWarnings("unchecked")
+    private void executeContinuous(RunResponse run, PlanRuntime runtime, Map<String, Object> effects) {
+        var row = jdbc.sql("select gateway_token, approval_count from assistant_run where id = :id")
+                .param("id", run.id()).query((rs, index) -> Map.<String, Object>of(
+                        "token", rs.getString("gateway_token"),
+                        "approvalCount", rs.getInt("approval_count"))).single();
+        var approvalCount = ((Number) row.get("approvalCount")).intValue();
+        var resume = approvalCount > 0;
+        var context = withRecentMessages(workspaceContext(runtime.projectId()), run.sessionId());
+        var request = planner.continuousRequest(runtime.goal(), runtime.page(), context, run.sessionId(),
+                runtime.executionMode(), run.id(), gatewayBaseUrl, String.valueOf(row.get("token")),
+                resume, approvalCount);
+        jdbc.sql("update assistant_plan_step set status = 'RUNNING' where plan_id = :id and tool_name = 'agent.execute' and status = 'PENDING'")
+                .param("id", run.planId()).update();
+        var result = interruptions.token("run", run.id()).await(() -> worker.runContinuousAgentStreaming(request, event -> {
+            var type = Objects.toString(event.get("type"), "");
+            if (Set.of("tool_call", "observation", "waiting_confirmation", "completed", "error").contains(type)) return;
+            var payload = new LinkedHashMap<String, Object>();
+            event.forEach((key, value) -> { if (value != null) payload.put(key, value); });
+            events.publish(run.sessionId(), run.id(), "agent." + type, payload);
+        }));
+        if (isCanceled(run.id())) return;
+        if ("waiting_confirmation".equals(result.get("type"))) {
+            var actions = result.get("actions") instanceof List<?> values ? values : List.of();
+            var staged = new ArrayList<PlanStep>();
+            synchronized (runLock(run.id())) {
+                for (var value : actions) {
+                    if (!(value instanceof Map<?, ?> raw)) continue;
+                    var tool = resolveToolName(Objects.toString(raw.get("toolName"), Objects.toString(raw.get("tool"), "")));
+                    var capability = AssistantCapabilityRegistry.find(tool).orElse(null);
+                    if (capability == null || "READ".equals(capability.mode())) continue;
+                    var arguments = new LinkedHashMap<String, Object>();
+                    if (raw.get("arguments") instanceof Map<?, ?> values) {
+                        values.forEach((key, item) -> arguments.put(String.valueOf(key), item));
+                    }
+                    var proposed = new PlanStep(UUID.randomUUID().toString(), 0, capability.id(), capability.mode(),
+                            capability.title(), capability.description(), arguments, capability.risk(), true, "PENDING");
+                    staged.add(appendDynamicStep(run.planId(), proposed, runtime.executionMode(),
+                            "Agent 已停在执行前，等待确认写入操作"));
+                }
+            }
+            if (staged.isEmpty()) throw new IllegalStateException("Agent 请求确认，但没有返回有效的写入操作");
+            jdbc.sql("update assistant_run set approval_count = :count where id = :id")
+                    .param("count", staged.size()).param("id", run.id()).update();
+            pauseForConfirmation(run, staged.getFirst());
+            return;
+        }
+        var summary = Objects.toString(result.get("content"), Objects.toString(result.get("message"), "任务已完成"));
+        jdbc.sql("update assistant_plan_step set status = 'SUCCEEDED' where plan_id = :id and tool_name = 'agent.execute' and status = 'RUNNING'")
+                .param("id", run.planId()).update();
+        jdbc.sql("update assistant_run set approval_count = 0 where id = :id").param("id", run.id()).update();
+        finishRun(run, summary, readEffects(run.id()));
+    }
+
+    public Map<String, Object> callContinuousTool(String runId, String gatewayToken, Map<String, Object> request) {
+        var run = get(runId);
+        var stored = jdbc.sql("select gateway_token from assistant_run where id = :id")
+                .param("id", runId).query(String.class).single();
+        if (stored.isBlank() || !stored.equals(gatewayToken)) throw new SecurityException("Agent 工具网关凭证无效");
+        if (!"RUNNING".equals(run.status())) throw new IllegalStateException("Agent 任务当前不允许调用工具");
+        var tool = resolveToolName(Objects.toString(request.get("tool"), ""));
+        var capability = AssistantCapabilityRegistry.find(tool)
+                .orElseThrow(() -> new IllegalArgumentException("工具不存在：" + tool));
+        var arguments = new LinkedHashMap<String, Object>();
+        if (request.get("arguments") instanceof Map<?, ?> values) {
+            values.forEach((key, value) -> arguments.put(String.valueOf(key), value));
+        }
+        if (completedActionCount(run.planId()) >= maxDynamicActions) {
+            return Map.of("success", false, "error", "本次任务已用完工具调用预算",
+                    "failureType", "BUDGET_EXHAUSTED", "retryable", false,
+                    "recoveryHint", "停止调用工具，总结已完成内容与剩余工作");
+        }
+        var lock = runLock(runId);
+        var selectedLock = "READ".equals(capability.mode()) ? lock.readLock() : lock.writeLock();
+        selectedLock.lock();
+        try {
+            var runtime = loadRuntime(run.planId());
+            PlanStep step;
+            synchronized (lock) {
+                step = loadSteps(run.planId()).stream()
+                        .filter(item -> "PENDING".equals(item.status()) && item.tool().equals(tool))
+                        .findFirst().orElse(null);
+                if (step == null) {
+                    if (!"READ".equals(capability.mode()) && !"AUTO".equalsIgnoreCase(runtime.executionMode())) {
+                        return Map.of("success", false, "error", "该写入操作尚未获得用户确认",
+                                "failureType", "AUTHORIZATION", "retryable", false,
+                                "recoveryHint", "暂停并等待用户在界面中确认");
+                    }
+                    var proposed = new PlanStep(UUID.randomUUID().toString(), 0, tool, capability.mode(),
+                            capability.title(), capability.description(), arguments, capability.risk(), false, "PENDING");
+                    step = appendDynamicStep(run.planId(), proposed, "AUTO", "Agent 正在持续执行任务");
+                }
+            }
+            var observation = executeAndObserve(run, step, new LinkedHashMap<>(readEffects(runId)));
+            if (Boolean.TRUE.equals(observation.get("success")) && "deliverable.create".equals(tool)) {
+                var currentEffects = readEffects(runId);
+                var completion = deterministicDeliverableCompletion(loadRuntime(run.planId()).goal(), currentEffects);
+                if (completion != null) {
+                    observation = new LinkedHashMap<>(observation);
+                    observation.put("taskComplete", true);
+                    observation.put("completionSummary", completion);
+                }
+            }
+            return observation;
+        } finally {
+            selectedLock.unlock();
+        }
+    }
+
+    private boolean isContinuousRun(String runId) {
+        return jdbc.sql("select continuous_agent from assistant_run where id = :id")
+                .param("id", runId).query(Boolean.class).single();
+    }
+
+    private ReentrantReadWriteLock runLock(String runId) {
+        return runLocks.computeIfAbsent(runId, ignored -> new ReentrantReadWriteLock(true));
+    }
+
+    private String resolveToolName(String value) {
+        if (AssistantCapabilityRegistry.find(value).isPresent()) return value;
+        return AssistantCapabilityRegistry.ids().stream()
+                .filter(id -> id.replace(".", "_").replace("-", "_").equals(value))
+                .findFirst().orElse(value);
+    }
+
+    private Map<String, Object> readEffects(String runId) {
+        return jdbc.sql("select effects_json from assistant_run where id = :id")
+                .param("id", runId).query(String.class).optional().map(this::readMap).orElse(Map.of());
+    }
+
+    private AssistantPlanner.WorkspaceContext withRecentMessages(AssistantPlanner.WorkspaceContext context,
+                                                                  String sessionId) {
+        var messages = jdbc.sql("""
+                        select role, content from assistant_message where session_id = :sessionId
+                        order by created_at desc limit 30
+                        """).param("sessionId", sessionId)
+                .query((rs, row) -> Map.of("role", rs.getString("role").toLowerCase(Locale.ROOT),
+                        "content", rs.getString("content"))).list();
+        java.util.Collections.reverse(messages);
+        return new AssistantPlanner.WorkspaceContext(context.projectId(), context.projectName(), context.dataCount(),
+                context.knowledgeCount(), context.outputCount(), context.hasStructuredData(),
+                context.selectedResourceId(), context.selectedResourceType(), context.selectedResourceName(),
+                context.resources(), messages);
+    }
+
     private Map<String, Object> executeAndObserve(RunResponse run, PlanStep step, Map<String, Object> effects) {
         if (isCanceled(run.id())) return Map.of("success", false, "error", "任务已停止");
+        var runtime = loadRuntime(run.planId());
+        step = applyDeliverablePolicy(withWorkspaceContext(step, runtime), runtime.goal());
         var total = loadSteps(run.planId()).size();
         var progress = dynamicProgress(completedActionCount(run.planId()));
         jdbc.sql("update assistant_run set current_step = :step where id = :id")
@@ -261,6 +443,7 @@ public class AssistantExecutionService {
         observation.put("arguments", step.arguments());
         try {
             var result = executeStep(step, effects);
+            verifyStepOutcome(step, effectsBefore, effects);
             if (!"READ".equals(step.mode())) {
                 var action = new LinkedHashMap<String, Object>();
                 if (effects.get("uiAction") instanceof Map<?, ?> existing) existing.forEach((key, value) -> action.put(String.valueOf(key), value));
@@ -289,22 +472,41 @@ public class AssistantExecutionService {
                     "provenance", provenance(step, effects)));
         } catch (RuntimeException exception) {
             var error = exception.getMessage() == null ? "工具执行失败" : exception.getMessage();
+            var failure = AssistantFailurePolicy.classify(exception);
             jdbc.sql("update assistant_plan_step set status = 'FAILED' where id = :id")
                     .param("id", step.id()).update();
             observation.put("success", false);
             observation.put("error", error);
+            observation.put("failureType", failure.category().name());
+            observation.put("retryable", failure.retryable());
+            observation.put("recoveryHint", failure.recoveryHint());
             observation.put("provenance", provenance(step, effects));
             events.publish(run.sessionId(), run.id(), "agent.observation", Map.of(
                     "status", "failed", "step", step.order(), "toolName", step.tool(),
                     "resultSummary", error, "message", "工具没有完成，Agent 正在调整方案",
                     "error", error, "progress", progress, "provenance", provenance(step, effects)));
-            events.publish(run.sessionId(), run.id(), "agent.retrying", Map.of(
-                    "status", "running", "toolName", step.tool(), "message", "正在根据错误选择修正参数或替代工具",
-                    "progress", progress));
         }
         jdbc.sql("update assistant_run set effects_json = :effects where id = :id")
                 .param("effects", writeJson(effects)).param("id", run.id()).update();
         return observation;
+    }
+
+    @SuppressWarnings("unchecked")
+    private PlanStep withWorkspaceContext(PlanStep step, PlanRuntime runtime) {
+        var capability = AssistantCapabilityRegistry.find(step.tool()).orElse(null);
+        if (capability == null) return step;
+        var properties = capability.inputSchema().get("properties") instanceof Map<?, ?> values
+                ? (Map<String, Object>) values : Map.<String, Object>of();
+        var arguments = new LinkedHashMap<>(step.arguments());
+        Set.of("page", "goal", "project_id").stream()
+                .filter(key -> !properties.containsKey(key)).forEach(arguments::remove);
+        if (properties.containsKey("project_id") && !arguments.containsKey("project_id")
+                && runtime.projectId() != null && !runtime.projectId().isBlank()) {
+            arguments.put("project_id", runtime.projectId());
+        }
+        if (arguments.equals(step.arguments())) return step;
+        return new PlanStep(step.id(), step.order(), step.tool(), step.mode(), step.title(), step.description(),
+                Map.copyOf(arguments), step.risk(), step.requiresConfirmation(), step.status());
     }
 
     private PlanStep appendDynamicStep(String planId, PlanStep proposed, String executionMode, String summary) {
@@ -313,7 +515,8 @@ public class AssistantExecutionService {
         var requiresConfirmation = !"AUTO".equalsIgnoreCase(executionMode) && proposed.risk().requiresConfirmation();
         var step = new PlanStep(UUID.randomUUID().toString(), order, proposed.tool(), proposed.mode(),
                 proposed.title(), proposed.description(), proposed.arguments(), proposed.risk(), requiresConfirmation, "PENDING");
-        var risk = loadSteps(planId).stream().map(PlanStep::risk)
+        var risk = java.util.stream.Stream.concat(loadSteps(planId).stream().map(PlanStep::risk),
+                        java.util.stream.Stream.of(proposed.risk()))
                 .max(java.util.Comparator.comparing(Enum::ordinal)).orElse(proposed.risk());
         jdbc.sql("""
                         insert into assistant_plan_step(id, plan_id, step_order, tool_name, tool_mode, title,
@@ -358,12 +561,14 @@ public class AssistantExecutionService {
     }
 
     private void finishRun(RunResponse run, String summary, Map<String, Object> effects) {
+        verifyTaskCompletion(loadSteps(run.planId()), effects);
         var safeSummary = summary == null || summary.isBlank() ? "已完成工作台操作。" : summary;
         var changed = jdbc.sql("update assistant_run set status = 'SUCCEEDED', result_summary = :summary, finished_at = :now where id = :id and status = 'RUNNING'")
                 .param("summary", safeSummary).param("now", Instant.now()).param("id", run.id()).update();
         if (changed == 0) return;
         jdbc.sql("update assistant_plan set status = 'COMPLETED', summary = :summary where id = :id")
                 .param("summary", safeSummary).param("id", run.planId()).update();
+        moveSessionToCreatedProject(run, effects);
         saveAssistantMessage(run.sessionId(), safeSummary, run.id());
         events.publish(run.sessionId(), run.id(), "agent.generating", Map.of(
                 "status", "completed", "message", "正在整理最终结果和执行轨迹", "progress", 98));
@@ -373,6 +578,14 @@ public class AssistantExecutionService {
         events.publish(run.sessionId(), run.id(), "agent.completed", Map.of(
                 "status", "completed", "summary", safeSummary, "message", safeSummary, "progress", 100,
                 "provenance", Map.of("traceId", run.id(), "toolCount", completedActionCount(run.planId()))));
+        runLocks.remove(run.id());
+    }
+
+    private void moveSessionToCreatedProject(RunResponse run, Map<String, Object> effects) {
+        var projectId = Objects.toString(effects.get("createdProjectId"), "");
+        if (projectId.isBlank()) return;
+        jdbc.sql("update assistant_session set project_id = :projectId, updated_at = :now where id = :id")
+                .param("projectId", projectId).param("now", Instant.now()).param("id", run.sessionId()).update();
     }
 
     private void failRun(RunResponse run, RuntimeException exception) {
@@ -387,6 +600,7 @@ public class AssistantExecutionService {
                 "runId", run.id(), "progress", 100, "message", "当前步骤没有完成，可以从这里重试", "error", failure));
         events.publish(run.sessionId(), run.id(), "agent.failed", Map.of(
                 "status", "failed", "progress", 100, "message", "当前步骤没有完成，可以展开查看错误", "error", failure));
+        runLocks.remove(run.id());
     }
 
     private int completedActionCount(String planId) {
@@ -411,6 +625,168 @@ public class AssistantExecutionService {
             if (!"uiAction".equals(key) && (Set.of("workflow", "changed").contains(key) || !Objects.equals(before.get(key), value))) output.put(key, value);
         });
         return output;
+    }
+
+    private void verifyStepOutcome(PlanStep step, Map<String, Object> before, Map<String, Object> effects) {
+        if (Set.of("workflow.edit", "workflow.add_node", "workflow.remove_node", "workflow.connect").contains(step.tool())) {
+            if (!(effects.get("workflow") instanceof com.finflow.studio.workflow.WorkflowModels.WorkflowResponse workflow))
+                throw new IllegalStateException("结果验证失败：工作流修改没有返回已保存的工作流和版本");
+            if (workflow.currentVersion() < 1) throw new IllegalStateException("结果验证失败：工作流版本无效");
+            if ("workflow.add_node".equals(step.tool())) verifyWorkflowNode(workflow,
+                    Objects.toString(effects.get("workflowNodeId"), ""));
+        }
+        if ("deliverable.create".equals(step.tool())) verifyNewDeliverables(before, effects, true);
+        if ("workflow.run".equals(step.tool()) && "SUCCEEDED".equals(effects.get("workflowRunStatus"))) {
+            var requested = step.arguments().get("output_formats") instanceof List<?> values && !values.isEmpty();
+            verifyNewDeliverables(before, effects, requested);
+        }
+        if ("deliverable.edit".equals(step.tool())) {
+            var item = deliverables.get(Objects.toString(step.arguments().get("deliverable_id"), ""));
+            verifyArtifact(item.id(), item.format());
+        }
+        if ("deliverable.export".equals(step.tool())) {
+            var export = effects.get("export") instanceof Map<?, ?> value ? value : Map.of();
+            var id = Objects.toString(export.get("deliverableId"), "");
+            if (id.isBlank()) throw new IllegalStateException("结果验证失败：导出操作没有返回交付件 ID");
+            verifyArtifact(id, Objects.toString(export.get("format"), ""));
+        }
+    }
+
+    private void verifyWorkflowNode(com.finflow.studio.workflow.WorkflowModels.WorkflowResponse workflow, String nodeId) {
+        var node = workflow.nodes().stream().filter(item -> item.id().equals(nodeId)).findFirst()
+                .orElseThrow(() -> new IllegalStateException("结果验证失败：新建节点没有写入工作流"));
+        var field = switch (node.type()) {
+            case AI_ANALYSIS -> "prompt";
+            case AGENT_TASK -> "instruction";
+            case DELIVERABLE, OUTPUT -> "generationPrompt";
+            default -> "";
+        };
+        if (!field.isBlank() && Objects.toString(node.config().get(field), "").isBlank())
+            throw new IllegalStateException("结果验证失败：节点“" + node.name() + "”缺少完整的 " + field + " 要求");
+    }
+
+    @SuppressWarnings("unchecked")
+    private void verifyNewDeliverables(Map<String, Object> before, Map<String, Object> effects, boolean required) {
+        var previousIds = before.get("deliverables") instanceof List<?> items
+                ? items.stream().filter(Map.class::isInstance).map(Map.class::cast)
+                .map(item -> Objects.toString(item.get("id"), Objects.toString(item.get("deliverableId"), "")))
+                .collect(java.util.stream.Collectors.toSet()) : Set.<String>of();
+        var outputs = effects.get("deliverables") instanceof List<?> items
+                ? items.stream().filter(Map.class::isInstance).map(item -> (Map<String, Object>) item)
+                .filter(item -> !previousIds.contains(Objects.toString(item.get("id"), Objects.toString(item.get("deliverableId"), "")))).toList()
+                : List.<Map<String, Object>>of();
+        if (required && outputs.isEmpty()) throw new IllegalStateException("结果验证失败：任务要求生成成果，但没有创建任何输出文件");
+        var expectedProvenance = hasResearchEvidence(effects);
+        var verified = new ArrayList<Map<String, Object>>();
+        for (var output : outputs) {
+            var id = Objects.toString(output.get("id"), Objects.toString(output.get("deliverableId"), ""));
+            var format = Objects.toString(output.get("format"), "");
+            if (id.isBlank() || format.isBlank()) throw new IllegalStateException("结果验证失败：输出件缺少 ID 或格式");
+            verifyArtifact(id, format);
+            if (expectedProvenance && (!(output.get("refIds") instanceof List<?> refs) || refs.isEmpty()))
+                throw new IllegalStateException("结果验证失败：输出件没有保留已使用资料的引用链路");
+            var item = deliverables.get(id);
+            verified.add(Map.of("id", id, "format", item.format(), "version", item.currentVersion(),
+                    "sizeBytes", item.sizeBytes(), "checksum", item.checksum()));
+        }
+        if (!verified.isEmpty()) effects.put("verifiedArtifacts", verified);
+    }
+
+    private void verifyArtifact(String id, String expectedFormat) {
+        var item = deliverables.get(id);
+        if (item.currentVersion() < 1 || item.sizeBytes() < 16 || item.checksum() == null || item.checksum().isBlank())
+            throw new IllegalStateException("结果验证失败：输出文件为空、版本无效或缺少校验值");
+        if (!expectedFormat.isBlank() && !item.format().equalsIgnoreCase(expectedFormat))
+            throw new IllegalStateException("结果验证失败：输出格式与请求不一致，预期 " + expectedFormat + "，实际 " + item.format());
+        Path path = deliverables.path(id, null);
+        try {
+            if (!Files.isRegularFile(path) || Files.size(path) != item.sizeBytes())
+                throw new IllegalStateException("结果验证失败：输出文件不存在或大小与版本记录不一致");
+            byte[] bytes;
+            try (var input = Files.newInputStream(path)) { bytes = input.readNBytes(8192); }
+            var prefix = new String(bytes, StandardCharsets.UTF_8);
+            var format = item.format().toLowerCase(Locale.ROOT);
+            if ("pdf".equals(format) && !prefix.startsWith("%PDF")) throw new IllegalStateException("结果验证失败：PDF 文件内容无效");
+            if (Set.of("pptx", "docx").contains(format) && !prefix.startsWith("PK")) throw new IllegalStateException("结果验证失败：Office 文件内容无效");
+            if ("html_slides".equals(format)) {
+                var normalized = prefix.stripLeading().toLowerCase(Locale.ROOT);
+                if (!normalized.startsWith("<!doctype html") && !normalized.startsWith("<html"))
+                    throw new IllegalStateException("结果验证失败：HTML 文件结构无效");
+                if (normalized.contains("&lt;style") || normalized.contains("```html") || normalized.contains("&lt;!doctype html"))
+                    throw new IllegalStateException("结果验证失败：模型把 HTML/CSS 源码作为正文返回，未生成有效业务内容");
+            }
+        } catch (IOException exception) {
+            throw new IllegalStateException("结果验证失败：无法读取输出文件", exception);
+        }
+    }
+
+    private void verifyTaskCompletion(List<PlanStep> steps, Map<String, Object> effects) {
+        if (steps.stream().anyMatch(step -> Set.of("PENDING", "RUNNING").contains(step.status())))
+            throw new IllegalStateException("任务尚未完成：仍有工具操作未结束");
+        var lastRealStep = steps.stream().filter(step -> !"agent.execute".equals(step.tool())).reduce((left, right) -> right);
+        if (lastRealStep.isPresent() && "FAILED".equals(lastRealStep.get().status()))
+            throw new IllegalStateException("任务尚未完成：最后一个工具操作失败，且没有经过替代方式恢复");
+        if (steps.stream().anyMatch(step -> "deliverable.create".equals(step.tool())))
+            verifyNewDeliverables(Map.of(), effects, true);
+        var verifiedWrites = steps.stream().filter(step -> "SUCCEEDED".equals(step.status()) && !"READ".equals(step.mode())).count();
+        if (verifiedWrites > 0 && Boolean.FALSE.equals(effects.get("changed")) && !effects.containsKey("verifiedArtifacts"))
+            throw new IllegalStateException("任务尚未完成：最后一次修改没有产生变化，不能报告已完成");
+    }
+
+    @SuppressWarnings("unchecked")
+    private String deterministicDeliverableCompletion(String goal, Map<String, Object> effects) {
+        var required = requestedFormats(goal);
+        if (required.isEmpty()) return null;
+        var outputs = effects.get("deliverables") instanceof List<?> values
+                ? values.stream().filter(Map.class::isInstance).map(item -> (Map<String, Object>) item).toList()
+                : List.<Map<String, Object>>of();
+        var actual = outputs.stream().map(item -> normalizeRequestedFormat(Objects.toString(item.get("format"), "")))
+                .collect(java.util.stream.Collectors.toSet());
+        if (!actual.containsAll(required)) return null;
+        var citationsRequired = hasResearchEvidence(effects);
+        if (citationsRequired && outputs.stream().anyMatch(item -> !(item.get("refIds") instanceof List<?> refs) || refs.isEmpty()))
+            return null;
+        var names = outputs.stream().map(item -> Objects.toString(item.get("name"), "输出件")).distinct().toList();
+        return "已生成并验证" + String.join("、", names) + "，成果已在输出件中打开。";
+    }
+
+    private Set<String> requestedFormats(String goal) {
+        var text = Objects.toString(goal, "").toUpperCase(Locale.ROOT);
+        var formats = new java.util.LinkedHashSet<String>();
+        if (text.contains("PDF")) formats.add("PDF");
+        if (text.contains("PPT") || text.contains("POWERPOINT")) formats.add("PPTX");
+        if (text.contains("HTML") || containsAny(text, "网页报告", "网页幻灯", "网页演示")) formats.add("HTML_SLIDES");
+        if (text.contains("WORD") || text.contains("DOCX")) formats.add("DOCX");
+        if (containsAny(text, "交互报告", "可交互报告", "自助分析", "数据看板", "图表报告"))
+            formats.add("FINANCIAL_REPORT");
+        if (text.contains("MERMAID")) formats.add("MERMAID");
+        if (text.contains("EXCALIDRAW") || text.contains("手绘图")) formats.add("EXCALIDRAW");
+        if (formats.isEmpty() && containsAny(text, "分析", "总结", "归纳", "洞察", "研究", "对比", "复盘",
+                "ANALYZE", "ANALYSIS", "RESEARCH", "SUMMARY", "COMPARE")) formats.add("PPTX");
+        return java.util.Collections.unmodifiableSet(formats);
+    }
+
+    PlanStep applyDeliverablePolicy(PlanStep step, String userGoal) {
+        if (!"deliverable.create".equals(step.tool())) return step;
+        var requested = requestedFormats(userGoal);
+        var arguments = new LinkedHashMap<>(step.arguments());
+        var selected = normalizeDeliverableFormat(Objects.toString(arguments.get("format"), "PPTX"));
+        if (requested.isEmpty()) {
+            selected = "PPTX";
+        } else if (!requested.contains(selected)) {
+            selected = requested.iterator().next();
+        }
+        arguments.put("format", selected);
+        return new PlanStep(step.id(), step.order(), step.tool(), step.mode(), step.title(), step.description(),
+                Map.copyOf(arguments), step.risk(), step.requiresConfirmation(), step.status());
+    }
+
+    private String normalizeRequestedFormat(String value) {
+        return switch (value.toUpperCase(Locale.ROOT)) {
+            case "PPT", "POWERPOINT" -> "PPTX";
+            case "HTML", "WEB", "WEBPAGE" -> "HTML_SLIDES";
+            default -> value.toUpperCase(Locale.ROOT);
+        };
     }
 
     private PlanRuntime loadRuntime(String planId) {
@@ -508,6 +884,7 @@ public class AssistantExecutionService {
         events.publish(run.sessionId(), id, "assistant.run.canceled", Map.of("runId", id));
         events.publish(run.sessionId(), id, "agent.cancelled", Map.of(
                 "status", "cancelled", "runId", id, "planId", run.planId(), "message", message));
+        runLocks.remove(id);
         return get(id);
     }
 
@@ -567,6 +944,7 @@ public class AssistantExecutionService {
     }
 
     String executeStep(PlanStep step, Map<String, Object> effects) {
+        AssistantToolContracts.validate(step.tool(), step.arguments());
         return switch (step.tool()) {
             case "workspace.inspect" -> inspectWorkspace(step, effects);
             case "workspace.navigate" -> navigate(step, effects);
@@ -624,7 +1002,10 @@ public class AssistantExecutionService {
 
     private String inspectWorkspace(PlanStep step, Map<String, Object> effects) {
         var projectId = argument(step, "project_id", "");
-        if (projectId.isBlank()) return "已读取当前工作环境";
+        if (projectId.isBlank()) {
+            effects.put("projects", projects.list());
+            return "已读取当前工作环境和可用项目";
+        }
         var snapshot = workspace.get(projectId);
         var data = snapshot.resources().stream().filter(item -> "DATA".equals(item.group())).count();
         var knowledge = snapshot.resources().stream().filter(item -> "KNOWLEDGE".equals(item.group())).count();
@@ -636,6 +1017,21 @@ public class AssistantExecutionService {
                 "data", data,
                 "knowledge", knowledge,
                 "outputs", outputs));
+        var items = new ArrayList<Map<String, Object>>();
+        snapshot.folders().forEach(folder -> {
+            var item = new LinkedHashMap<String, Object>();
+            item.put("id", folder.id()); item.put("name", folder.name()); item.put("type", "FOLDER");
+            item.put("group", folder.rootKind());
+            if (folder.parentId() != null) item.put("parentId", folder.parentId());
+            items.add(item);
+        });
+        snapshot.workflows().forEach(workflow -> items.add(Map.of(
+                "id", workflow.id(), "name", workflow.name(), "type", "WORKFLOW",
+                "status", workflow.status(), "version", workflow.currentVersion())));
+        snapshot.resources().forEach(resource -> items.add(Map.of(
+                "id", resource.id(), "name", resource.name(), "type", resource.resourceType(),
+                "group", resource.group(), "status", resource.status())));
+        effects.put("workspaceItems", items);
         effects.put("sourceProjectId", projectId);
         return "已读取当前项目“" + snapshot.project().name() + "”：数据 " + data
                 + " 项、资料 " + knowledge + " 项、输出 " + outputs + " 项";
@@ -847,6 +1243,9 @@ public class AssistantExecutionService {
         var projectId = argument(step, "project_id", Objects.toString(effects.get("sourceProjectId"), ""));
         if (projectId.isBlank()) throw new IllegalStateException("当前项目不可用，无法生成交付件");
         var format = normalizeDeliverableFormat(argument(step, "format", "PPTX"));
+        if ("FINANCIAL_REPORT".equals(format) && !hasInteractiveReportData(projectId)) {
+            throw new IllegalStateException("交互报告需要项目中已有可读取的 CSV、TSV 或数据采集结果；当前项目没有符合条件的数据。若用户未明确要求交互报告，请改为生成 PPTX");
+        }
         var title = argument(step, "title", "Agent 分析成果");
         var goal = argument(step, "goal", step.description() == null || step.description().isBlank()
                 ? "基于已核验资料总结战略规划、经营状况、风险与结论" : step.description());
@@ -872,6 +1271,9 @@ public class AssistantExecutionService {
                         Objects.toString(citation.get("contentHash"), "")));
             }
         }
+        mergeRequestedCitations(step, effects, citations);
+        if (hasResearchEvidence(effects) && citations.isEmpty())
+            throw new IllegalStateException("结果验证失败：已读取研究资料，但交付件没有绑定引用");
         var section = new SectionRequest("分析结果", List.of(generatedBody), List.of(),
                 citations.stream().map(CitationRequest::id).filter(id -> !id.isBlank()).toList(), citations);
         var pptSkill = "PPTX".equals(format) ? "guizang-huawei-style-c"
@@ -883,11 +1285,77 @@ public class AssistantExecutionService {
                     .map(value -> (Map<String, Object>) value).toList())
                 : new ArrayList<Map<String, Object>>();
         outputs.add(Map.of("id", created.id(), "name", created.name(), "format", created.format(),
-                "version", created.currentVersion(), "downloadUrl", "/api/deliverables/" + created.id() + "/download"));
+                "version", created.currentVersion(), "downloadUrl", "/api/deliverables/" + created.id() + "/download",
+                "refIds", citations.stream().map(CitationRequest::id).filter(id -> !id.isBlank()).toList()));
         effects.put("deliverables", outputs);
         effects.put("uiAction", Map.of("type", "OPEN_DELIVERABLE", "projectId", projectId,
                 "resourceId", created.id(), "refreshWorkspace", true));
         return "已生成“" + created.name() + "”（" + created.format().toUpperCase() + "）";
+    }
+
+    private boolean hasInteractiveReportData(String projectId) {
+        return workspace.get(projectId).resources().stream().anyMatch(resource -> {
+            if ("DATASET".equals(resource.resourceType())) return true;
+            if (!Set.of("DATA_FILE", "KNOWLEDGE_FILE", "OFFICE_FILE").contains(resource.resourceType())) return false;
+            var name = Objects.toString(resource.name(), "").toLowerCase(Locale.ROOT);
+            return name.endsWith(".csv") || name.endsWith(".tsv");
+        });
+    }
+
+    @SuppressWarnings("unchecked")
+    private void mergeRequestedCitations(PlanStep step, Map<String, Object> effects, List<CitationRequest> citations) {
+        if (!(step.arguments().get("citations") instanceof List<?> requested) || requested.isEmpty()) return;
+        var verified = new ArrayList<Map<String, Object>>();
+        if (effects.get("verifiedSources") instanceof List<?> values)
+            values.stream().filter(Map.class::isInstance).map(item -> (Map<String, Object>) item).forEach(verified::add);
+        if (effects.get("knowledgeRefs") instanceof List<?> values) {
+            values.stream().filter(Map.class::isInstance).map(item -> (Map<String, Object>) item).forEach(ref -> {
+                var normalized = new LinkedHashMap<String, Object>();
+                normalized.put("citationId", firstNonBlank(ref.get("citationId"), ref.get("id")));
+                normalized.put("resourceId", ref.get("resourceId"));
+                normalized.put("version", ref.get("version"));
+                normalized.put("sourceName", ref.get("sourceName"));
+                normalized.put("excerpt", firstNonBlank(ref.get("excerpt"), ref.get("text")));
+                normalized.put("contentHash", ref.get("contentHash"));
+                normalized.put("location", ref.get("location"));
+                verified.add(normalized);
+            });
+        }
+        for (var value : requested) {
+            if (!(value instanceof Map<?, ?> raw)) continue;
+            var resourceId = firstNonBlank(raw.get("resource_id"), raw.get("resourceId"));
+            var url = Objects.toString(raw.get("url"), "");
+            var requestedCitationId = firstNonBlank(raw.get("citation_id"), raw.get("citationId"));
+            var source = verified.stream().filter(item -> (!resourceId.isBlank() && resourceId.equals(item.get("resourceId")))
+                            || (!url.isBlank() && url.equals(item.get("url")))
+                            || (!requestedCitationId.isBlank() && requestedCitationId.equals(item.get("citationId"))))
+                    .findFirst().orElseThrow(() -> new IllegalStateException(
+                            "结果验证失败：交付件引用了尚未成功读取的来源 " + firstNonBlank(resourceId, url)));
+            var citationId = requestedCitationId;
+            if (citationId.isBlank()) citationId = Objects.toString(source.get("citationId"), "");
+            if (citationId.isBlank()) citationId = "web:" + UUID.nameUUIDFromBytes(
+                    Objects.toString(source.get("url"), "").getBytes(StandardCharsets.UTF_8));
+            var finalCitationId = citationId;
+            citations.removeIf(item -> finalCitationId.equals(item.id()));
+            var location = source.get("location") instanceof Map<?, ?> valueLocation
+                    ? new LinkedHashMap<String, Object>((Map<String, Object>) valueLocation)
+                    : new LinkedHashMap<String, Object>();
+            if (source.containsKey("url")) location.put("url", Objects.toString(source.get("url"), ""));
+            if (source.containsKey("finalUrl")) location.put("finalUrl", Objects.toString(source.get("finalUrl"), ""));
+            if (source.containsKey("verifiedAt")) location.put("verifiedAt", Objects.toString(source.get("verifiedAt"), ""));
+            citations.add(new CitationRequest(citationId,
+                    Objects.toString(source.get("resourceId"), resourceId),
+                    source.get("version") instanceof Number number ? Math.max(1, number.intValue()) : 1,
+                    firstNonBlank(raw.get("source_title"), raw.get("sourceName"), source.get("sourceName")),
+                    firstNonBlank(raw.get("usage"), raw.get("excerpt"), source.get("excerpt")),
+                    Map.copyOf(location), Objects.toString(source.get("contentHash"), "")));
+        }
+    }
+
+    private boolean hasResearchEvidence(Map<String, Object> effects) {
+        return effects.get("verifiedSources") instanceof List<?> sources && !sources.isEmpty()
+                || effects.get("knowledgeCitations") instanceof List<?> citations && !citations.isEmpty()
+                || effects.get("knowledgeRefs") instanceof List<?> refs && !refs.isEmpty();
     }
 
     private String normalizeDeliverableFormat(String value) {
@@ -921,6 +1389,13 @@ public class AssistantExecutionService {
                 if (!(value instanceof Map<?, ?> citation)) continue;
                 result.append("[项目证据] ").append(Objects.toString(citation.get("sourceName"), "项目资料"))
                         .append("：").append(Objects.toString(citation.get("excerpt"), "")).append('\n');
+            }
+        }
+        if (effects.get("knowledgeRefs") instanceof List<?> refs) {
+            for (var value : refs) {
+                if (!(value instanceof Map<?, ?> ref)) continue;
+                result.append("[已读取资料] ").append(Objects.toString(ref.get("sourceName"), "项目资料"))
+                        .append("：").append(firstNonBlank(ref.get("excerpt"), ref.get("text"))).append('\n');
             }
         }
         return result.toString().trim();
@@ -1311,6 +1786,21 @@ public class AssistantExecutionService {
     private String argument(PlanStep step, String key, String fallback) {
         var value = Objects.toString(step.arguments().get(key), "").trim();
         return value.isBlank() ? fallback : value;
+    }
+
+    private String firstNonBlank(Object... values) {
+        for (var value : values) {
+            var text = Objects.toString(value, "").trim();
+            if (!text.isBlank()) return text;
+        }
+        return "";
+    }
+
+    private boolean containsAny(String text, String... values) {
+        for (var value : values) {
+            if (text.contains(value)) return true;
+        }
+        return false;
     }
 
     private String shortId() { return UUID.randomUUID().toString().replace("-", "").substring(0, 10); }

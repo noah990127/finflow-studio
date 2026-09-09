@@ -29,6 +29,53 @@ MAX_GENERATION_SOURCE_CHARS = 24_000
 MAX_GENERATION_REQUIREMENTS_CHARS = 6_000
 
 
+class GeneratedContentProtocolError(RuntimeError):
+    pass
+
+
+def _parse_json_object(content: str) -> dict[str, object]:
+    clean = content.strip()
+    if clean.startswith("```"):
+        clean = re.sub(r"^```(?:json)?\s*", "", clean, flags=re.IGNORECASE)
+        clean = re.sub(r"\s*```$", "", clean).strip()
+    try:
+        value = json.loads(clean)
+    except json.JSONDecodeError as exception:
+        raise GeneratedContentProtocolError(
+            "大模型返回格式不符合成果协议：应返回一个合法 JSON 对象，不要返回 HTML/CSS 源码或 Markdown 代码块"
+        ) from exception
+    if not isinstance(value, dict):
+        raise GeneratedContentProtocolError("大模型返回格式不符合成果协议：JSON 顶层必须是对象")
+    return value
+
+
+def _validate_generated_content(output_format: str, content: str) -> str:
+    normalized = output_format.strip().upper()
+    if normalized == "DELIVERABLE_PLAN":
+        value = _parse_json_object(content)
+        missing = [key for key in ("format", "title", "heading", "include_citations", "citation_style") if key not in value]
+        if missing:
+            raise GeneratedContentProtocolError("大模型返回的成果规格缺少字段：" + "、".join(missing))
+    elif normalized in {"PPTX", "HTML_SLIDES", "DOCX", "PDF", "FINANCIAL_REPORT"}:
+        value = _parse_json_object(content)
+        container = "slides" if normalized in {"PPTX", "HTML_SLIDES"} else "sections"
+        title_key = "title" if container == "slides" else "heading"
+        items = value.get(container)
+        if not isinstance(items, list) or not items:
+            raise GeneratedContentProtocolError(f"大模型返回格式不符合成果协议：{container} 必须是非空数组")
+        for index, item in enumerate(items, start=1):
+            if not isinstance(item, dict):
+                raise GeneratedContentProtocolError(f"大模型返回格式不符合成果协议：{container}[{index}] 必须是对象")
+            missing = [key for key in (title_key, "summary", "bullets", "chart") if key not in item]
+            if missing:
+                raise GeneratedContentProtocolError(
+                    f"大模型返回格式不符合成果协议：{container}[{index}] 缺少 " + "、".join(missing)
+                )
+            if not isinstance(item.get("bullets"), list):
+                raise GeneratedContentProtocolError(f"大模型返回格式不符合成果协议：{container}[{index}].bullets 必须是数组")
+    return content.strip()
+
+
 def _requested_slide_count(requirements: str) -> int:
     range_match = re.search(
         r"(\d{1,2})\s*(?:-|~|〜|–|—|至|到)\s*(\d{1,2})\s*(?:页|屏|slides?)",
@@ -242,7 +289,7 @@ async def generate_content(request: GenerateContentRequest) -> GenerateContentRe
         return GenerateContentResponse(content=_fallback_generated_content(request), mode="local-extractive-fallback")
     if not content or not content.strip():
         return GenerateContentResponse(content=_fallback_generated_content(request), mode="local-extractive-fallback")
-    return GenerateContentResponse(content=content.strip(), mode=llm.provider)
+    return GenerateContentResponse(content=_validate_generated_content(request.format, content), mode=llm.provider)
 
 
 async def generate_content_stream(request: GenerateContentRequest) -> AsyncIterator[dict[str, object]]:
@@ -270,7 +317,7 @@ async def generate_content_stream(request: GenerateContentRequest) -> AsyncItera
         content = await task
         if not content or not content.strip():
             raise RuntimeError("大模型没有返回可用内容")
-        clean = content.strip()
+        clean = _validate_generated_content(request.format, content)
         yield {"type": "status", "message": "内容已生成，正在整理输出", "progress": 78}
         chunk_size = 90
         for index in range(0, len(clean), chunk_size):
@@ -281,6 +328,9 @@ async def generate_content_stream(request: GenerateContentRequest) -> AsyncItera
             }
             await asyncio.sleep(0.025)
         yield {"type": "complete", "content": clean, "mode": llm.provider, "progress": 94}
+    except GeneratedContentProtocolError as exception:
+        logger.warning("Streaming LLM output did not satisfy the deliverable protocol: %s", exception)
+        yield {"type": "error", "message": str(exception), "progress": 78}
     except Exception as exception:
         logger.warning(
             "Streaming LLM deliverable generation failed; using local fallback (%s: %s)",

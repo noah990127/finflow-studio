@@ -20,7 +20,7 @@ public final class AssistantCapabilityRegistry {
         register("workspace.select", "workspace", "选择工作区对象", "在界面中选择项目、文件、数据集、工作流、输出件或面板", "READ", RiskLevel.READ_ONLY, "never",
                 List.of("target_id", "target_type", "panel"));
         register("assistant.respond", "assistant", "直接回答", "结合当前上下文回答问题或说明缺少的信息", "READ", RiskLevel.READ_ONLY, "never",
-                List.of("goal", "reason"));
+                List.of("goal", "reason", "prepared_answer"));
         register("assistant.analyze_context", "assistant", "分析当前内容", "分析项目已有资料或当前选中的内容", "READ", RiskLevel.READ_ONLY, "never",
                 List.of("project_id", "resource_id", "resource_name", "goal"));
         register("project.list", "project", "查看项目", "列出当前用户可访问的项目", "READ", RiskLevel.READ_ONLY, "never",
@@ -36,31 +36,35 @@ public final class AssistantCapabilityRegistry {
         register("folder.create", "folder", "创建文件夹", "在工作区中创建资料、数据或输出文件夹", "WRITE", RiskLevel.CREATE_VERSION, "always",
                 List.of("project_id", "parent_id", "name", "group"));
         register("folder.rename", "folder", "重命名文件夹", "修改工作区文件夹名称", "WRITE", RiskLevel.CREATE_VERSION, "always",
-                List.of("folder_id", "new_name"));
+                List.of("project_id", "folder_id", "new_name"));
         register("folder.move", "folder", "移动文件夹", "将文件夹移动到另一个工作区位置", "WRITE", RiskLevel.CREATE_VERSION, "always",
-                List.of("folder_id", "target_parent_id"));
+                List.of("project_id", "folder_id", "target_parent_id"));
         register("folder.delete", "folder", "删除文件夹", "删除文件夹或将其移入回收流程", "WRITE", RiskLevel.DESTRUCTIVE_OR_EXTERNAL, "always",
-                List.of("folder_id"));
+                List.of("project_id", "folder_id"));
         register("resource.upload", "resource", "上传文件", "向当前项目添加用户提供的文件", "WRITE", RiskLevel.CREATE_VERSION, "always",
-                List.of("project_id", "folder_id", "file_name", "resource_type"));
+                List.of("project_id", "folder_id", "file_name", "resource_type", "media_type", "content"));
         register("resource.add", "resource", "添加资源", "添加网页、外部链接或已有对象到工作区", "WRITE", RiskLevel.CREATE_VERSION, "always",
-                List.of("project_id", "name", "resource_type", "url"));
+                List.of("project_id", "name", "resource_type", "url", "file_name", "media_type", "content", "folder_id"));
+        register("source.verify", "knowledge", "验证资料来源", "读取候选网址并验证状态、正文、类型和内容哈希，不修改工作区", "READ", RiskLevel.READ_ONLY, "never",
+                List.of("url", "name"));
+        register("source.add_verified", "knowledge", "添加已验证来源", "验证网址可读取后保存网页来源和项目内快照；验证失败不会写入工作区", "WRITE", RiskLevel.CREATE_VERSION, "always",
+                List.of("project_id", "url", "name", "folder_id"));
         register("resource.open", "resource", "打开资源", "在工作区打开文件、数据集、知识或输出件", "READ", RiskLevel.READ_ONLY, "never",
-                List.of("resource_id"));
+                List.of("project_id", "resource_id"));
         register("resource.read", "resource", "读取资源", "读取文件正文、网页正文、JSON API 数据、元数据和可引用来源定位；网页不是只返回链接", "READ", RiskLevel.READ_ONLY, "never",
-                List.of("resource_id", "range", "goal"));
+                List.of("project_id", "resource_id", "range", "goal"));
         register("resource.edit", "resource", "编辑资源", "编辑文件或资源内容，保留版本与审计", "WRITE", RiskLevel.CREATE_VERSION, "always",
-                List.of("resource_id", "patch", "expected_version"));
+                List.of("project_id", "resource_id", "patch", "expected_version"));
         register("resource.rename", "resource", "重命名资源", "修改文件、数据集或输出件名称", "WRITE", RiskLevel.CREATE_VERSION, "always",
-                List.of("resource_id", "new_name"));
+                List.of("project_id", "resource_id", "new_name"));
         register("resource.move", "resource", "移动资源", "将资源移动到指定文件夹或分组", "WRITE", RiskLevel.CREATE_VERSION, "always",
-                List.of("resource_id", "target_folder_id", "target_group"));
+                List.of("project_id", "resource_id", "target_folder_id", "target_group"));
         register("resource.delete", "resource", "删除资源", "删除文件、数据集、知识或输出件", "WRITE", RiskLevel.DESTRUCTIVE_OR_EXTERNAL, "always",
-                List.of("resource_id"));
-        register("knowledge.discover_external_sources", "knowledge", "查找资料", "搜索公开资料入口并保留来源", "READ", RiskLevel.READ_ONLY, "never",
+                List.of("project_id", "resource_id"));
+        register("knowledge.discover_external_sources", "knowledge", "查找资料", "搜索公开资料候选入口；候选不会自动加入工作区，必须先验证", "READ", RiskLevel.READ_ONLY, "never",
                 List.of("topic", "max_sources"));
         register("knowledge.add", "knowledge", "添加知识", "把文件、网页或文本加入项目知识库", "WRITE", RiskLevel.CREATE_VERSION, "always",
-                List.of("project_id", "resource_id", "text", "source"));
+                List.of("project_id", "resource_id", "text", "source", "name"));
         register("knowledge.search", "knowledge", "搜索知识", "搜索项目知识库并返回可引用证据", "READ", RiskLevel.READ_ONLY, "never",
                 List.of("project_id", "query", "resource_ids", "limit"));
         register("knowledge.read", "knowledge", "读取知识片段", "读取知识库条目、原文摘录和定位信息", "READ", RiskLevel.READ_ONLY, "never",
@@ -68,31 +72,31 @@ public final class AssistantCapabilityRegistry {
         register("knowledge.parse", "knowledge", "解析知识文件", "从文件中解析文本、章节和可检索片段", "WRITE", RiskLevel.CREATE_VERSION, "always",
                 List.of("resource_id", "parser_options"));
         register("knowledge.extract_table", "knowledge", "抽取文档表格", "从 Word、网页 HTML 表格或 JSON API 中提取结构化表格；网页会先保存可见快照并保留来源定位", "WRITE", RiskLevel.CREATE_VERSION, "always",
-                List.of("resource_id", "pages", "table_hint", "target_dataset_name"));
+                List.of("project_id", "resource_id", "pages", "table_hint", "target_dataset_name"));
         register("dataset.add_source", "dataset", "添加数据源", "登记数据库、API 或文件数据入口", "WRITE", RiskLevel.CREATE_VERSION, "always",
                 List.of("project_id", "source_type", "name", "connection"));
         register("dataset.connect", "dataset", "连接数据源", "测试并保存数据库或 API 数据源连接", "WRITE", RiskLevel.DESTRUCTIVE_OR_EXTERNAL, "always",
                 List.of("project_id", "source_id", "credentials_ref"));
         register("dataset.import", "dataset", "导入数据", "从文件、数据库或 API 导入数据集", "WRITE", RiskLevel.CREATE_VERSION, "always",
-                List.of("source_id", "query", "target_name"));
+                List.of("project_id", "source_id", "query", "target_name"));
         register("dataset.query", "dataset", "查询数据", "使用只读 SQL 或分析请求查询数据集", "READ", RiskLevel.READ_ONLY, "never",
-                List.of("dataset_id", "sql", "analysis_request"));
+                List.of("project_id", "dataset_id", "sql", "analysis_request"));
         register("dataset.extract", "dataset", "抽取数据", "从文件、网页 JSON 或 HTML 表格中抽取并创建真实可计算的数据文件；返回的新 dataset_id 才能用于后续转换", "WRITE", RiskLevel.CREATE_VERSION, "always",
-                List.of("resource_id", "schema", "target_name"));
+                List.of("project_id", "resource_id", "schema", "target_name"));
         register("dataset.create", "dataset", "创建数据集", "创建新的结构化数据集", "WRITE", RiskLevel.CREATE_VERSION, "always",
                 List.of("project_id", "name", "schema", "rows"));
         register("dataset.transform", "dataset", "转换数据", "生成并执行透明可复核的数据加工；script 必须是只读 DuckDB SQL，输入表固定名为 source，不传 SQL 时由系统根据 requirements 生成", "WRITE", RiskLevel.CREATE_VERSION, "always",
-                List.of("dataset_id", "requirements", "script", "target_name"));
+                List.of("project_id", "dataset_id", "requirements", "script", "target_name"));
         register("dataset.open", "dataset", "打开数据集", "在数据面板打开指定数据集", "READ", RiskLevel.READ_ONLY, "never",
-                List.of("dataset_id"));
+                List.of("project_id", "dataset_id"));
         register("dataset.delete", "dataset", "删除数据集", "删除数据集或导入结果", "WRITE", RiskLevel.DESTRUCTIVE_OR_EXTERNAL, "always",
-                List.of("dataset_id"));
+                List.of("project_id", "dataset_id"));
         register("workflow.initialize", "workflow", "建立项目工作流", "为新项目建立首条工作流", "WRITE", RiskLevel.CREATE_VERSION, "always",
                 List.of("topic", "goal", "include_analysis", "output_formats"));
         register("workflow.prepare", "workflow", "创建工作流", "在当前项目中新建可编排的工作流", "WRITE", RiskLevel.CREATE_VERSION, "always",
                 List.of("project_id", "goal", "resource_id", "resource_type", "resource_name", "output_formats"));
         register("workflow.open", "workflow", "打开工作流", "在画布中打开指定工作流", "READ", RiskLevel.READ_ONLY, "never",
-                List.of("project_id", "workflow_id", "workflow_name"));
+                List.of("project_id", "workflow_id", "workflow_name", "goal"));
         register("workflow.edit", "workflow", "编辑工作流", "一次批量保存工作流。patch 是对象：nodes 按 id 合并或新增 [{id,type,name,config:{prompt:完整分析要求},position:{x,y}}]；未列出的节点保留。edges 提供完整连线数组 [{id,source,target}]，省略则保留。已有节点可省略 type。AI_ANALYSIS 用 config.prompt，AGENT_TASK 用 instruction，DELIVERABLE 用 generationPrompt、format、includeCitations、pptSkill。不得省略用户给出的规则与输出格式。可用 patch.node_id/config/name 编辑单节点。返回真实 workflow 和版本；不接受自然语言或 JSON Patch 数组", "WRITE", RiskLevel.CREATE_VERSION, "always",
                 List.of("workflow_id", "patch", "expected_version"));
         register("workflow.add_selected_resource", "workflow", "把内容加入工作流", "将当前选择的资源添加为工作流输入", "WRITE", RiskLevel.CREATE_VERSION, "always",
@@ -104,19 +108,19 @@ public final class AssistantCapabilityRegistry {
         register("workflow.connect", "workflow", "连接工作流节点", "在两个工作流节点之间建立连线", "WRITE", RiskLevel.CREATE_VERSION, "always",
                 List.of("workflow_id", "source_node_id", "target_node_id"));
         register("workflow.run", "workflow", "运行工作流", "执行已保存工作流并返回运行产物", "WRITE", RiskLevel.CREATE_VERSION, "always",
-                List.of("workflow_id", "parameters"));
+                List.of("project_id", "workflow_id", "parameters", "goal", "output_formats"));
         register("workflow.save_version", "workflow", "保存工作流版本", "为当前工作流保存可审计版本", "WRITE", RiskLevel.CREATE_VERSION, "always",
                 List.of("workflow_id", "message"));
         register("workflow.delete", "workflow", "删除工作流", "删除指定工作流及其历史运行记录", "WRITE", RiskLevel.DESTRUCTIVE_OR_EXTERNAL, "always",
-                List.of("workflow_id"));
+                List.of("project_id", "workflow_id"));
         register("workflow.add_data_transform", "workflow", "增加数据加工", "加入透明、可查看和可复核的数据加工草稿", "WRITE", RiskLevel.CREATE_VERSION, "always",
-                List.of("project_id", "resource_id", "resource_type", "resource_name", "goal"));
+                List.of("project_id", "resource_id", "resource_type", "resource_name", "goal", "workflow_id"));
         register("workflow.add_outputs", "workflow", "增加输出成果", "按用户明确指定的格式添加输出节点", "WRITE", RiskLevel.CREATE_VERSION, "always",
                 List.of("project_id", "goal", "output_formats", "resource_id", "resource_type", "resource_name"));
         register("dataset.profile", "dataset", "检查数据", "读取字段、规模和数据质量概况", "READ", RiskLevel.READ_ONLY, "never",
-                List.of("resource_id", "goal"));
-        register("deliverable.create", "deliverable", "创建交付件", "创建 PPT、Word、PDF、Mermaid、HTML 或交互报告", "WRITE", RiskLevel.CREATE_VERSION, "always",
-                List.of("project_id", "format", "title", "content", "citations"));
+                List.of("project_id", "resource_id", "goal"));
+        register("deliverable.create", "deliverable", "创建交付件", "创建 PPT、Word、PDF、Mermaid、HTML 或交互报告；分析任务未指定格式时使用 PPTX，FINANCIAL_REPORT 仅用于用户明确要求交互报告且项目已有 CSV 或采集数据的场景", "WRITE", RiskLevel.CREATE_VERSION, "always",
+                List.of("project_id", "format", "title", "content", "citations", "goal"));
         register("deliverable.open", "deliverable", "打开交付件", "在输出面板打开交付件", "READ", RiskLevel.READ_ONLY, "never",
                 List.of("deliverable_id"));
         register("deliverable.edit", "deliverable", "编辑交付件", "修改已有输出件内容并保存版本", "WRITE", RiskLevel.CREATE_VERSION, "always",
@@ -133,7 +137,7 @@ public final class AssistantCapabilityRegistry {
                                  RiskLevel risk, String confirmationRequirement, List<String> arguments) {
         CAPABILITIES.put(id, new Capability(id, category, title, description, mode, risk,
                 risk.name().toLowerCase(Locale.ROOT), confirmationRequirement, arguments,
-                Map.of("type", "object", "required", arguments), Map.of("type", "object")));
+                AssistantToolContracts.inputSchema(id, arguments), AssistantToolContracts.outputSchema(id)));
     }
 
     public static Optional<Capability> find(String id) { return Optional.ofNullable(CAPABILITIES.get(id)); }

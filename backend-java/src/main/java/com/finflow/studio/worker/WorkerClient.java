@@ -196,8 +196,19 @@ public class WorkerClient {
 
     public Map<String, Object> runAgentTaskStreaming(Object request,
                                                      Consumer<Map<String, Object>> eventConsumer) {
+        return runAgentStreaming("/v1/agent/tasks/stream", request, eventConsumer, false);
+    }
+
+    public Map<String, Object> runContinuousAgentStreaming(Object request,
+                                                            Consumer<Map<String, Object>> eventConsumer) {
+        return runAgentStreaming("/v1/agent/runs/stream", request, eventConsumer, true);
+    }
+
+    private Map<String, Object> runAgentStreaming(String path, Object request,
+                                                   Consumer<Map<String, Object>> eventConsumer,
+                                                   boolean allowPause) {
         var finalResult = new AtomicReference<Map<String, Object>>();
-        client.post().uri("/v1/agent/tasks/stream")
+        client.post().uri(path)
                 .contentType(MediaType.APPLICATION_JSON)
                 .accept(MediaType.APPLICATION_NDJSON)
                 .bodyValue(request)
@@ -205,7 +216,8 @@ public class WorkerClient {
                 .bodyToFlux(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {})
                 .doOnNext(event -> {
                     eventConsumer.accept(event);
-                    if ("complete".equals(event.get("type")) || "completed".equals(event.get("type"))) finalResult.set(event);
+                    if ("complete".equals(event.get("type")) || "completed".equals(event.get("type"))
+                            || (allowPause && "waiting_confirmation".equals(event.get("type")))) finalResult.set(event);
                     if ("error".equals(event.get("type"))) {
                         throw new IllegalStateException(String.valueOf(event.getOrDefault("message", "Agent 任务失败")));
                     }
