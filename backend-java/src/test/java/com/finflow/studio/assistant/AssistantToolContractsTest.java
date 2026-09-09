@@ -1,5 +1,6 @@
 package com.finflow.studio.assistant;
 
+import com.finflow.studio.workflow.WorkflowModels.NodeType;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -17,6 +18,19 @@ class AssistantToolContractsTest {
         var properties = (Map<?, ?>) schema.get("properties");
         assertThat(((Map<?, ?>) properties.get("node_type")).get("enum")).isNotNull();
         assertThat(((Map<?, ?>) properties.get("config")).get("type")).isEqualTo("object");
+    }
+
+    @Test
+    void workflowNodeEnumAlwaysMatchesTheExecutableNodeTypes() {
+        var schema = AssistantCapabilityRegistry.find("workflow.add_node").orElseThrow().inputSchema();
+        var properties = (Map<?, ?>) schema.get("properties");
+        var nodeTypes = ((List<?>) ((Map<?, ?>) properties.get("node_type")).get("enum"))
+                .stream().map(Object::toString).toList();
+
+        assertThat(nodeTypes).containsExactlyInAnyOrder(
+                java.util.Arrays.stream(NodeType.values()).map(Enum::name).toArray(String[]::new));
+        assertThat(nodeTypes).contains("REVIEW", "DATASET_INPUT", "DATA_TRANSFORM")
+                .doesNotContain("HUMAN_REVIEW", "DATABASE_INPUT", "DATA_PROCESS");
     }
 
     @Test

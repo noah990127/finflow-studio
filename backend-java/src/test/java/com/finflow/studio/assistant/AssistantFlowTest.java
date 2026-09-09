@@ -28,7 +28,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 @SpringBootTest(properties = {
         "spring.datasource.url=jdbc:h2:mem:finflow-test;MODE=PostgreSQL;DB_CLOSE_DELAY=-1",
-        "finflow.ai.enabled=false"
+        "finflow.ai.enabled=false",
+        "finflow.worker.base-url=http://127.0.0.1:1"
 })
 @AutoConfigureMockMvc
 class AssistantFlowTest {
@@ -47,6 +48,24 @@ class AssistantFlowTest {
 
     @Autowired
     WorkflowDefinitionService workflows;
+
+    @Test
+    void aReadyWorkflowEditCompletesWithoutWaitingForAnotherModelTurn() {
+        var effects = Map.<String, Object>of("workflow", Map.of(
+                "name", "未来两个月活动工作流",
+                "status", "READY",
+                "currentVersion", 3,
+                "nodes", List.of(Map.of("id", "source"), Map.of("id", "analysis"), Map.of("id", "output")),
+                "edges", List.of(Map.of("source", "source", "target", "analysis"),
+                        Map.of("source", "analysis", "target", "output"))));
+
+        assertThat(execution.deterministicWorkflowCompletion(
+                "workflow.edit", "把刚刚的沉淀为可复用的工作流", effects))
+                .contains("已创建并验证可复用工作流")
+                .contains("3 个步骤和 2 条连线");
+        assertThat(execution.deterministicWorkflowCompletion(
+                "workflow.edit", "编辑并运行工作流", effects)).isNull();
+    }
 
     @Test
     void modifyingPlanRequiresAValidConfirmation() throws Exception {

@@ -361,9 +361,12 @@ public class AssistantExecutionService {
                 }
             }
             var observation = executeAndObserve(run, step, new LinkedHashMap<>(readEffects(runId)));
-            if (Boolean.TRUE.equals(observation.get("success")) && "deliverable.create".equals(tool)) {
+            if (Boolean.TRUE.equals(observation.get("success"))) {
                 var currentEffects = readEffects(runId);
-                var completion = deterministicDeliverableCompletion(loadRuntime(run.planId()).goal(), currentEffects);
+                var goal = loadRuntime(run.planId()).goal();
+                var completion = "deliverable.create".equals(tool)
+                        ? deterministicDeliverableCompletion(goal, currentEffects)
+                        : deterministicWorkflowCompletion(tool, goal, currentEffects);
                 if (completion != null) {
                     observation = new LinkedHashMap<>(observation);
                     observation.put("taskComplete", true);
@@ -748,6 +751,26 @@ public class AssistantExecutionService {
             return null;
         var names = outputs.stream().map(item -> Objects.toString(item.get("name"), "输出件")).distinct().toList();
         return "已生成并验证" + String.join("、", names) + "，成果已在输出件中打开。";
+    }
+
+    @SuppressWarnings("unchecked")
+    String deterministicWorkflowCompletion(String tool, String goal, Map<String, Object> effects) {
+        if (!Set.of("workflow.edit", "workflow.prepare", "workflow.initialize", "workflow.initialize_analysis").contains(tool))
+            return null;
+        var normalizedGoal = Objects.toString(goal, "").toLowerCase(Locale.ROOT);
+        if (!containsAny(normalizedGoal, "工作流", "workflow")) return null;
+        if (containsAny(normalizedGoal, "运行工作流", "执行工作流", "并运行", "并执行", "跑一下", "试运行", "run workflow"))
+            return null;
+        if (!(effects.get("workflow") instanceof Map<?, ?> rawWorkflow)) return null;
+        var workflow = (Map<String, Object>) rawWorkflow;
+        if (!"READY".equals(Objects.toString(workflow.get("status"), ""))) return null;
+        var nodes = workflow.get("nodes") instanceof List<?> values ? values : List.of();
+        var edges = workflow.get("edges") instanceof List<?> values ? values : List.of();
+        if (nodes.isEmpty()) return null;
+        var name = Objects.toString(workflow.get("name"), "工作流");
+        var version = workflow.get("currentVersion") instanceof Number number ? number.intValue() : 1;
+        return "已创建并验证可复用工作流“" + name + "”（v" + version + "），包含 "
+                + nodes.size() + " 个步骤和 " + edges.size() + " 条连线，已在工作流画布中打开。";
     }
 
     private Set<String> requestedFormats(String goal) {
@@ -1437,6 +1460,7 @@ public class AssistantExecutionService {
         var created = workflows.create(projectId, new SaveRequest("主工作流", "围绕" + topic + "组织和处理项目内容",
                 nodes, edges, ExecutionMode.MANUAL, null, null));
         effects.put("workflowId", created.id());
+        effects.put("workflow", created);
         effects.put("sourceCount", nodes.stream().filter(node -> node.type() == NodeType.LINK_INPUT).count());
         effects.put("uiAction", Map.of("type", "OPEN_WORKFLOW", "projectId", projectId,
                 "workflowId", created.id(), "refreshWorkspace", true));
@@ -1492,6 +1516,7 @@ public class AssistantExecutionService {
                 nodes, edges, ExecutionMode.MANUAL, null, null));
         if (created.nodes().isEmpty()) throw new IllegalStateException("工作流没有生成可执行步骤，请重新描述目标");
         effects.put("workflowId", created.id());
+        effects.put("workflow", created);
         effects.put("uiAction", Map.of("type", "OPEN_WORKFLOW", "projectId", projectId,
                 "workflowId", created.id(), "refreshWorkspace", true));
         return "已创建工作流“" + created.name() + "”，包含 " + created.nodes().size() + " 个可见步骤";

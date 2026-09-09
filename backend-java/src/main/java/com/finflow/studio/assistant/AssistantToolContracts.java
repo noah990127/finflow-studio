@@ -1,5 +1,7 @@
 package com.finflow.studio.assistant;
 
+import com.finflow.studio.workflow.WorkflowModels.NodeType;
+
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -174,7 +176,8 @@ final class AssistantToolContracts {
         }
         return switch (name) {
             case "format" -> enumeration("输出格式", List.of("PPTX", "HTML_SLIDES", "DOCX", "PDF", "FINANCIAL_REPORT", "MERMAID", "EXCALIDRAW"));
-            case "node_type" -> enumeration("工作流节点类型", List.of("FILE_INPUT", "LINK_INPUT", "DATABASE_INPUT", "DATA_PROCESS", "AI_ANALYSIS", "AGENT_TASK", "HUMAN_REVIEW", "DELIVERABLE", "OUTPUT"));
+            case "node_type" -> enumeration("工作流节点类型",
+                    java.util.Arrays.stream(NodeType.values()).map(Enum::name).toList());
             case "group", "target_group" -> enumeration("工作区分组", List.of("FILES", "DATA", "KNOWLEDGE", "OUTPUT", "WORKFLOW"));
             case "source_type" -> enumeration("数据源类型", List.of("POSTGRESQL", "MYSQL", "OPENGAUSS", "GAUSS_DWS", "DUCKDB", "HTTP_API"));
             case "target" -> enumeration("导航目标", List.of("HOME", "PROJECT", "DATA", "WORKFLOW", "RESOURCE"));
