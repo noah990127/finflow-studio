@@ -232,7 +232,7 @@ public class AssistantExecutionService {
                             "message", "正在动态更新计划"));
                     var turn = interruptions.token("run", runId).await(() -> planner.continueAfterObservation(runtime.goal(), runtime.page(),
                             workspaceContext(activeProjectId(runtime, step, effects)), run.sessionId(), runtime.executionMode(),
-                            observation, completedActions));
+                            observation, completedActions, runtime.stage()));
                     if (isCanceled(runId)) return;
                     if (!turn.publicSummary().isBlank()) {
                         events.publish(run.sessionId(), runId, "agent.thinking_summary", Map.of(
@@ -330,9 +330,12 @@ public class AssistantExecutionService {
                 .param("effects", writeJson(effects)).param("id", run.id()).update();
         var request = planner.continuousRequest(runtime.goal(), runtime.page(), context, run.sessionId(),
                 runtime.executionMode(), run.id(), gatewayBaseUrl, String.valueOf(row.get("token")),
-                resume, approvalCount);
+                resume, approvalCount, runtime.stage());
+        if (Set.of(TacitAgentTask.ORGANIZE, TacitAgentTask.CQ, TacitAgentTask.ALIGN).contains(runtime.stage()))
+            request.put("max_tool_calls", maxDynamicActions);
         if (isCliRuntime(continuousRuntimeMode)) {
-            request.put("capabilities", AssistantCapabilityRegistry.catalog());
+            request.put("capabilities", AssistantCapabilityRegistry.catalog().stream()
+                    .filter(cap -> runtime.stage().permits(cap.get("id").toString())).toList());
             request.put("max_tool_calls", maxDynamicActions);
         }
         request.put("observation", Map.of("previousEffects", readEffects(run.id()),
@@ -358,7 +361,7 @@ public class AssistantExecutionService {
                     if (!(value instanceof Map<?, ?> raw)) continue;
                     var tool = resolveToolName(Objects.toString(raw.get("toolName"), Objects.toString(raw.get("tool"), "")));
                     var capability = AssistantCapabilityRegistry.find(tool).orElse(null);
-                    if (capability == null || "READ".equals(capability.mode()) || !TacitAgentTask.from(runtime.goal()).permits(tool)) continue;
+                    if (capability == null || "READ".equals(capability.mode()) || !runtime.stage().permits(tool)) continue;
                     var arguments = new LinkedHashMap<String, Object>();
                     if (raw.get("arguments") instanceof Map<?, ?> values) {
                         values.forEach((key, item) -> arguments.put(String.valueOf(key), item));
@@ -476,7 +479,7 @@ public class AssistantExecutionService {
         var capability = AssistantCapabilityRegistry.find(tool)
                 .orElseThrow(() -> new IllegalArgumentException("工具不存在：" + tool));
         var runtime = loadRuntime(run.planId());
-        if (!TacitAgentTask.from(runtime.goal()).permits(tool))
+        if (!runtime.stage().permits(tool))
             return Map.of("success", false, "failureType", "TASK_SCOPE", "retryable", false,
                     "error", "本轮用户指令未选择该执行阶段，原文和历史对话不能扩大权限",
                     "recoveryHint", "可读取台账并回答；执行其他阶段需要用户明确指定");
@@ -666,12 +669,13 @@ public class AssistantExecutionService {
         observation.put("tool", step.tool());
         observation.put("arguments", step.arguments());
         try {
-            var stage = TacitAgentTask.from(runtime.goal());
+            var stage = runtime.stage();
             if (!stage.permits(step.tool())) throw new IllegalArgumentException("当前消息未授权这项知识整理操作");
             String result;
             if (TacitAgentTools.TOOLS.contains(step.tool())) {
                 var output = tacitTools.execute(step, runtime.projectId(), stage);
                 effects.put("tacit", output);
+                if (output.get("artifact_receipt") instanceof Map<?,?> receipt) effects.put("tacitArtifactReceipt", receipt);
                 result = step.title() + "，台账版本 " + output.get("revision");
             } else {
                 result = executeStep(step, effects);
@@ -814,12 +818,12 @@ public class AssistantExecutionService {
         var planSteps = loadSteps(run.planId());
         var runtime = loadRuntime(run.planId());
         var goal = runtime.goal();
-        var knowledgeTask = TacitAgentTask.from(goal);
-        verifyTaskCompletion(planSteps, effects, goal);
+        var knowledgeTask = runtime.stage();
+        verifyTaskCompletion(planSteps, effects, goal, knowledgeTask);
         var safeSummary = summary == null || summary.isBlank() ? "已完成工作台操作。" : summary;
         if (knowledgeTask != TacitAgentTask.OTHER) {
-            if (knowledgeTask != TacitAgentTask.DISCUSS)
-                safeSummary = tacitTools.verifiedOutcome(knowledgeTask, runtime.projectId(), planSteps);
+            safeSummary = knowledgeTask == TacitAgentTask.DISCUSS ? TacitAgentTools.discussionOutcome(safeSummary)
+                    : tacitTools.verifiedOutcome(knowledgeTask, runtime.projectId(), planSteps, effects.get("tacitArtifactReceipt"));
         } else if (isCliRuntime(effects.get("agentRuntime"))) {
             var stages = agentWorks.stages(run.id());
             var blocked = stages.stream().filter(s -> Set.of("FAILED", "STALE").contains(s.status())).findFirst();
@@ -1065,7 +1069,7 @@ public class AssistantExecutionService {
         }
     }
 
-    private void verifyTaskCompletion(List<PlanStep> steps, Map<String, Object> effects, String goal) {
+    private void verifyTaskCompletion(List<PlanStep> steps, Map<String, Object> effects, String goal, TacitAgentTask stage) {
         if (steps.stream().anyMatch(step -> Set.of("PENDING", "RUNNING").contains(step.status())))
             throw new IllegalStateException("任务尚未完成：仍有工具操作未结束");
         var lastRealStep = steps.stream().filter(step -> !"agent.execute".equals(step.tool())).reduce((left, right) -> right);
@@ -1078,7 +1082,7 @@ public class AssistantExecutionService {
             var status = Objects.toString(effects.get("workflowRunStatus"), "UNKNOWN");
             throw new IllegalStateException("任务尚未完成：工作流状态为 " + status + "，不能报告已完成");
         }
-        if (TacitAgentTask.from(goal) == TacitAgentTask.OTHER && !isCliRuntime(effects.get("agentRuntime")) && requestsWorkflowRun(goal)
+        if (stage == TacitAgentTask.OTHER && !isCliRuntime(effects.get("agentRuntime")) && requestsWorkflowRun(goal)
                 && steps.stream().noneMatch(step -> "workflow.run".equals(step.tool()) && "SUCCEEDED".equals(step.status()))) {
             throw new IllegalStateException("任务尚未完成：用户要求产出成果，但工作流尚未真正运行");
         }
@@ -1286,12 +1290,13 @@ public class AssistantExecutionService {
 
     private PlanRuntime loadRuntime(String planId) {
         return jdbc.sql("""
-                        select p.goal, p.execution_mode, p.dynamic_agent, c.page, c.project_id
+                        select p.goal, p.execution_mode, p.dynamic_agent, p.tacit_task, c.page, c.project_id
                         from assistant_plan p join assistant_context_snapshot c on c.id = p.context_snapshot_id
                         where p.id = :id
                         """).param("id", planId).query((rs, row) -> new PlanRuntime(
                         rs.getString("goal"), rs.getString("page"), rs.getString("project_id"),
-                        rs.getString("execution_mode"), rs.getBoolean("dynamic_agent"))).single();
+                        rs.getString("execution_mode"), rs.getBoolean("dynamic_agent"),
+                        TacitAgentTask.stored(rs.getString("tacit_task"), rs.getString("goal")))).single();
     }
 
     private AssistantPlanner.WorkspaceContext workspaceContext(String projectId) {
@@ -1325,7 +1330,7 @@ public class AssistantExecutionService {
                 null, null, null, List.copyOf(items), List.of());
     }
 
-    private record PlanRuntime(String goal, String page, String projectId, String executionMode, boolean dynamic) { }
+    private record PlanRuntime(String goal, String page, String projectId, String executionMode, boolean dynamic, TacitAgentTask stage) { }
 
     private void saveAssistantMessage(String sessionId, String content, String traceId) {
         jdbc.sql("""

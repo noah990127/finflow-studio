@@ -68,6 +68,7 @@ create table if not exists assistant_plan (
 
 alter table assistant_plan add column if not exists execution_mode varchar(20) not null default 'APPROVAL';
 alter table assistant_plan add column if not exists dynamic_agent boolean not null default false;
+alter table assistant_plan add column if not exists tacit_task varchar(40);
 alter table assistant_plan alter column goal type text;
 
 create table if not exists assistant_plan_step (

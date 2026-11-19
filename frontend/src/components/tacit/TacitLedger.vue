@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { entryIssueIndex, label, newRequestId, record, rows, sectionIds, type Dispatch, type Entry, type Section, type TacitState } from '../../domain/tacit'
+import { citationPreviewRequest, entryIssueIndex, label, newRequestId, record, rows, sectionIds, type Dispatch, type Entry, type Section, type TacitState } from '../../domain/tacit'
 import TacitEntryEditor from './TacitEntryEditor.vue'
 import TacitFields from './TacitFields.vue'
 const props = defineProps<{ state: TacitState; dispatch: Dispatch; busy:boolean }>()
@@ -60,11 +60,15 @@ async function review(remove:boolean) {
 function citation(e:Entry) {
   const source = props.state.spec.sources?.find(s=>s.source_id===e.source_id)
   const clause = rows(source?.clauses).find(c=>c.clause_id===e.clause_id)
-  return { name:String(source?.title || e.source_id), locator:String(clause?.locator ?? ''), offset:Number(String(clause?.locator ?? '').match(/字符\[(\d+),/)?.[1] ?? 0) }
+  return { name:String(source?.title || e.source_id), locator:String(clause?.locator ?? '') }
 }
 async function showQuote(e:Entry) {
   const ref = citation(e)
-  const result = await props.dispatch('preview_source',{source_id:e.source_id,offset:ref.offset})
+  const current = props.state.catalog.find(s => s.source_id === e.source_id)
+  const request = citationPreviewRequest(e,current?.version)
+  if (!request) return
+  preview.value=null
+  const result = await props.dispatch('preview_source',request)
   if (result) { preview.value=result; previewTitle.value=`${ref.name} · ${ref.locator}` }
 }
 </script>
@@ -84,7 +88,7 @@ async function showQuote(e:Entry) {
       <template v-if="expanded.has(String(item[sectionKey]))">
       <ul v-if="rowIssues.has(String(item[sectionKey]))" class="t-warn"><li v-for="message in rowIssues.get(String(item[sectionKey]))" :key="message">{{ message }}</li></ul>
       <TacitFields :fields="Object.fromEntries(Object.entries(item).filter(([k])=> ![sectionKey,'evidence','name','title','question','status'].includes(k)))"/>
-      <blockquote v-for="(e,i) in rows(item.evidence)" :key="i"><p>{{ e.quote }}</p><button class="t-link" :disabled="busy" @click="showQuote(e)">{{ citation(e).name }} · {{ citation(e).locator || '查看原文' }}</button></blockquote>
+      <blockquote v-for="(e,i) in rows(item.evidence)" :key="i"><p>{{ e.quote }}</p><button class="t-link" :disabled="busy||!citationPreviewRequest(e)" @click="showQuote(e)">{{ citation(e).name }} · {{ citation(e).locator || '查看原文' }}</button></blockquote>
       <div class="t-actions"><button class="t-btn" :disabled="busy" @click="editor=record(item)">编辑条目</button>
         <button v-if="confirmable" class="t-btn" :disabled="busy" @click="beginReview(String(item[sectionKey]))">确认业务口径</button>
         <button v-if="section === 'gaps' && item.status === 'open'" class="t-btn" :disabled="busy" @click="startAnswer(String(item.gap_id))">答复此问题</button>
@@ -108,7 +112,7 @@ async function showQuote(e:Entry) {
     </details>
     <div v-if="pageCount>1" class="t-actions"><button class="t-btn" :disabled="pageNumber<=1" @click="pageNumber--">上一页</button><small>{{pageNumber}} / {{pageCount}}</small>
       <button class="t-btn" :disabled="pageNumber>=pageCount" @click="pageNumber++">下一页</button></div>
-    <aside v-if="preview" class="t-box"><div class="t-section-head"><h3>{{ previewTitle }}</h3><button class="t-link" @click="preview=null">收起原文</button></div><pre class="t-source-text">{{ preview.text }}</pre></aside>
+    <aside v-if="preview" class="t-box"><div class="t-section-head"><h3>{{ previewTitle }}</h3><button class="t-link" @click="preview=null">收起原文</button></div><small>原文字符 [{{preview.start}}, {{preview.end}}) / {{preview.total}}</small><pre class="t-source-text">{{ preview.text }}</pre></aside>
     <div class="t-footer t-actions"><button class="t-btn" :disabled="busy" @click="dispatch('finalize',{completion:'draft'})">生成草稿报告</button>
       <button class="t-btn primary" :disabled="busy" @click="dispatch('finalize',{completion:'complete'})">校验并完成台账</button></div>
   </section>

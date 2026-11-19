@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import type { WorkspaceResource } from '../../api/client'
-import { extractionOffset, firstUnreadOffset, label, lines, nextExtractionOffset, splitLines, type Dispatch, type Entry, type TacitCatalogEntry, type TacitState } from '../../domain/tacit'
-const props = defineProps<{ state: TacitState; resources: WorkspaceResource[]; busy: boolean; dispatch: Dispatch }>()
+import { extractionOffset, firstUnreadOffset, label, lines, nextExtractionOffset, splitLines, type Dispatch, type RunBatch, type Entry, type TacitCatalogEntry, type TacitState } from '../../domain/tacit'
+const props = defineProps<{ state: TacitState; resources: WorkspaceResource[]; busy: boolean; dispatch: Dispatch; runBatch:RunBatch }>()
 const emit = defineEmits<{ upload: []; extracting: [boolean] }>()
 const selected = ref<string[]>([]), choose = ref(false), addingNote = ref(false)
 const note = ref(''), noteTitle = ref(''), goal = ref(''), included = ref(''), excluded = ref(''), period = ref(''), region = ref('')
@@ -58,18 +58,20 @@ async function extract(sources: TacitCatalogEntry[]) {
   if (running.value || props.busy || !scopeReady.value) return
   stopRequested.value = false; running.value = true; localError.value = ''; emit('extracting', true)
   try {
-    for (const src of sources) {
-      let offset = extractionOffset(props.state, src)
-      while (alive && !stopRequested.value && offset !== null) {
-        progress.value = `正在处理《${src.title}》，从第 ${offset + 1} 个字符继续`
-        const result = await props.dispatch('extract', { source_id:src.source_id, offset })
-        if (!result) { progress.value = '抽取已暂停，可从上次保存的位置继续。'; return }
-        if (result.already_applied) { progress.value = '此页已提交，台账已刷新。请从最新位置继续。'; return }
-        offset = nextExtractionOffset(result, offset)
+    await props.runBatch(async send => {
+      for (const src of sources) {
+        let offset = extractionOffset(props.state, src)
+        while (alive && !stopRequested.value && offset !== null) {
+          progress.value = `正在处理《${src.title}》，从第 ${offset + 1} 个字符继续`
+          const result = await send('extract', { source_id:src.source_id, offset })
+          if (!result) { progress.value = '抽取已暂停，可从上次保存的位置继续。'; return }
+          if (result.already_applied) { progress.value = '此页已提交，台账已刷新。请从最新位置继续。'; return }
+          offset = nextExtractionOffset(result, offset)
+        }
+        if (!alive || stopRequested.value) break
       }
-      if (!alive || stopRequested.value) break
-    }
-    progress.value = stopRequested.value ? '已暂停，已处理的分页已保存。' : '本次抽取已完成，请到业务台账核对草稿。'
+      progress.value = stopRequested.value ? '已暂停，已处理的分页已保存。' : '本次抽取已完成，请到业务台账核对草稿。'
+    })
   } catch (reason) { localError.value = reason instanceof Error ? reason.message : '抽取失败' }
   finally { running.value = false; if (alive) emit('extracting', false) }
 }

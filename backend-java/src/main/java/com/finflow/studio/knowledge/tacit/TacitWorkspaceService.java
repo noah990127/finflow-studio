@@ -17,14 +17,16 @@ import java.util.Set;
 
 @Service
 public class TacitWorkspaceService {
-    private static final Set<String> READ = Set.of("workspace", "preview_source", "read_section");
-    private static final Set<String> HUMAN_DECISION = Set.of("review_flow", "review_candidate", "review_cq", "confirm_item", "answer_gap");
+    private static final Set<String> READ = Set.of("workspace", "preview_source", "read_section", "read_fields", "read_clauses", "search_context");
+    private static final Set<String> LEDGER_READ = Set.of("preview_source", "read_section", "read_fields", "read_clauses");
+    private static final Set<String> HUMAN_DECISION = Set.of("review_flow", "review_candidate", "review_candidate_item",
+            "review_scenario", "review_alignment", "review_cq", "confirm_item", "answer_gap");
     private static final Map<String, Set<String>> TASKS = Map.of(
-            "organize_business", Set.of("read_source", "extract", "save_batch", "finalize"),
-            "clarify_gaps", Set.of("read_source", "extract", "save_batch", "finalize"),
+            "organize_business", Set.of("read_source", "extract", "save_batch", "finalize", "align_policies"),
+            "clarify_gaps", Set.of("read_source", "extract", "save_batch", "finalize", "align_policies"),
             "generate_flow", Set.of("read_source", "generate_flow"),
-            "build_ontology", Set.of("read_source", "build_candidate"),
-            "validate_ontology", Set.of("read_source", "validate_ontology"),
+            "build_ontology", Set.of("read_source", "build_candidate", "edit_candidates", "check_candidates", "submit_candidates"),
+            "validate_ontology", Set.of("read_source", "validate_ontology", "propose_scenarios"),
             "generate_cqs", Set.of("read_source", "generate_cqs"), "discuss", Set.of());
     private static final Set<String> PUBLIC_STATE = Set.of("spec", "artifacts", "issues", "coverage", "extraction", "interviews");
     private final JdbcClient jdbc;
@@ -60,11 +62,16 @@ public class TacitWorkspaceService {
         if (allowed == null || !(READ.contains(action) || allowed.contains(action))) {
             throw new IllegalArgumentException("本轮任务无权执行该知识操作");
         }
-        return execute(projectId, action, revision, requestId, payload, "agent:" + task);
+        return execute(projectId, action, revision, requestId, payload, "agent:" + task, false);
     }
 
     public Map<String, Object> executeHuman(String projectId, String action, long revision,
                                            String requestId, Map<String, Object> payload) {
+        return executeHuman(projectId, action, revision, requestId, payload, false);
+    }
+
+    public Map<String, Object> executeHuman(String projectId, String action, long revision,
+                                           String requestId, Map<String, Object> payload, boolean compact) {
         if (action == null || !(Set.of("select_sources", "add_note", "remove_item").contains(action)
                 || READ.contains(action) || HUMAN_DECISION.contains(action)
                 || TASKS.values().stream().anyMatch(actions -> actions.contains(action)))) {
@@ -73,20 +80,20 @@ public class TacitWorkspaceService {
         if (HUMAN_DECISION.contains(action) && !ActorContext.isBound()) {
             throw new SecurityException("请使用项目所有者账户登录后审核");
         }
-        return execute(projectId, action, revision, requestId, payload, "human");
+        return execute(projectId, action, revision, requestId, payload, "human", compact);
     }
 
     private Map<String, Object> execute(String id, String action, long revision, String requestId,
-                                        Map<String, Object> payload, String origin) {
+                                        Map<String, Object> payload, String origin, boolean compact) {
         if (revision < 0 || requestId == null || !requestId.matches("[a-zA-Z0-9._:-]{1,128}"))
             throw new IllegalArgumentException("请提供版本号与稳定的请求标识");
         var args = payload == null ? Map.<String, Object>of() : payload;
         var hash = TacitJson.hash(TacitJson.write(List.of(origin, ActorContext.current(), revision, action, args)));
         var before = current(id);
-        var existing = receipt(id, requestId, hash, before);
+        var existing = receipt(id, requestId, hash, before, compact);
         if (existing != null) return existing;
         if (before.revision != revision) throw conflict();
-        if (action.equals("workspace")) return reply(before, Map.of());
+        if (action.equals("workspace")) return reply(before, Map.of(), compact);
         var selecting = action.equals("select_sources");
         var selected = selecting ? selection(args) : before.selected;
         var files = catalog.files(id, selected, false);
@@ -98,17 +105,23 @@ public class TacitWorkspaceService {
         var all = withNotes(sources, before.state);
         var input = new LinkedHashMap<>(before.state);
         input.remove("_file_catalog");
+        if (LEDGER_READ.contains(action)) input.remove("artifacts");
         input.put("source_ids", selected);
-        var response = transition(input, selecting ? "sync_sources" : action, selecting ? Map.of() : args, all);
+        String transitionAction = selecting ? "sync_sources" : action;
+        if (action.equals("save_batch") && origin.startsWith("agent:")) transitionAction = "save_agent_batch";
+        var response = transition(input, transitionAction, selecting ? Map.of() : args, all);
         var result = TacitJson.map(response.get("result"));
-        if (READ.contains(action)) return reply(before, result);
+        if (READ.contains(action) || action.equals("check_candidates")) {
+            if (current(id).revision != before.revision) throw conflict();
+            return reply(before, result, compact);
+        }
         var state = new LinkedHashMap<>(TacitJson.map(response.get("state")));
         state.put("_file_catalog", summaries(sources));
         var after = new Record(before.revision + 1, selected, catalog.stamp(files), state);
         return tx.execute(ignored -> {
             lock(id);
             var actual = read(id);
-            var replay = receipt(id, requestId, hash, actual);
+            var replay = receipt(id, requestId, hash, actual, compact);
             if (replay != null) return replay;
             store(id, before, after);
             jdbc.sql("""
@@ -119,7 +132,7 @@ public class TacitWorkspaceService {
                     .param("result", TacitJson.write(result)).param("actor", ActorContext.current())
                     .param("action", action).param("now", Instant.now()).update();
             if (HUMAN_DECISION.contains(action)) appendReview(id, action, args, result, before, after);
-            return reply(after, result);
+            return reply(after, result, compact);
         });
     }
 
@@ -151,7 +164,7 @@ public class TacitWorkspaceService {
     private Map<String, Object> transition(Map<String, Object> state, String action, Map<String, Object> args,
                                           List<Map<String, Object>> sources) {
         return worker.tacitCommand(Map.of("state", state, "action", action, "payload", args, "catalog", sources,
-                "actor", ActorContext.current()));
+                "actor", ActorContext.current(), "result_only", READ.contains(action) || action.equals("check_candidates")));
     }
 
     private Record read(String project) {
@@ -187,7 +200,7 @@ public class TacitWorkspaceService {
         }
     }
 
-    private Map<String, Object> receipt(String id, String key, String hash, Record current) {
+    private Map<String, Object> receipt(String id, String key, String hash, Record current, boolean compact) {
         record Receipt(String hash, long revision, String result) {}
         var saved = jdbc.sql("""
                 select request_hash, committed_revision, result_json from tacit_command_receipt
@@ -201,7 +214,7 @@ public class TacitWorkspaceService {
         var latest = current.revision < saved.revision() ? current(id) : current;
         var result = saved.revision() == latest.revision ? TacitJson.object(saved.result())
                 : Map.<String, Object>of("already_applied", true, "committed_revision", saved.revision());
-        return reply(latest, result);
+        return reply(latest, result, compact);
     }
 
     private void appendReview(String project, String action, Map<String, Object> args, Map<String, Object> result,
@@ -235,13 +248,45 @@ public class TacitWorkspaceService {
             snapshot = findItem(artifact.get("content"), "cq_id", target);
             digest = TacitJson.hash(TacitJson.write(snapshot));
             decision = (String) args.get("decision");
+        } else if (Set.of("review_candidate_item", "review_scenario", "review_alignment").contains(action)) {
+            var key = switch (action) {
+                case "review_candidate_item" -> "candidate_id";
+                case "review_scenario" -> "scenario_id";
+                default -> "alignment_id";
+            };
+            var name = switch (action) {
+                case "review_candidate_item" -> "candidates";
+                case "review_scenario" -> "scenarios";
+                default -> "alignments";
+            };
+            var itemId = (String) args.get(key);
+            target = name + "/" + itemId;
+            var original = artifactItem(before, name, key, itemId);
+            var evidence = new LinkedHashMap<String, Object>();
+            evidence.put("before", original);
+            evidence.put("after", artifactItem(after, name, key, itemId));
+            if (action.equals("review_alignment")) {
+                var from = (String) original.get("from_id");
+                var to = (String) original.get("to_id");
+                var oldRules = TacitJson.map(before.state.get("spec")).get("rules");
+                evidence.put("from_rule", findItem(oldRules, "rule_id", from));
+                evidence.put("to_rule", findItem(oldRules, "rule_id", to));
+                if ("merge".equals(args.get("decision"))) {
+                    var newRules = TacitJson.map(after.state.get("spec")).get("rules");
+                    evidence.put("merged_rule", findItem(newRules, "rule_id", to));
+                }
+            }
+            snapshot = evidence;
+            digest = TacitJson.hash(TacitJson.write(snapshot));
+            decision = (String) args.get("decision");
         } else {
             target = action.equals("review_flow") ? "flows" : "candidates";
             var original = TacitJson.map(TacitJson.map(before.state.get("artifacts")).get(target));
             snapshot = original.get("content");
             var artifact = TacitJson.map(TacitJson.map(after.state.get("artifacts")).get(target));
             var review = TacitJson.map(artifact.get("review"));
-            digest = (String) review.get("digest");
+            digest = action.equals("review_candidate") ? TacitJson.hash(TacitJson.write(snapshot))
+                    : (String) review.get("digest");
             decision = (String) review.get("decision");
         }
         if (digest == null || !digest.matches("[a-f0-9]{64}")) throw new IllegalStateException("审核缺少目标版本摘要");
@@ -253,6 +298,11 @@ public class TacitWorkspaceService {
                 .param("target", target).param("digest", digest).param("snapshot", TacitJson.write(snapshot))
                 .param("sources", TacitJson.write(sourceSummaries(after))).param("decision", decision)
                 .param("actor", ActorContext.current()).param("comment", comment).param("now", Instant.now()).update();
+    }
+
+    private static Map<String, Object> artifactItem(Record record, String name, String key, String id) {
+        var artifact = TacitJson.map(TacitJson.map(record.state.get("artifacts")).get(name));
+        return findItem(artifact.get("content"), key, id);
     }
 
     private static Map<String, Object> findItem(Object rows, String idKey, String id) {
@@ -344,8 +394,8 @@ public class TacitWorkspaceService {
         return out;
     }
 
-    private static Map<String, Object> reply(Record record, Map<String, Object> result) {
-        return Map.of("workspace", project(record), "result", result);
+    private static Map<String, Object> reply(Record record, Map<String, Object> result, boolean compact) {
+        return Map.of("workspace", compact ? Map.of("revision", record.revision) : project(record), "result", result);
     }
 
     private static final class WorkspaceConflict extends IllegalStateException {

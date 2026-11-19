@@ -30,3 +30,6 @@
 .t-error,.t-warn {background:#fff4e6;color:#8a4920}.t-feedback {background:#eff6ee;color:#2e6040}
 .tacit-panel .assistant-rich-text {overflow-x:auto}.tacit-panel .diagram-preview {height:auto;min-height:120px;max-height:65vh;overflow:auto}
 @media(max-width:650px) {.tacit-panel {padding:12px}.t-fields {display:block}.t-fields dt {margin-top:5px}.t-fields dd {padding-left:6px}}
+
+.t-citation small {display:inline-block;margin-right:10px}.t-compare {display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr));gap:12px}.t-compare article {min-width:0;border-left:2px solid #dce5ee;padding:0 10px}
+.t-pager {margin:10px 0}.t-progress {display:grid;gap:4px}.t-progress progress {width:min(380px,100%);accent-color:#2868a9}.t-grow {flex:1 1 220px}

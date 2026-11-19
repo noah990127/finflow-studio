@@ -1,20 +1,26 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { label, rows, record, type Dispatch, type Entry, type TacitState, type TacitReview } from '../../domain/tacit'
+import { label, rows, record, type Dispatch, type RunBatch, type Entry, type TacitState, type TacitReview } from '../../domain/tacit'
 import AssistantRichText from '../AssistantRichText.vue'
 import DiagramPreview from '../DiagramPreview.vue'
+import TacitQuestions from './TacitQuestions.vue'
+import TacitCandidates from './TacitCandidates.vue'
+import TacitScenarios from './TacitScenarios.vue'
 import TacitFields from './TacitFields.vue'
 import { api } from '../../api/client'
-const props=defineProps<{ projectId:string; state:TacitState; dispatch:Dispatch; busy:boolean }>()
+const props=defineProps<{ projectId:string; state:TacitState; dispatch:Dispatch; runBatch:RunBatch; busy:boolean }>()
 const a = computed(()=>props.state.artifacts)
+const scenarioPanel = ref<InstanceType<typeof TacitScenarios>|null>(null)
+const pendingScenarios = computed(()=>a.value.scenarios
+  ? rows(a.value.scenarios.content).filter(row=>row.review_status==='pending').length
+  : Number(record(a.value.walkthrough?.content).pending_scenario_count??0))
 const reports = {business_report:'业务梳理报告',gap_report:'业务缺口报告'} as const
 const activeReport = ref<keyof typeof reports>('business_report')
-const comment = ref(''), reviewTarget = ref<'flow'|'candidate'|null>(null), reviewRevision = ref(0)
+const comment = ref(''), reviewingFlow = ref(false), reviewRevision = ref(0)
 const flowReady = computed(()=>a.value.flows?.status === 'approved')
 const candidateReady = computed(()=>a.value.candidates?.status === 'approved')
-const ledgerComplete = computed(()=>props.state.spec.completion === 'complete' && !props.state.issues.length)
 const historyOpen = ref(false), reviews = ref<TacitReview[]>([]), before = ref<number|null>(null), historyBusy = ref(false), historyError = ref('')
-const historyLabels:Record<string,string> = {review_flow:'流程审核',review_candidate:'候选审核',review_cq:'能力问题审核',confirm_item:'业务口径确认',answer_gap:'专家答复'}
+const historyLabels:Record<string,string> = {review_flow:'流程审核',review_candidate:'候选审核',review_candidate_item:'逐项候选审核',review_scenario:'场景审核',review_alignment:'政策口径签署',review_cq:'能力问题审核',confirm_item:'业务口径确认',answer_gap:'专家答复'}
 const snapshot = ref<{revision:number;fields:Entry}|null>(null), snapshotBusy = ref(false)
 async function openSnapshot(revision:number) {
   snapshotBusy.value=true; historyError.value=''
@@ -37,11 +43,11 @@ async function history(older=false) {
 }
 watch([historyOpen,()=>props.state.revision],()=>{ if(historyOpen.value) void history() })
 function allowReview(state?:string) { return ['draft','pending','ready'].includes(state ?? '') }
-function startReview(kind:'flow'|'candidate') {
-  reviewTarget.value = kind; reviewRevision.value=props.state.revision; comment.value=''
+function startReview() {
+  reviewingFlow.value = true; reviewRevision.value=props.state.revision; comment.value=''
 }
 async function review(decision:'approved'|'rejected') {
-  if (await props.dispatch('review_'+reviewTarget.value,{decision,comment:comment.value.trim()},reviewRevision.value)) reviewTarget.value=null
+  if (await props.dispatch('review_flow',{decision,comment:comment.value.trim()},reviewRevision.value)) reviewingFlow.value=false
 }
 function omit(item:Entry, keys:string[]) { return Object.fromEntries(Object.entries(item).filter(([key])=>!keys.includes(key))) }
 function downloadReport(title:string, content:string) {
@@ -68,32 +74,19 @@ function downloadReport(title:string, content:string) {
       <details><summary>流程输入、输出与步骤</summary><TacitFields :fields="omit(flow,['name','content','process_id','status'])"/></details>
     </template>
     <p v-if="a.flows?.status === 'stale'" class="t-warn">上游依据已更新，请重新生成并审核流程图。</p>
-    <button v-if="allowReview(a.flows?.status)" class="t-btn" :disabled="busy" @click="startReview('flow')">审核当前流程</button>
+    <button v-if="allowReview(a.flows?.status)" class="t-btn" :disabled="busy" @click="startReview()">审核当前流程</button>
     <p v-else-if="!a.flows" class="t-muted">生成后可逐项核对流程步骤、分支和待确认事项。</p>
-    <div v-if="reviewTarget === 'flow'" class="t-box t-form"><label>流程审核意见<textarea v-model="comment" rows="2" placeholder="请记录审核口径或需修改之处"/></label>
+    <div v-if="reviewingFlow" class="t-box t-form"><label>流程审核意见<textarea v-model="comment" rows="2" placeholder="请记录审核口径或需修改之处"/></label>
       <div class="t-actions"><button class="t-btn primary" :disabled="busy || state.revision !== reviewRevision" @click="review('approved')">通过此版流程</button>
-        <button class="t-btn" :disabled="busy || state.revision !== reviewRevision || !comment.trim()" @click="review('rejected')">退回修改</button><button class="t-link" @click="reviewTarget=null">取消</button></div></div>
+        <button class="t-btn" :disabled="busy || state.revision !== reviewRevision || !comment.trim()" @click="review('rejected')">退回修改</button><button class="t-link" @click="reviewingFlow=false">取消</button></div></div>
   </section>
-  <section class="t-section">
-    <div class="t-section-head"><h2>本体候选 <small>{{ label(a.candidates?.status) }}</small></h2><button class="t-btn" :disabled="busy || !flowReady || !ledgerComplete" @click="dispatch('build_candidate')">生成候选</button></div>
-    <p v-if="!flowReady || !ledgerComplete" class="t-muted">完成台账校验并通过当前版本的流程审核后，可生成本体候选。</p>
-    <details class="t-detail" v-for="item in rows(a.candidates?.content)" :key="String(item.candidate_id)">
-      <summary>{{ item.name }} <small>{{ label(item.kind) }}</small></summary><TacitFields :fields="omit(item,['name','kind'])"/></details>
-    <button v-if="allowReview(a.candidates?.status)" class="t-btn" :disabled="busy || !flowReady" @click="startReview('candidate')">审核候选集合</button>
-    <div v-if="reviewTarget === 'candidate'" class="t-box t-form"><label>候选审核意见<textarea v-model="comment" rows="2"/></label>
-      <div class="t-actions"><button class="t-btn primary" :disabled="busy || state.revision !== reviewRevision" @click="review('approved')">通过此版候选</button>
-        <button class="t-btn" :disabled="busy || state.revision !== reviewRevision || !comment.trim()" @click="review('rejected')">退回修改</button><button class="t-link" @click="reviewTarget=null">取消</button></div></div>
-  </section>
-  <section class="t-section">
-    <div class="t-section-head"><h2>能力问题 <small>{{ label(a.cqs?.status) }}</small></h2><button class="t-btn" :disabled="busy" @click="dispatch('generate_cqs')">生成问题</button></div>
-    <details class="t-detail" v-for="cq in rows(a.cqs?.content)" :key="String(cq.cq_id)">
-      <summary>{{ cq.cq_text }} <small>{{ label(cq.review_status) }}</small></summary><TacitFields :fields="omit(cq,['cq_text','review_status'])"/>
-      <div class="t-actions"><button class="t-btn" :disabled="busy || a.cqs?.status==='stale' || cq.review_status==='accepted'" @click="dispatch('review_cq',{cq_id:cq.cq_id,decision:'accepted'})">采纳问题</button>
-        <button class="t-btn" :disabled="busy || a.cqs?.status==='stale' || cq.review_status==='rejected'" @click="dispatch('review_cq',{cq_id:cq.cq_id,decision:'rejected'})">驳回问题</button></div></details>
-  </section>
-  <section class="t-section"><div class="t-section-head"><h2>场景校核 <small>{{ label(a.walkthrough?.status) }}</small></h2><button class="t-btn" :disabled="busy || !flowReady || !candidateReady" @click="dispatch('validate_ontology')">按路径校核</button></div>
+  <TacitCandidates v-bind="{state,dispatch,busy}"/>
+  <TacitQuestions v-bind="{state,dispatch,busy,runBatch}"/>
+  <TacitScenarios ref="scenarioPanel" v-bind="{state,dispatch,busy}"/>
+  <section class="t-section"><div class="t-section-head"><h2>场景校核 <small>{{ label(a.walkthrough?.status) }}</small></h2><button class="t-btn" title="校核现有路径并提议待补充的场景" :disabled="busy || !flowReady || !candidateReady" @click="dispatch('validate_ontology')">按路径校核</button></div>
     <p class="t-muted" v-if="!a.walkthrough && !candidateReady">按验收场景核对流程路径，查看分支偏离和证据缺口。</p>
-    <template v-if="a.walkthrough">
+    <template v-if="a.walkthrough"><button v-if="pendingScenarios && a.scenarios?.status!=='stale'" class="t-link" @click="scenarioPanel?.focusPending()">核对 {{pendingScenarios}} 个待审核场景</button>
+      <details v-if="Array.isArray(record(a.walkthrough.content).scenario_diagnostics) && (record(a.walkthrough.content).scenario_diagnostics as unknown[]).length"><summary>场景提议说明</summary><TacitFields :fields="{scenario_diagnostics:record(a.walkthrough.content).scenario_diagnostics}"/></details><p class="t-muted">路径通过表示输入满足已审核模型的条件。预期输出来自验收场景，实际业务结果需与执行记录核对。</p>
       <AssistantRichText v-if="typeof record(a.walkthrough.content).modeling_gap_report === 'string'" :content="String(record(a.walkthrough.content).modeling_gap_report)" />
       <details v-for="p in rows(record(a.walkthrough.content).processes)" class="t-detail" :key="String(p.process_id)"><summary>{{ p.name }} · 路径与场景</summary>
         <TacitFields :fields="omit(p,['name'])"/></details>

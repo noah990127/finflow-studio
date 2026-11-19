@@ -87,12 +87,20 @@ public final class AssistantCapabilityRegistry {
                 List.of("project_id", "query", "resource_ids", "limit"));
         register("tacit.workspace", "tacit", "查看知识台账", "查看当前项目的台账目录、授权资料与阶段状态。section 可读结构化条目、问题、完整CQ、报告和候选，按 next_offset 续读。", "READ", RiskLevel.READ_ONLY, "never", List.of("section", "offset"));
         register("tacit.preview_source", "tacit", "核对资料原文", "按字符偏移查看已授权来源。只读核对，不产生抽取覆盖记录。", "READ", RiskLevel.READ_ONLY, "never", List.of("expected_revision", "source_id", "offset"));
+        register("tacit.read_clauses", "tacit", "分页核对完整条款", "按已授权来源 ID 和 next_offset 取得完整条款，末页返回 children_digest。", "READ", RiskLevel.READ_ONLY, "never", List.of("expected_revision","source_id","offset","limit"));
+        register("tacit.read_fields", "tacit", "分页核对完整字段", "根据台账 table_id 读取字段、类型、业务含义与关联证据，按 next_offset 续读，末页返回 children_digest。", "READ", RiskLevel.READ_ONLY, "never", List.of("expected_revision", "table_id", "offset", "limit"));
+        register("tacit.search_context", "tacit", "检索项目证据", "从本项目已授权材料、能力问题、术语、本体、契约或决策检索有来源的结果。", "READ", RiskLevel.READ_ONLY, "never", List.of("expected_revision", "query", "section", "offset", "limit"));
+        register("tacit.align_policies", "tacit", "对齐政策条款", "按页比对条款并保存对齐建议，直至 next_offset 为空。合并与冲突裁决由用户审核。", "WRITE", RiskLevel.CREATE_VERSION, "always", List.of("expected_revision","offset"));
+        register("tacit.edit_candidates", "tacit", "编辑本体候选", "按稳定标识修改草稿，或基于真实证据扩展候选。调用前先查看候选内容。", "WRITE", RiskLevel.CREATE_VERSION, "always", List.of("expected_revision","patches","extensions","remove_ids"));
+        register("tacit.check_candidates", "tacit", "校验候选草稿", "读取当前候选的确定性校验结果，输出是否通过及具体问题。", "READ", RiskLevel.READ_ONLY, "never", List.of("expected_revision"));
+        register("tacit.submit_candidates", "tacit", "提交候选供人工审核", "提交通过校验的当前候选版本并等待人工决定。", "WRITE", RiskLevel.CREATE_VERSION, "always", List.of("expected_revision"));
+        register("tacit.propose_scenarios", "tacit", "提出待确认场景", "对照已有证据和流程生成缺失的验收场景，由用户确认输入和预期结果。", "WRITE", RiskLevel.CREATE_VERSION, "always", List.of("expected_revision"));
         register("tacit.extract", "tacit", "抽取一页业务知识", "对已授权的一个来源抽取并保存一页，使用已返回的版本和 next_offset、稳定来源 ID。首次从 0 开始。", "WRITE", RiskLevel.CREATE_VERSION, "always", List.of("expected_revision", "source_id", "offset"));
-        register("tacit.save_batch", "tacit", "修订业务台账草稿", "按业务梳理范围或同一节的 1 至 5 个稳定条目保存，保留已读原文和未决事项。", "WRITE", RiskLevel.CREATE_VERSION, "always", List.of("expected_revision", "section", "items", "scope"));
+        register("tacit.save_batch", "tacit", "修订业务台账草稿", "按业务梳理范围或同一节的 1 至 5 个稳定条目保存，保留已读原文和未决事项。", "WRITE", RiskLevel.CREATE_VERSION, "always", List.of("expected_revision", "section", "items", "scope","base_children_digest"));
         register("tacit.finalize", "tacit", "生成业务与缺口报告", "从当前台账派生报告。draft 保留待确认事项，complete 由服务端校验全部证据和覆盖。", "WRITE", RiskLevel.CREATE_VERSION, "always", List.of("expected_revision", "completion"));
         register("tacit.generate_flow", "tacit", "生成待审核业务流程图", "按当前台账的流程、分支与未决项生成流程集合，交用户审核。", "WRITE", RiskLevel.CREATE_VERSION, "always", List.of("expected_revision"));
         register("tacit.build_candidate", "tacit", "构建本体候选", "从已审核且有效的业务流程生成带证据的本体候选，交用户复核。", "WRITE", RiskLevel.CREATE_VERSION, "always", List.of("expected_revision"));
-        register("tacit.generate_cqs", "tacit", "生成业务能力问题", "从台账提出带来源、期望业务回答、建模要求和验证问题的待审核CQ。", "WRITE", RiskLevel.CREATE_VERSION, "always", List.of("expected_revision"));
+        register("tacit.generate_cqs", "tacit", "生成业务能力问题", "按页提出带来源和验证问题的待审CQ。反复用最新版本调用直到 done=true，再核对生成数。", "WRITE", RiskLevel.CREATE_VERSION, "always", List.of("expected_revision", "page_size"));
         register("tacit.validate_ontology", "tacit", "校核本体候选", "核对已审核流程与候选，逐条推演业务场景、输出待复核的校核记录。", "WRITE", RiskLevel.CREATE_VERSION, "always", List.of("expected_revision"));
         register("knowledge.read", "knowledge", "读取知识片段", "读取知识库条目、原文摘录和定位信息", "READ", RiskLevel.READ_ONLY, "never",
                 List.of("citation_id", "resource_id"));

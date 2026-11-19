@@ -7,7 +7,7 @@ from uuid import uuid4
 from .spec import empty_spec
 
 FACT_SECTIONS = ("rules", "processes", "data_objects", "data_tables")
-DOWNSTREAM = ("flows", "candidates", "cqs", "walkthrough")
+DOWNSTREAM = ("flows", "candidates", "scenarios", "alignments", "cqs", "walkthrough")
 
 
 def digest(value):

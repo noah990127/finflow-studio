@@ -1,5 +1,6 @@
 """Transitions of a single project ledger. Java authenticates, snapshots inputs and CAS-commits the result."""
 from copy import deepcopy
+from collections import Counter
 from datetime import datetime, timezone
 
 from .workspace_state import (
@@ -11,6 +12,9 @@ from .interviews import record_answer
 from .spec import ITEM_IDS, item_digest, section_schema, validate_batch, validate_spec
 
 READ_SIZE = 8000
+FIELD_PAGE = 160
+CLAUSE_PAGE = 20
+QUOTE_PREVIEW = 240
 
 
 def cursor(payload):
@@ -18,6 +22,50 @@ def cursor(payload):
     if type(value) is not int or value < 0:
         raise ValueError("分页位置必须是非负整数")
     return value
+
+
+def table_preview(table):
+    columns = table.get("columns", [])
+    return dict(table, columns=columns[:FIELD_PAGE], total_fields=len(columns),
+                next_field_offset=FIELD_PAGE if len(columns) > FIELD_PAGE else None)
+
+
+def source_preview(row):
+    clauses = row.get("clauses", [])
+    preview = []
+    for clause in clauses[:CLAUSE_PAGE]:
+        quote = clause.get("quote", "")
+        if len(quote) > QUOTE_PREVIEW:
+            clause = {**clause, "quote_preview": quote[:QUOTE_PREVIEW], "quote_characters": len(quote)}
+            del clause["quote"]
+        preview.append(clause)
+    return dict(row, clauses=preview, total_clauses=len(clauses),
+                next_clause_offset=CLAUSE_PAGE if len(clauses) > CLAUSE_PAGE else None)
+
+
+def protect_paged_children(spec, section, items, acknowledgements):
+    child_info = {"data_tables": ("columns", "name", FIELD_PAGE, "read_fields"),
+                  "sources": ("clauses", "clause_id", CLAUSE_PAGE, "read_clauses")}
+    if section not in child_info:
+        return
+    if not isinstance(acknowledgements, dict):
+        raise ValueError("base_children_digest 须为条目标识到版本摘要的对象")
+    child, name, size, operation = child_info[section]
+    id_key = ITEM_IDS[section]
+    existing = {row[id_key]: row for row in spec[section]}
+    for item in items:
+        key = item[id_key]
+        old = existing.get(key, {}).get(child, [])
+        present = Counter(row.get(name, "") for row in item.get(child, []))
+        missing = len(old) > size and bool(Counter(row.get(name, "") for row in old) - present)
+        shortened = False
+        if section == "sources":
+            new_quotes = {r["clause_id"]: r.get("quote", "") for r in item.get(child, [])}
+            shortened = any(len(r.get("quote", "")) > QUOTE_PREVIEW and
+                            new_quotes.get(r["clause_id"]) != r["quote"] for r in old)
+        if (missing or shortened) and acknowledgements.get(key) != digest(old):
+            raise ValueError(f"条目 {key} 仍有已保存的子项。请使用 {operation} 读完并核对；"
+                             "如需删除或更名，提交末页 children_digest 到 base_children_digest。")
 
 
 def upsert(rows, key, items):
@@ -36,12 +84,14 @@ def issues_for(state, sources):
     return issues
 
 
-def apply_batch(state, payload, sources):
+def apply_batch(state, payload, sources, *, agent_edit=False):
     section = required_string(payload, "section")
     items = payload.get("items", [])
     scope = payload.get("scope")
     validate_batch(section, items, scope)
     spec = state["spec"]
+    if agent_edit:
+        protect_paged_children(spec, section, items, payload.get("base_children_digest", {}))
     if section == "gaps":
         previous = {g["gap_id"]: g for g in spec["gaps"]}
         for item in items:
@@ -121,7 +171,7 @@ def review(artifact, payload, actor):
 
 
 def derive(state, action, payload, actor):
-    from .derivations import build_candidates, generate_cqs, generate_flows, render_reports, walkthrough
+    from .derivations import build_candidates, generate_flows, render_reports
 
     spec = state["spec"]
     if action == "finalize":
@@ -147,19 +197,11 @@ def derive(state, action, payload, actor):
         flows = generate_flows(expert_view(spec, state["issues"]))
         if not flows:
             raise ValueError("台账中没有可绘制的流程")
-        invalidate(state, ("candidates", "walkthrough"))
+        invalidate(state, ("candidates", "scenarios", "walkthrough"))
         record(state, "flows", flows, "draft")
     elif action == "review_flow":
         review(available(state, "flows", {"draft", "approved", "rejected"}), payload, actor)
-        invalidate(state, ("candidates", "walkthrough"))
-    elif action == "generate_cqs":
-        if not any(spec[k] for k in FACT_SECTIONS):
-            raise ValueError("请先整理业务对象、规则或流程")
-        questions = generate_cqs(expert_view(spec, state["issues"]))
-        if not questions:
-            raise ValueError("现有台账无法派生有依据的业务问题")
-        record(state, "cqs", questions, "draft")
-        invalidate(state, ("walkthrough",))
+        invalidate(state, ("candidates", "scenarios", "walkthrough"))
     elif action == "review_cq":
         artifact = available(state, "cqs", {"draft", "ready"})
         question = next((q for q in artifact["content"] if q["cq_id"] == payload.get("cq_id")), None)
@@ -168,7 +210,8 @@ def derive(state, action, payload, actor):
             raise ValueError("请选择有效的能力问题和审核结论")
         question.update(review_status=decision, reviewed_by=actor, reviewed_at=datetime.now(timezone.utc).isoformat())
         artifact["digest"] = digest(artifact["content"])
-        artifact["status"] = "ready" if all(q["review_status"] != "pending" for q in artifact["content"]) else "draft"
+        finished = artifact.get("progress", {}).get("done", True)
+        artifact["status"] = "ready" if finished and all(q["review_status"] != "pending" for q in artifact["content"]) else "draft"
         invalidate(state, ("walkthrough",))
     elif action == "build_candidate":
         flows = available(state, "flows", {"approved"})
@@ -179,21 +222,7 @@ def derive(state, action, payload, actor):
             raise ValueError("缺少可以追溯到原文的候选项")
         record(state, "candidates", candidates, "pending")
         state["artifacts"]["candidates"]["flow_digest"] = flows["digest"]
-        invalidate(state, ("walkthrough",))
-    elif action == "review_candidate":
-        available(state, "flows", {"approved"})
-        candidate = available(state, "candidates", {"pending", "approved", "rejected"})
-        review(candidate, payload, actor)
-        for item in candidate["content"]:
-            item["review_status"] = "accepted" if candidate["status"] == "approved" else "rejected"
-        # The review binds the submitted payload. Keep the reviewed hash separately from its new projection.
-        candidate["digest"] = digest(candidate["content"])
-        invalidate(state, ("walkthrough",))
-    elif action == "validate_ontology":
-        flows = available(state, "flows", {"approved"})
-        candidates = available(state, "candidates", {"approved"})
-        result = walkthrough(spec, flows["content"], candidates["content"])
-        record(state, "walkthrough", result, "ready")
+        invalidate(state, ("scenarios", "walkthrough"))
     else:
         raise ValueError("不支持的知识梳理操作")
 
@@ -213,6 +242,18 @@ async def execute(state, action, payload, catalog, actor):
         if source is None:
             raise ValueError("当前项目未授权该资料")
         offset = cursor(payload)
+        citation = None
+        if action == "preview_source":
+            if "version" in payload and str(payload["version"]) != str(source["version"]):
+                raise ValueError("资料版本已变化，请刷新后核对当前证据")
+            if "clause_id" in payload or "quote" in payload:
+                from .retrieval import SourceIndex
+                citation = SourceIndex(state, sources).anchor({
+                    "source_id": key, "clause_id": required_string(payload, "clause_id"),
+                    "quote": required_string(payload, "quote")})
+                if not citation:
+                    raise ValueError("无法在当前版本定位所引条款，请重新核对引文")
+                offset = citation["start"]
         text = source["text"]
         if offset >= len(text) and (offset or not text):
             raise ValueError("原文为空或请求位置超出原文范围")
@@ -240,6 +281,29 @@ async def execute(state, action, payload, catalog, actor):
                   "next_offset": end if end < len(text) else None}
         if action != "extract":
             result["text"] = text[offset:end]
+        if action == "preview_source":
+            result["version"] = str(source["version"])
+            if citation:
+                result.update(citation_start=citation["start"], citation_end=citation["end"])
+    elif action in {"read_fields", "read_clauses"}:
+        section, id_key, child, total_key, maximum = (
+            ("data_tables", "table_id", "columns", "total_fields", FIELD_PAGE) if action == "read_fields" else
+            ("sources", "source_id", "clauses", "total_clauses", CLAUSE_PAGE))
+        key = required_string(payload, id_key)
+        record_row = next((row for row in spec[section] if row[id_key] == key), None)
+        if record_row is None:
+            raise ValueError("当前项目台账中没有该条目")
+        offset, limit = cursor(payload), payload.get("limit", maximum)
+        if type(limit) is not int or not 1 <= limit <= maximum:
+            raise ValueError(f"每页可读取 1 到 {maximum} 项")
+        children = record_row.get(child, [])
+        if offset > len(children):
+            raise ValueError("分页位置超出了当前条目范围")
+        end = offset + limit
+        result = {id_key: key, "offset": offset, total_key: len(children), "items": children[offset:end],
+                  "next_offset": end if end < len(children) else None}
+        if end >= len(children):
+            result["children_digest"] = digest(children)
     elif action == "read_section":
         section = required_string(payload, "section")
         schema = section_schema(section)
@@ -248,7 +312,12 @@ async def execute(state, action, payload, catalog, actor):
         else:
             offset = cursor(payload)
             rows = spec[section]
-            result = {"items": rows[offset:offset + 5], "schema": schema,
+            items = rows[offset:offset + 5]
+            if section == "data_tables":
+                items = [table_preview(row) for row in items]
+            elif section == "sources":
+                items = [source_preview(row) for row in items]
+            result = {"items": items, "schema": schema,
                       "next_offset": offset + 5 if offset + 5 < len(rows) else None}
     elif action == "add_note":
         title = payload.get("title") or "专家口述"
@@ -263,9 +332,9 @@ async def execute(state, action, payload, catalog, actor):
     elif action == "confirm_item":
         confirm_item(state, sources, payload, actor)
         changed_spec(state)
-    elif action == "save_batch":
+    elif action in {"save_batch", "save_agent_batch"}:
         before = digest(spec)
-        apply_batch(state, payload, sources)
+        apply_batch(state, payload, sources, agent_edit=action == "save_agent_batch")
         if before != digest(spec):
             changed_spec(state)
     elif action == "remove_item":
@@ -284,7 +353,19 @@ async def execute(state, action, payload, catalog, actor):
         changed_spec(state)
     else:
         state["issues"] = issues_for(state, sources)
-        derive(state, action, payload, actor)
+        if action in {"edit_candidates", "check_candidates", "submit_candidates", "review_candidate_item",
+                      "review_candidate", "propose_scenarios", "review_scenario", "validate_ontology"}:
+            from .candidate_work import handle_candidate_action
+            result = await handle_candidate_action(state, action, payload, sources, actor)
+        elif action in {"search_context", "align_policies", "review_alignment"}:
+            from .alignment import handle_evidence_action
+            result = await handle_evidence_action(state, action, payload, sources, actor)
+        elif action == "generate_cqs":
+            from .cq_pipeline import run_cq_pipeline
+            result = await run_cq_pipeline(state, sources, payload, actor)
+            invalidate(state, ("walkthrough",))
+        else:
+            derive(state, action, payload, actor)
     sources = sources_by_id(state, catalog)
     sync_sources(state, sources)
     state["issues"] = issues_for(state, sources)

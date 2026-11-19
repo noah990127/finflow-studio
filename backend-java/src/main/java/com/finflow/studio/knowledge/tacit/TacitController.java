@@ -19,7 +19,7 @@ public class TacitController {
     public TacitController(TacitWorkspaceService service) { this.service = service; }
 
     public record Command(@NotBlank String action, @NotNull @PositiveOrZero @JsonProperty("expected_revision") Long revision,
-                          @NotBlank @JsonProperty("request_id") String requestId, Map<String, Object> payload) { }
+                          @NotBlank @JsonProperty("request_id") String requestId, Map<String, Object> payload, boolean compact) { }
 
     @GetMapping
     public Map<String, Object> workspace(@PathVariable String projectId) {
@@ -46,6 +46,6 @@ public class TacitController {
 
     @PostMapping("/commands")
     public Map<String, Object> execute(@PathVariable String projectId, @RequestBody @Valid Command command) {
-        return service.executeHuman(projectId, command.action(), command.revision(), command.requestId(), command.payload());
+        return service.executeHuman(projectId, command.action(), command.revision(), command.requestId(), command.payload(), command.compact());
     }
 }

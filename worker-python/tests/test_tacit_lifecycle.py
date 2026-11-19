@@ -92,6 +92,78 @@ def session(monkeypatch):
     return Session(), model
 
 
+def test_wide_table_projection_pages_without_losing_fields(session):
+    client, _ = session
+    columns = [{"name": f"field_{i}"} for i in range(321)]
+    client.post("save_batch", {"section": "data_tables", "items": [{"table_id": "wide", "columns": columns}]})
+    preview = client.post("read_section", {"section": "data_tables"})["items"][0]
+    assert len(preview["columns"]) == 160
+    assert (preview["total_fields"], preview["next_field_offset"]) == (321, 160)
+    result = client.post("read_fields", {"table_id": "wide", "offset": 160})
+    assert (len(result["items"]), result["next_offset"]) == (160, 320)
+    tail = client.post("read_fields", {"table_id": "wide", "offset": 320})
+    assert tail["items"][0]["name"] == "field_320" and tail["next_offset"] is None
+    assert len(client.state["spec"]["data_tables"][0]["columns"]) == 321
+    patch = {"section": "data_tables", "items": [{"table_id": "wide", "columns": preview["columns"]}]}
+    client.post("save_agent_batch", patch, 422)
+    assert len(client.state["spec"]["data_tables"][0]["columns"]) == 321
+    client.post("save_agent_batch", {**patch, "base_children_digest": {"wide": tail["children_digest"]}})
+    assert len(client.state["spec"]["data_tables"][0]["columns"]) == 160
+    client.post("read_fields", {"table_id": "other"}, 422)
+    client.post("read_fields", {"table_id": "wide", "limit": 161}, 422)
+
+
+def test_agent_must_reconcile_paged_source_clauses_before_removing(session):
+    client, _ = session
+    client.post("sync_sources")
+    source = client.state["spec"]["sources"][0]
+    clauses = [{"clause_id": str(i), "quote": POLICY, "locator": f"字符[0,{len(POLICY)})"} for i in range(21)]
+    client.post("save_batch", {"section": "sources", "items": [{**source, "clauses": clauses}]})
+    preview = client.post("read_section", {"section": "sources"})["items"][0]
+    assert len(preview["clauses"]) == preview["next_clause_offset"] == 20
+    patch = {"section": "sources", "items": [{**source, "clauses": preview["clauses"]}]}
+    client.post("save_agent_batch", patch, 422)
+    end = client.post("read_clauses", {"source_id": source["source_id"], "offset": 20})
+    assert end["items"] == clauses[20:] and end["next_offset"] is None
+    client.post("save_agent_batch", {**patch, "base_children_digest": {source["source_id"]: end["children_digest"]}})
+    assert len(client.state["spec"]["sources"][0]["clauses"]) == 20
+
+
+def test_original_preview_resolves_office_location_after_first_page(session):
+    client, _ = session
+    prefix, clause = "甲😀" * 4001, "业务人员应核 对发票。"
+    start = len(prefix)
+    client.catalog[0].update(text=prefix + clause, locations=[
+        {"locator": "第十二页", "start": start, "end": start + len(clause)}])
+    client.post("sync_sources")
+    src = client.state["spec"]["sources"][0]
+    client.post("save_batch", {"section": "sources", "items": [{
+        **src, "clauses": [{"clause_id": "p12", "quote": clause, "locator": "第十二页"}]}]})
+    request = {"source_id": "upload", "version": "1", "clause_id": "p12", "quote": "核对发票"}
+    page = client.post("preview_source", request)
+    assert page["start"] == page["citation_start"] == start + clause.index("核")
+    assert page["citation_end"] == start + clause.index("。")
+    assert page["text"] == "核 对发票。" and page["version"] == "1"
+    assert not client.state["coverage"]
+    client.post("preview_source", {**request, "quote": "未记载的文字"}, 422)
+    client.post("preview_source", {**request, "version": "0"}, 422)
+
+
+def test_long_clause_preview_cannot_overwrite_the_stored_quote(session):
+    client, _ = session
+    quote = POLICY * 12
+    client.catalog[0]["text"] = quote
+    client.post("sync_sources")
+    src = client.state["spec"]["sources"][0]
+    clause = {"clause_id": "long", "quote": quote, "locator": f"字符[0,{len(quote)})"}
+    client.post("save_batch", {"section": "sources", "items": [{**src, "clauses": [clause]}]})
+    preview = client.post("read_section", {"section": "sources"})["items"][0]["clauses"][0]
+    assert "quote" not in preview and len(preview["quote_preview"]) == 240
+    client.post("save_agent_batch", {"section": "sources", "items": [
+        {**src, "clauses": [{**clause, "quote": preview["quote_preview"]}]}]}, 422)
+    assert client.post("read_clauses", {"source_id": src["source_id"]})["items"][0]["quote"] == quote
+
+
 def test_command_lifecycle_approvals_and_replacement(session):
     client, model = session
     client.set_scope()

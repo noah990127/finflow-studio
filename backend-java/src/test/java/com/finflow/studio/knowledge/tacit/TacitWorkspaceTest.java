@@ -64,6 +64,50 @@ class TacitWorkspaceTest {
     }
 
     @Test
+    void compactTransportRetainsReceiptSemanticsForDefaultAndOptInClients() throws Exception {
+        var json = new com.fasterxml.jackson.databind.ObjectMapper();
+        var controller = new TacitController(service);
+        var compact = json.readValue("""
+                {"action":"generate_flow","expected_revision":0,"request_id":"flow","payload":{},"compact":true}
+                """, TacitController.Command.class);
+        var reply = controller.execute(project, compact);
+        assertThat(reply).isEqualTo(Map.of("workspace", Map.of("revision", 1L), "result", Map.of("sources", 0)));
+        assertThat(controller.execute(project, compact)).isEqualTo(reply);
+        var legacy = json.readValue("""
+                {"action":"generate_flow","expected_revision":0,"request_id":"flow","payload":{}}
+                """, TacitController.Command.class);
+        var replay = controller.execute(project, legacy);
+        assertThat(TacitJson.map(replay.get("workspace"))).containsEntry("revision", 1L).containsKeys("spec", "artifacts");
+        assertThat(replay.get("result")).isEqualTo(reply.get("result"));
+        service.executeHuman(project, "save_batch", 1, "following", Map.of(), true);
+        var late = controller.execute(project, compact);
+        assertThat(late).isEqualTo(Map.of("workspace", Map.of("revision", 2L),
+                "result", Map.of("already_applied", true, "committed_revision", 1L)));
+    }
+
+    @Test
+    void ledgerReadsOmitDerivedArtifactsAndResultOnlyResponsesNeverReplaceSavedState() {
+        service.executeHuman(project, "generate_flow", 0, "start", Map.of());
+        var artifactReads = List.of("search_context", "check_candidates");
+        doAnswer(call -> {
+            Map<String, Object> input = call.getArgument(0);
+            assertThat(input).containsEntry("result_only", true);
+            var state = TacitJson.map(input.get("state"));
+            if (artifactReads.contains(input.get("action"))) assertThat(state).containsKey("artifacts");
+            else assertThat(state).doesNotContainKey("artifacts");
+            return Map.of("state", Map.of(), "result", Map.of("marker", 1));
+        }).when(worker).tacitCommand(any());
+        for (var action : List.of("preview_source", "read_section", "read_fields", "read_clauses",
+                "search_context", "check_candidates")) {
+            var reply = service.executeHuman(project, action, 1, action, Map.of(), true);
+            assertThat(reply).isEqualTo(Map.of("workspace", Map.of("revision", 1L), "result", Map.of("marker", 1)));
+        }
+        var legacy = service.executeAgent(project, "discuss", "preview_source", 1, "plain", Map.of());
+        assertThat(TacitJson.map(legacy.get("workspace"))).containsKeys("artifacts","spec","issues");
+        assertThat(TacitJson.map(service.workspace(project).get("artifacts"))).containsKey("flows");
+    }
+
+    @Test
     void twoWritersCannotBothWin() throws Exception {
         var barrier = new CyclicBarrier(2);
         doAnswer(call -> {
@@ -140,6 +184,25 @@ class TacitWorkspaceTest {
             assertThat(TacitJson.map(events.getFirst())).containsEntry("target_digest", TacitJson.hash("flow-v1"))
                     .containsEntry("actor", "default");
             assertThat(service.reviewSnapshot(project, 2)).containsEntry("target", "flow-v1");
+        }
+    }
+
+    @Test
+    void searchesAndChecksDoNotCommitAndReviewsCannotBeDelegated() {
+        for (var action : List.of("search_context", "read_fields")) {
+            assertThat(service.executeAgent(project, "discuss", action, 0, action, Map.of())).containsKey("result");
+        }
+        service.executeAgent(project, "build_ontology", "check_candidates", 0, "check", Map.of());
+        assertThat(service.workspace(project)).containsEntry("revision", 0L);
+        for (var action : List.of("align_policies", "edit_candidates", "submit_candidates", "propose_scenarios")) {
+            assertThatThrownBy(() -> service.executeAgent(project, "discuss", action, 0, action, Map.of()))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+        for (var action : List.of("review_candidate_item", "review_scenario", "review_alignment")) {
+            assertThatThrownBy(() -> service.executeAgent(project, "build_ontology", action, 0, action, Map.of()))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> service.executeHuman(project, action, 0, action, Map.of()))
+                    .isInstanceOf(SecurityException.class);
         }
     }
 

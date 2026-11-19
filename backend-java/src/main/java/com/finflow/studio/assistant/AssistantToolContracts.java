@@ -29,6 +29,8 @@ final class AssistantToolContracts {
         schema.put("properties", properties);
         schema.put("required", required(tool));
         schema.put("additionalProperties", false);
+        if ("tacit.edit_candidates".equals(tool)) schema.put("anyOf", List.of(Map.of("required", List.of("patches")),
+                Map.of("required", List.of("extensions")), Map.of("required", List.of("remove_ids"))));
         if ("tacit.save_batch".equals(tool)) schema.put("anyOf", List.of(Map.of("required", List.of("items")), Map.of("required", List.of("scope"))));
         if ("browser.open".equals(tool)) schema.put("anyOf", List.of(Map.of("required", List.of("url")), Map.of("required", List.of("site"))));
         if ("resource.add".equals(tool)) schema.put("anyOf", List.of(Map.of("required", List.of("url")), Map.of("required", List.of("file_name", "content"))));
@@ -163,6 +165,11 @@ final class AssistantToolContracts {
     private static List<String> required(String tool) {
         return switch (tool) {
             case "tacit.preview_source", "tacit.extract" -> List.of("expected_revision", "source_id", "offset");
+            case "tacit.read_clauses" -> List.of("expected_revision", "source_id");
+            case "tacit.read_fields" -> List.of("expected_revision", "table_id");
+            case "tacit.search_context" -> List.of("expected_revision", "query");
+            case "tacit.align_policies", "tacit.edit_candidates", "tacit.check_candidates", "tacit.submit_candidates",
+                    "tacit.propose_scenarios" -> List.of("expected_revision");
             case "tacit.save_batch" -> List.of("expected_revision", "section");
             case "tacit.finalize" -> List.of("expected_revision", "completion");
             case "tacit.generate_flow", "tacit.build_candidate", "tacit.generate_cqs", "tacit.validate_ontology" -> List.of("expected_revision");
@@ -223,6 +230,24 @@ final class AssistantToolContracts {
 
     private static Map<String, Object> property(String tool, String name) {
         if (tool.startsWith("tacit.")) {
+            if ("base_children_digest".equals(name)) return Map.of("type","object","properties",Map.of(),
+                    "additionalProperties", string("最近一次完整读取末页返回的 children_digest"),
+                    "description","以 table_id 或 source_id 为键，仅在替换完整字段或条款时使用。");
+            if ("page_size".equals(name)) return Map.of("type", "integer", "minimum", 1, "maximum", 6);
+            if ("limit".equals(name)) return Map.of("type", "integer", "minimum", 1,
+                    "maximum", "tacit.read_fields".equals(tool) ? 160 : "tacit.read_clauses".equals(tool) ? 20 : 100);
+            if ("section".equals(name) && "tacit.search_context".equals(tool))
+                return enumeration("检索范围", List.of("all", "assets", "cqs", "terminology", "ontology", "contract", "decisions"));
+            if ("remove_ids".equals(name)) return boundedArray(string("候选的稳定标识"), 1, 20);
+            if ("patches".equals(name) || "extensions".equals(name)) {
+                var fields = new LinkedHashMap<String,Object>();
+                for (var key : List.of("name","definition")) fields.put(key, string(key));
+                fields.put("evidence", boundedArray(object(Map.of()), 0, 100));
+                boolean patch = "patches".equals(name);
+                var required = patch ? List.of("candidate_id") : List.of("kind","name","process_id","key","definition","evidence");
+                for (var key : required) fields.putIfAbsent(key, string(key));
+                return boundedArray(Map.of("type","object","properties",fields,"required",required,"additionalProperties",false), 1, 20);
+            }
             if ("expected_revision".equals(name)) return integer("最近一次实际查看的台账版本", 0);
             if ("offset".equals(name)) return Map.of("type", "integer", "minimum", 0, "maximum", Integer.MAX_VALUE,
                     "description", "首次为 0，后续使用上页返回的 next_offset");

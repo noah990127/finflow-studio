@@ -59,6 +59,8 @@ services:
     build: ./worker-python
     environment:
       FINFLOW_LLM_PROVIDER: ${FINFLOW_LLM_PROVIDER:-codex}
+      FINFLOW_TACIT_LIGHTRAG_URL: ${FINFLOW_TACIT_LIGHTRAG_URL:-}
+      FINFLOW_TACIT_LIGHTRAG_API_KEY: ${FINFLOW_TACIT_LIGHTRAG_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.6-sol}

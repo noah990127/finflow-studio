@@ -196,3 +196,27 @@ def test_tacit_chat_uses_scoped_ledger_instructions_on_all_runtimes():
         assert TACIT_INSTRUCTIONS in prompt
         assert "work.publish_implementation" not in prompt
         assert "private-token" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_intent_inference_has_no_gateway_or_tools(tmp_path, monkeypatch):
+    from app.agent.opencode_runtime import TextInference
+    config = tmp_path / "provider.json"
+    config.write_text('{"provider": {}}')
+    monkeypatch.setattr(settings, "opencode_provider_config", str(config))
+    monkeypatch.setattr(settings, "opencode_model", "company/model")
+    monkeypatch.setattr("app.agent.opencode_runtime.shutil.which", lambda _: "/opencode")
+
+    async def spawn(*args, **kwargs):
+        if "--version" in args:
+            return FakeProcess(b"1.2.0\n")
+        runtime_config = json.loads(kwargs["env"]["OPENCODE_CONFIG_CONTENT"])
+        assert runtime_config["permission"] == {"*": "deny"}
+        assert runtime_config["mcp"] == {}
+        assert not (kwargs["cwd"] / "gateway.json").exists()
+        assert args[-1] == "classify"
+        return FakeProcess(b'{"type":"tool_use","part":{}}\n')
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+    with pytest.raises(RuntimeError, match="不允许工具调用"):
+        _ = [event async for event in run_opencode_stream(TextInference("classify"))]

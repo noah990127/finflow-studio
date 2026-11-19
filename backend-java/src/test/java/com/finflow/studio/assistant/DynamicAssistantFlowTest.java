@@ -60,6 +60,25 @@ class DynamicAssistantFlowTest {
     }
 
     @Test
+    void ambiguousKnowledgeMessageHasReadOnlyClarificationAndFrozenScope() throws Exception {
+        var project = projects.create("意图澄清", "台账");
+        var session = json(postJson("/api/projects/" + project.id() + "/assistant/sessions", Map.of("title","台账")));
+        var response = json(postJson("/api/assistant/sessions/" + session.get("id").asText() + "/messages", Map.of(
+                "projectId", project.id(), "text", "继续", "page", "knowledge-extraction", "executionMode", "AUTO")));
+        assertThat(response.get("assistantMessage").asText()).contains("希望处理哪个阶段");
+        String planId = response.at("/plan/id").asText();
+        assertThat(jdbc.sql("select tacit_task from assistant_plan where id = :id").param("id",planId)
+                .query(String.class).single()).isEqualTo("DISCUSS");
+        assertThat(response.at("/plan/steps")).extracting(step -> step.get("tool").asText()).containsExactly("assistant.respond");
+        assertThat(awaitStatus(response.at("/run/id").asText(), "SUCCEEDED").get("status").asText()).isEqualTo("SUCCEEDED");
+        var followup = json(postJson("/api/assistant/sessions/" + session.get("id").asText() + "/messages", Map.of(
+                "projectId", project.id(), "text", "继续", "page", "project-home", "executionMode", "AUTO")));
+        assertThat(followup.get("assistantMessage").asText()).contains("希望处理哪个阶段");
+        assertThat(awaitStatus(followup.at("/run/id").asText(), "SUCCEEDED").get("status").asText()).isEqualTo("SUCCEEDED");
+        assertThat(json(getJson("/api/projects/" + project.id() + "/tacit")).get("revision").asLong()).isZero();
+    }
+
+    @Test
     void autoModeExecutesMultipleToolsAndReplansFromFreshWorkspaceState() throws Exception {
         var project = projects.create("动态 Auto", "多步执行测试");
         var session = json(postJson("/api/projects/" + project.id() + "/assistant/sessions", Map.of("title", "Auto")));
@@ -226,6 +245,16 @@ class DynamicAssistantFlowTest {
         @Primary
         WorkerClient scriptedWorkerClient() {
             return new WorkerClient("http://127.0.0.1:9") {
+                @Override
+                public Map<String,Object> tacitIntent(Map<String,Object> request) {
+                    assertThat(request).containsOnlyKeys("directive");
+                    assertThat(request.get("directive")).isEqualTo("继续");
+                    var result = new java.util.LinkedHashMap<String,Object>();
+                    result.put("mode","execute"); result.put("task_intent","build_ontology");
+                    result.put("reason","上一轮任务可能是修改候选"); result.put("question",null);
+                    return result;
+                }
+
                 @Override
                 @SuppressWarnings("unchecked")
                 public Map<String, Object> planAgent(Object value) {

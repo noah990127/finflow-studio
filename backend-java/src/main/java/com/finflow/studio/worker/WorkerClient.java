@@ -80,6 +80,12 @@ public class WorkerClient {
         public TacitUnavailable(String message) { super(message); }
     }
 
+    public Map<String, Object> tacitIntent(Map<String, Object> request) {
+        return client.post().uri("/tacit/intent").contentType(MediaType.APPLICATION_JSON).bodyValue(request)
+                .retrieve().bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {})
+                .timeout(Duration.ofSeconds(30)).block();
+    }
+
     public Map<String, Object> tacitCommand(Object request) {
         var result = client.post().uri("/tacit/command")
                 .contentType(MediaType.APPLICATION_JSON).bodyValue(request).retrieve()

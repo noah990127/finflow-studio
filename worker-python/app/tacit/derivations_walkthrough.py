@@ -2,6 +2,7 @@
 import operator
 from collections import defaultdict
 
+from .candidate_work import clauses_by_id, has_evidence, reviewed
 from .derivations_graph import build_candidates, key, process_gaps
 from .derivations_report import literal
 
@@ -112,10 +113,26 @@ def evaluate(condition, inputs):
     return None
 
 
+def predicates(condition):
+    if condition.get("operator") == "predicate":
+        yield condition
+    for child in condition.get("clauses", []):
+        yield from predicates(child)
+
+
 def tested_boundary(condition):
-    if condition.get("comparator") in ("gt", "gte", "lt", "lte"):
-        return True
-    return any(tested_boundary(c) for c in condition.get("clauses", []))
+    return any(c.get("comparator") in ("lt", "lte", "gt", "gte") and numeric(c.get("value"))
+               for c in predicates(condition))
+
+
+def reaches_boundary(atoms, inputs):
+    return any(c.get("comparator") in ("lt", "lte", "gt", "gte") and c.get("unit") and
+               equal(inputs.get(c["field"]), {"unit": c["unit"], "value": c.get("value")}) for c in atoms)
+
+
+def outputs_for_path(flow, nodes):
+    produced = {v for s in flow["steps"] if s["step_id"] in nodes for v in s.get("outputs", [])}
+    return [v for v in flow.get("outputs", []) if v in produced]
 
 
 def replay(case, flow, paths, catalog, gaps, rules):
@@ -142,12 +159,16 @@ def replay(case, flow, paths, catalog, gaps, rules):
     step_map = {s["step_id"]: s for s in flow["steps"]}
     pid = flow["process_id"]
     logic = catalog.get(("Logic", pid, pid))
+    if logic and logic.get("mismatch"):
+        return stop("candidate_mismatch", "已审核的逻辑定义与流程的输入、输出或拓扑不一致")
     if not logic:
         return stop("missing_candidate", "流程缺少逻辑入口或该入口证据已经变化")
     outgoing = defaultdict(list)
     for b in flow["branches"]:
         outgoing[b["from_step_id"]].append(b)
     chosen = []
+    conditions = []
+    exceptional_path = False
     used_rules = set()
     for i, sid in enumerate(expected):
         s = step_map[sid]
@@ -157,13 +178,17 @@ def replay(case, flow, paths, catalog, gaps, rules):
             node_candidate = catalog.get(("Action" if kind == "step" else "Function", pid, sid))
             if not node_candidate:
                 return stop("missing_candidate", f"步骤「{s['name']}」缺少有效的模型候选或证据")
+        if node_candidate.get("mismatch"):
+            return stop("candidate_mismatch", f"步骤「{s['name']}」的候选定义与已审核流程不一致")
         if i % SEGMENT_SIZE == 0:
             scenario["segments"].append([])
         trace = {"step_id": sid, "name": s["name"], "candidate_id": node_candidate["candidate_id"],
-                 "evidence": node_candidate["evidence"], "rules": []}
+                 "candidate_name": node_candidate["name"], "evidence": node_candidate["evidence"],
+                 "references": node_candidate.get("linked_candidates", []), "rules": []}
         scenario["segments"][-1].append(trace)
         rule_ids = list(s.get("rule_ids", []))
         if i < len(expected) - 1:
+            conditions.extend(b.get("condition", {}) for b in outgoing[sid])
             options = [(b, evaluate(b.get("condition", {}), case["inputs"])) for b in outgoing[sid]]
             positive = [b for b, result in options if result is True]
             if any(result is None for _, result in options):
@@ -173,6 +198,7 @@ def replay(case, flow, paths, catalog, gaps, rules):
             edge = positive[0]
             if edge["to_step_id"] != expected[i + 1]:
                 return stop("branch_deviation", f"步骤「{s['name']}」的实际分支偏离样例路径")
+            exceptional_path |= bool(edge.get("is_exception"))
             chosen.append(edge["branch_id"])
             trace["branch_id"] = edge["branch_id"]
             rule_ids.extend(edge.get("rule_ids", []))
@@ -181,8 +207,13 @@ def replay(case, flow, paths, catalog, gaps, rules):
             candidate = catalog.get(("Function", "", rid))
             if not rule or not candidate:
                 return stop("missing_rule", f"步骤「{s['name']}」缺少规则候选 {rid}")
+            if candidate.get("mismatch"):
+                return stop("candidate_mismatch", f"候选规则「{candidate['name']}」与已审核规则定义不一致")
+            conditions.append(rule.get("condition", {}))
             guard = evaluate(rule.get("condition", {}), case["inputs"])
-            trace["rules"].append({"rule_id": rid, "applicable": guard, "candidate_id": candidate["candidate_id"]})
+            trace["rules"].append({"rule_id": rid, "applicable": guard, "candidate_id": candidate["candidate_id"],
+                                   "candidate_name": candidate["name"], "evidence": candidate["evidence"],
+                                   "references": candidate.get("linked_candidates", [])})
             if guard is None:
                 return stop("unresolved_rule", f"样例不足以判断「{rule['name']}」是否适用")
             if guard is False and rid in case.get("rule_ids", []):
@@ -192,8 +223,14 @@ def replay(case, flow, paths, catalog, gaps, rules):
     exact = next((p for p in matches if p["branches"] == chosen), None)
     if not exact or set(case.get("rule_ids", [])) - used_rules:
         return stop("uncovered_rule_or_path", "样例引用的规则或分支未在完整路径中获得验证")
-    if set(case["expected_outputs"]) - set(flow.get("outputs", [])):
-        return stop("unbound_expected_output", "样例的预期输出未在流程输出中声明")
+    if set(case["expected_outputs"]) != set(outputs_for_path(flow, set(expected))):
+        return stop("unbound_expected_output", "样例预期输出与路径上实际声明的输出不一致")
+    kind = scenario["kind"]
+    if kind == "boundary":
+        if not reaches_boundary((a for c in conditions for a in predicates(c)), case["inputs"]):
+            return stop("untested_boundary", "边界样例的输入未命中路径上的数值阈值和单位")
+    elif (kind == "exception") != exceptional_path:
+        return stop("case_kind_mismatch", "样例标注的正常或异常类型与实际分支不符")
     scenario["path_id"] = exact["path_id"]
     # The ontology is a reviewable data structure, not an executable business engine.
     # A matched path cannot serve as an observation of downstream financial results.
@@ -201,24 +238,45 @@ def replay(case, flow, paths, catalog, gaps, rules):
     return scenario
 
 
-def walkthrough(spec, flows, candidates):
+def candidate_catalog(spec, flows, candidates):
     expected = {c["candidate_id"]: c for c in build_candidates(spec, flows)}
     actual = {c["candidate_id"]: c for c in candidates}
     if len(candidates) != len(actual):
         raise ValueError("候选标识重复，无法校核")
     catalog = {}
+    clauses = clauses_by_id(spec)
     for cid, current in actual.items():
-        authorized = expected.get(cid)
-        if authorized and current.get("review_status") != "rejected" and all(current.get(k) == authorized[k] for k in
-                    ("kind", "process_id", "key", "definition", "evidence")):
-            catalog[(authorized["kind"], authorized["process_id"], authorized["key"])] = authorized
+        baseline = expected.get(cid)
+        signed = reviewed(current)
+        if not baseline or any(current.get(k) != baseline[k] for k in ("kind", "process_id", "key")):
+            continue
+        if current.get("review_status") == "rejected" or not has_evidence(current.get("evidence"), clauses):
+            continue
+        if not signed and any(current.get(k) != baseline[k] for k in ("name", "definition", "evidence")):
+            continue
+        definition = current["definition"]
+        # Additive modeling properties are allowed. A change to an executable business fact
+        # cannot silently pass a replay against the old approved graph.
+        mismatch = any(definition.get(k) != v for k, v in baseline["definition"].items())
+        linked = [actual[r] for r in definition.get("references", []) if r in actual and reviewed(actual[r])]
+        enriched = {**current, "mismatch": mismatch, "linked_candidates": [
+            {k: item[k] for k in ("candidate_id", "kind", "name", "evidence")} for item in linked]}
+        catalog[(current["kind"], current["process_id"], current["key"])] = enriched
+    return catalog
+
+
+def walkthrough(spec, flows, candidates, accepted_cases=()):
+    catalog = candidate_catalog(spec, flows, candidates)
+    indexed_cases = {c["case_id"]: c for c in spec.get("acceptance_cases", [])}
+    for case in accepted_cases:
+        indexed_cases.setdefault(case["case_id"], case)
     rules = {r["rule_id"]: r for r in spec.get("rules", [])}
     proc = {p["process_id"]: p for p in spec.get("processes", [])}
     findings, processes, report = [], [], ["# 建模校核报告", ""]
     for flow in flows:
         pid = flow["process_id"]
         paths, reasons = path_catalog(flow)
-        cases = [c for c in spec.get("acceptance_cases", []) if pid in c.get("process_ids", [])]
+        cases = [c for c in indexed_cases.values() if pid in c.get("process_ids", [])]
         gaps = [g for g in process_gaps(spec, proc[pid]) if g.get("blocking", True)]
         scenarios = []
         required = {"normal"}
