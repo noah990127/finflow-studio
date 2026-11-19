@@ -64,6 +64,7 @@ import json
 
 logger = logging.getLogger(__name__)
 
+from ..tacit.api import router as tacit_router
 from ..fixed_work import FixedModelRequest, model_snapshot, execute_model
 
 
@@ -72,6 +73,9 @@ app = FastAPI(
     version="0.1.0",
     description="Document, knowledge Ref and file analysis worker",
 )
+
+
+app.include_router(tacit_router)
 
 
 @app.post("/v1/fixed-work/model-snapshot")

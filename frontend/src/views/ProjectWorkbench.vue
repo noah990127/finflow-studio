@@ -13,11 +13,12 @@ import { buildDatabaseJdbcUrl, defaultDatabasePort, parseDatabaseConnection, typ
 import { MAX_UPLOAD_FILES, formatUploadSize, MAX_UPLOAD_FILE_BYTES, MAX_UPLOAD_SELECTION_BYTES, uploadSelectionError } from '../domain/fileUpload'
 import { sourceDropAccepts } from '../domain/sourceDrop'
 import DataView from './DataView.vue'
+import TacitWorkspace from './TacitWorkspace.vue'
 import { useProjectsStore } from '../stores/projects'
 import { useAssistantStore } from '../stores/assistant'
 import { ElMessageBox } from 'element-plus'
 
-type Tab = { id: string; title: string; kind: 'home' | 'data' | 'resource'; resource?: WorkspaceResource }
+type Tab = { id: string; title: string; kind: 'home' | 'data' | 'resource' | 'tacit'; resource?: WorkspaceResource }
 type UiRoot = 'DATA' | 'KNOWLEDGE' | 'OUTPUT'
 type SourceFilter = 'ALL' | 'FILE' | 'DATABASE' | 'API' | 'WEB' | 'OUTPUT'
 type PasteFormat = 'AUTO' | 'CSV' | 'TSV' | 'MARKDOWN_TABLE' | 'JSON' | 'TEXT'
@@ -92,7 +93,7 @@ const folderFormOpen = ref(false), folderEditingId = ref(''), folderName = ref('
 const movingResource = ref<WorkspaceResource | null>(null), targetFolderId = ref('')
 const expandedRoots = ref<Record<UiRoot, boolean>>({ DATA: true, KNOWLEDGE: true, OUTPUT: true })
 const expandedBuckets = ref<Record<string, boolean>>({ connections: true, urls: true, uploaded: false, extracts: false, knowledge: true, outputs: true })
-const tabs = ref<Tab[]>([{ id: 'home', title: '我的工作', kind: 'home' }]), activeTabId = ref('home')
+const tabs = ref<Tab[]>([{ id: 'home', title: '我的工作', kind: 'home' }, { id: 'tacit', title: '知识梳理', kind: 'tacit' }]), activeTabId = ref('home')
 const uploadInput = ref<HTMLInputElement | null>(null)
 const addPanelOpen = ref(false), addPanelMode = ref<'choose' | 'connection' | 'url' | 'paste'>('choose'), addTargetRoot = ref<UiRoot>('DATA'), addTargetFolderId = ref<string | undefined>(), addTargetBucket = ref('')
 const uploadAccept = ref(''), savingContent = ref(false)
@@ -475,16 +476,16 @@ function newProject() { editingProjectId.value = ''; projectName.value = ''; pro
 function editProject(project: Project) { editingProjectId.value = project.id; projectName.value = project.name; projectDescription.value = project.description; projectFormOpen.value = true }
 async function deleteProject(project: Project) {
   if (!await confirmAction(`删除项目“${project.name}”？项目将从个人空间移除。`)) return
-  try { await projectStore.delete(project.id); projectManagerOpen.value = false; tabs.value = [{ id: 'home', title: '我的工作', kind: 'home' }]; activeTabId.value = 'home' }
+  try { await projectStore.delete(project.id); projectManagerOpen.value = false; tabs.value = [{ id: 'home', title: '我的工作', kind: 'home' }, { id: 'tacit', title: '知识梳理', kind: 'tacit' }]; activeTabId.value = 'home' }
   catch (reason) { notice.value = reason instanceof Error ? reason.message : '项目没有删除' }
 }
 async function saveProject() {
   if (!projectName.value.trim()) { notice.value = '请填写项目名称'; return }
   savingProject.value = true
-  try { if (editingProjectId.value) await projectStore.update(editingProjectId.value, projectName.value, projectDescription.value); else await projectStore.create(projectName.value, projectDescription.value); projectFormOpen.value = false; projectManagerOpen.value = false; tabs.value = [{ id: 'home', title: '我的工作', kind: 'home' }]; activeTabId.value = 'home' }
+  try { if (editingProjectId.value) await projectStore.update(editingProjectId.value, projectName.value, projectDescription.value); else await projectStore.create(projectName.value, projectDescription.value); projectFormOpen.value = false; projectManagerOpen.value = false; tabs.value = [{ id: 'home', title: '我的工作', kind: 'home' }, { id: 'tacit', title: '知识梳理', kind: 'tacit' }]; activeTabId.value = 'home' }
   catch (reason) { notice.value = reason instanceof Error ? reason.message : '项目没有保存' } finally { savingProject.value = false }
 }
-function selectProject(project: Project) { projectStore.select(project); projectManagerOpen.value = false; tabs.value = [{ id: 'home', title: '我的工作', kind: 'home' }]; activeTabId.value = 'home' }
+function selectProject(project: Project) { projectStore.select(project); projectManagerOpen.value = false; tabs.value = [{ id: 'home', title: '我的工作', kind: 'home' }, { id: 'tacit', title: '知识梳理', kind: 'tacit' }]; activeTabId.value = 'home' }
 function closeTab(tab: Tab) {
   if (tab.id === 'home') return
   const index = tabs.value.findIndex(item => item.id === tab.id)
@@ -630,7 +631,7 @@ onBeforeUnmount(() => {
 })
 watch(activeTab, tab => {
   if (!tab) return
-  const page = tab.kind === 'data' ? 'data-collection' : tab.kind === 'resource' ? 'resource' : 'project-home'
+  const page = tab.kind === 'tacit' ? 'knowledge-extraction' : tab.kind === 'data' ? 'data-collection' : tab.kind === 'resource' ? 'resource' : 'project-home'
   const selection = tab.resource ? { type: tab.resource.resourceType, resourceId: tab.resource.id, range: [tab.resource.name] } : undefined
   assistant.setWorkbenchContext(page, tab.title, selection)
 }, { immediate: true })
@@ -640,7 +641,7 @@ watch(() => props.project?.id, (id, previousId) => {
     workspace.value = null
     works.value = []; selectedWorkId.value = ''
     loadingWorkspace.value = Boolean(id)
-    tabs.value = [{ id: 'home', title: '我的工作', kind: 'home' }]
+    tabs.value = [{ id: 'home', title: '我的工作', kind: 'home' }, { id: 'tacit', title: '知识梳理', kind: 'tacit' }]
     activeTabId.value = 'home'
   }
   void loadWorkspace(id)
@@ -674,12 +675,13 @@ watch(() => [props.loading, props.project?.id] as const, ([loading, projectId]) 
 
     <main class="project-main" :class="{ 'has-notice': !!notice }">
       <header class="project-topbar"><button class="icon-button navigation-toggle" title="项目导航" aria-label="项目导航" @click="navigationOpen = !navigationOpen"><FolderOpen :size="18"/></button><div><strong>{{ activeTab?.kind === 'home' ? '我的工作' : activeTab?.title }}</strong><small v-if="loadingWorkspace">正在同步项目内容</small><small v-else>{{ project?.name }}</small></div><button class="icon-button" title="专注阅读" aria-label="专注阅读" @click="focusMode = !focusMode; assistant.open = false"><Eye :size="19"/></button></header>
-      <nav class="work-tabs"><button v-for="tab in tabs" :key="tab.id" type="button" :class="{ active: tab.id === activeTabId }" @click="activeTabId = tab.id"><span>{{ tab.title }}</span><X v-if="tab.id !== 'home'" :size="13" @click.stop="closeTab(tab)"/></button></nav>
+      <nav class="work-tabs"><button v-for="tab in tabs" :key="tab.id" type="button" :class="{ active: tab.id === activeTabId }" @click="activeTabId = tab.id"><span>{{ tab.title }}</span><X v-if="tab.kind === 'data' || tab.kind === 'resource'" :size="13" @click.stop="closeTab(tab)"/></button></nav>
       <p v-if="notice" class="project-notice">{{ notice }}<button type="button" @click="notice = ''"><X :size="14"/></button></p>
       <section class="project-stage">
         <div v-if="loading || (loadingWorkspace && !workspace)" class="resource-state">正在整理项目空间</div>
         <div v-else-if="error" class="resource-state error">{{ error }}</div>
         <AgentWorkOverview v-else-if="activeTab?.kind === 'home' && project" :project="project" :resources="workspace?.resources ?? []" :work-id="selectedWorkId" @works="works = $event" @started="selectedWorkId = $event" @open-resource="openWorkflowResource" @add-input="openSourceAdd" @resources-changed="loadWorkspace" @open-source="openCitationSource" @manage-data="openData" @use-as-input="useAsInput" @delete-resource="deleteResource" />
+        <TacitWorkspace v-else-if="activeTab?.kind === 'tacit' && project" :key="project.id" :project-id="project.id" :resources="workspace?.resources ?? []" @upload="startSourceUpload" />
         <DataView v-else-if="activeTab?.kind === 'data'" :project="project" />
         <ResourceWorkbench v-else-if="activeTab?.resource && activeTab.resource.resourceType !== 'WEB_URL'" :key="`${activeTab.resource.id}-${activeTab.resource.currentVersion}`" :resource="activeTab.resource" :location="resourceLocator(activeTab.resource)" @use-as-input="useAsInput" @manage-data="openData" @delete-resource="deleteResource" @open-source="openCitationSource" @resources-changed="loadWorkspace" />
         <ResourceWorkbench v-for="tab in openWebTabs" v-show="!loading && !loadingWorkspace && !error && activeTabId === tab.id" :key="tab.id" :resource="tab.resource!" :location="resourceLocator(tab.resource!)" @use-as-input="useAsInput" @manage-data="openData" @delete-resource="deleteResource" @open-source="openCitationSource" @resources-changed="loadWorkspace" />

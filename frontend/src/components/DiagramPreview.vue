@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { nextTick, onBeforeUnmount, ref, useId, watch } from 'vue'
 
 const props = defineProps<{ kind: 'mermaid' | 'excalidraw'; source: string }>()
 const host = ref<HTMLElement | null>(null), error = ref(''), loading = ref(false)
+const diagramId = useId()
 let renderVersion = 0
 
 async function renderDiagram() {
@@ -16,7 +17,7 @@ async function renderDiagram() {
     if (props.kind === 'mermaid') {
       const mermaid = (await import('mermaid')).default
       mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'neutral', flowchart: { htmlLabels: false, curve: 'basis' } })
-      const id = `finflow-mermaid-${crypto.randomUUID()}`
+      const id = `finflow-mermaid-${diagramId}-${version}`
       const rendered = await mermaid.render(id, props.source.trim())
       if (version !== renderVersion || !host.value) return
       host.value.innerHTML = rendered.svg

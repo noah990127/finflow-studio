@@ -91,3 +91,57 @@ def test_transform_workbook_preserves_formulas_and_creates_new_column(tmp_path: 
     assert result.active["A1"].value == "营业收入"
     assert result.active["C2"].value == "=A2-B2"
     result.close()
+
+
+def test_pdf_retains_text_and_marks_scanned_pages_including_page_number(tmp_path: Path) -> None:
+    from reportlab.pdfgen.canvas import Canvas
+
+    image_path = tmp_path / "scan.png"
+    Image.new("RGB", (50, 40), "blue").save(image_path)
+    path = tmp_path / "policy.pdf"
+    canvas = Canvas(str(path))
+    canvas.drawString(80, 700, "Text policy")
+    canvas.showPage()
+    canvas.drawImage(str(image_path), 20, 20)
+    canvas.showPage()
+    canvas.drawString(80, 700, "Page 3")
+    canvas.drawImage(str(image_path), 20, 20)
+    canvas.save()
+    parsed = parse_document(path, path.name, "application/pdf")
+    assert [chunk.location["page"] for chunk in parsed.chunks] == [1, 3]
+    assert all(chunk.location["text_extraction_version"] == 2 for chunk in parsed.chunks)
+    assert any("第2页" in warning and "未提取到文字" in warning for warning in parsed.warnings)
+    assert any("第3页" in warning and "文字层" in warning for warning in parsed.warnings)
+
+
+def test_docx_mixed_image_is_not_counted_as_fully_parsed(tmp_path: Path) -> None:
+    image_path = tmp_path / "scan.png"
+    Image.new("RGB", (32, 32), "white").save(image_path)
+    path = tmp_path / "policy.docx"
+    document = Document()
+    document.add_picture(str(image_path))
+    document.save(path)
+    parsed = parse_document(path, path.name, "")
+    assert parsed.chunks == [] and any("嵌入图形" in w for w in parsed.warnings)
+    document.add_paragraph("For internal review")
+    document.save(path)
+    mixed = parse_document(path, path.name, "")
+    assert mixed.chunks[0].text == "For internal review" and mixed.warnings
+
+
+def test_pptx_native_tables_and_image_only_slides(tmp_path: Path) -> None:
+    from pptx.util import Inches
+
+    image_path = tmp_path / "scan.png"
+    Image.new("RGB", (32, 32), "white").save(image_path)
+    deck = Presentation()
+    rows = deck.slides.add_slide(deck.slide_layouts[6])
+    rows.shapes.add_table(1, 1, 0, 0, Inches(1), Inches(1)).table.cell(0, 0).text = "Quarter"
+    visual = deck.slides.add_slide(deck.slide_layouts[6])
+    visual.shapes.add_picture(str(image_path), Inches(1), Inches(1))
+    path = tmp_path / "policy.pptx"
+    deck.save(path)
+    parsed = parse_document(path, path.name, "")
+    assert parsed.chunks[0].text == "Quarter"
+    assert parsed.chunks[0].location["text_extraction_version"] == 2
+    assert any("第2张幻灯片" in warning for warning in parsed.warnings)

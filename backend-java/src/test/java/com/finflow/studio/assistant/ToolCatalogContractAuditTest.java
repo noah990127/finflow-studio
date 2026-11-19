@@ -14,6 +14,7 @@ class ToolCatalogContractAuditTest {
             assertThat(properties.keySet().stream().map(Object::toString).toList()).containsExactlyInAnyOrderElementsOf(capability.arguments());
             assertThat(capability.arguments()).containsAll(((List<?>)schema.get("required")).stream().map(Object::toString).toList());
             var valid=example(schema);
+            if (id.equals("tacit.save_batch")) valid.put("section", "rules");
             if (id.equals("browser.act")) valid.put("action", "click");
             if (id.equals("resource.prepare_delete")) valid.put("resource_ids",List.of("resource"));
             AssistantToolContracts.validate(id,valid);

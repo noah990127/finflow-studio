@@ -35,6 +35,12 @@ def configured_providers(provider_config):
 def task_prompt(request):
     from .naming import RESOURCE_NAMING_POLICY
     from ..semantic_presentation import DESIGN_INSTRUCTIONS
+    from .tacit_instructions import TACIT_INSTRUCTIONS, tacit_task
+    if tacit_task(request.capabilities):
+        context = {"goal": request.goal, "project_id": request.project_id, "resume": request.resume,
+                   "observation": request.observation, "recent_messages": [m.model_dump() for m in request.recent_messages]}
+        return ("使用 finflow MCP catalog 和 execute 工具。用用户使用的语言回答。"
+                + TACIT_INSTRUCTIONS + "\n本轮上下文\n" + json.dumps(context, ensure_ascii=False))
     return RESOURCE_NAMING_POLICY + "\n" + DESIGN_INSTRUCTIONS + "\n" + """You are FinFlow's task agent. Work in the user's language.
 Use the finflow MCP catalog and execute tools to complete the goal. All project
 reads/writes must go through these tools. Do not invent resource IDs or results.

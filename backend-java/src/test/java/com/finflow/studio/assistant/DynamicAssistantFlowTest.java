@@ -43,6 +43,23 @@ class DynamicAssistantFlowTest {
     @Autowired JdbcClient jdbc;
 
     @Test
+    void readsProjectLedgerThroughChatWithoutCreatingAWorkspaceRevision() throws Exception {
+        var project = projects.create("台账讨论", "只读讨论验证");
+        var session = json(postJson("/api/projects/" + project.id() + "/assistant/sessions", Map.of("title", "台账")));
+        var response = json(postJson("/api/assistant/sessions/" + session.get("id").asText() + "/messages", Map.of(
+                "projectId", project.id(), "text", "只读讨论业务知识台账", "page", "project-home",
+                "clientContextVersion", 1, "executionMode", "AUTO")));
+        var run = awaitStatus(response.get("run").get("id").asText(), "SUCCEEDED");
+        assertThat(run.get("status").asText()).isEqualTo("SUCCEEDED");
+        var plan = json(getJson("/api/assistant/plans/" + response.get("plan").get("id").asText()));
+        assertThat(plan.get("steps")).extracting(step -> step.get("tool").asText()).containsExactly("tacit.workspace");
+        assertThat(json(getJson("/api/projects/" + project.id() + "/tacit")).get("revision").asLong()).isZero();
+        var events = json(getJson("/api/assistant/sessions/" + session.get("id").asText() + "/event-history"));
+        assertThat(events).filteredOn(event -> "agent.observation".equals(event.get("type").asText()))
+                .anySatisfy(event -> assertThat(event.at("/payload/output/tacit/revision").asLong(-1)).isZero());
+    }
+
+    @Test
     void autoModeExecutesMultipleToolsAndReplansFromFreshWorkspaceState() throws Exception {
         var project = projects.create("动态 Auto", "多步执行测试");
         var session = json(postJson("/api/projects/" + project.id() + "/assistant/sessions", Map.of("title", "Auto")));
@@ -215,6 +232,13 @@ class DynamicAssistantFlowTest {
                     var request = (Map<String, Object>) value;
                     var continuation = Boolean.TRUE.equals(request.get("continuation"));
                     var goal = String.valueOf(request.get("goal"));
+                    if (goal.equals("只读讨论业务知识台账")) {
+                        assertThat((List<Map<String,Object>>) request.get("capabilities"))
+                                .extracting(tool -> tool.get("id"))
+                                .doesNotContain("tacit.finalize", "folder.create", "work.update");
+                        if (!continuation) return action("tacit.workspace", "查看知识台账", "核对实际版本", Map.of());
+                        return Map.of("summary", "当前项目的知识台账为空", "completed", true, "steps", List.of());
+                    }
                     if (goal.contains("只读回答")) return Map.of("summary", "当前没有工作流。",
                             "public_summary", "你只需要工作流清单，当前项目目录已足够回答，不需要修改内容。",
                             "completed", true, "steps", List.of());

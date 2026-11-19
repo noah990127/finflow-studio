@@ -181,3 +181,18 @@ async def test_timeout_cleans_up_child(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match='总执行时限'):
         _ = [event async for event in run_opencode_stream(req)]
     assert process in stopped
+
+
+def test_tacit_chat_uses_scoped_ledger_instructions_on_all_runtimes():
+    from app.agent.runtime import AgentCapability, _continuous_instructions
+    from app.agent.tacit_instructions import TACIT_INSTRUCTIONS
+    req = request()
+    req.goal = "只读讨论业务台账"
+    req.capabilities = [
+        AgentCapability(id="tacit.workspace", title="查看台账", description="查看",
+                        mode="READ", risk="READ_ONLY"),
+    ]
+    for prompt in (task_prompt(req), _continuous_instructions(req)):
+        assert TACIT_INSTRUCTIONS in prompt
+        assert "work.publish_implementation" not in prompt
+        assert "private-token" not in prompt

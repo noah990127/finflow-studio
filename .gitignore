@@ -44,3 +44,6 @@ examples/**/*.pyc
 .finflow-test-accounts
 .local-runtime/
 artifacts/
+!worker-python/app/artifacts/
+worker-python/app/artifacts/*
+!worker-python/app/artifacts/presentation_review.py

@@ -68,6 +68,7 @@ public class AssistantExecutionService {
     private final AssistantWorkspaceToolGateway workspaceTools;
     private final AssistantPlanner planner;
     private final AgentWorkService agentWorks;
+    private final TacitAgentTools tacitTools;
     @org.springframework.beans.factory.annotation.Autowired
     private FixedWorkService fixedWorks;
     @org.springframework.beans.factory.annotation.Autowired
@@ -90,7 +91,8 @@ public class AssistantExecutionService {
                                      AssistantWorkspaceToolGateway workspaceTools, AssistantPlanner planner,
                                      @Value("${finflow.agent.max-dynamic-actions:80}") int maxDynamicActions,
                                      @Value("${finflow.agent.gateway-base-url:http://127.0.0.1:8080}") String gatewayBaseUrl,
-                                     AssistantInterruptions interruptions, AgentWorkService agentWorks) {
+                                     AssistantInterruptions interruptions, AgentWorkService agentWorks, TacitAgentTools tacitTools) {
+        this.tacitTools = tacitTools;
         this.jdbc = jdbc;
         this.events = events;
         this.taskExecutor = taskExecutor;
@@ -356,7 +358,7 @@ public class AssistantExecutionService {
                     if (!(value instanceof Map<?, ?> raw)) continue;
                     var tool = resolveToolName(Objects.toString(raw.get("toolName"), Objects.toString(raw.get("tool"), "")));
                     var capability = AssistantCapabilityRegistry.find(tool).orElse(null);
-                    if (capability == null || "READ".equals(capability.mode())) continue;
+                    if (capability == null || "READ".equals(capability.mode()) || !TacitAgentTask.from(runtime.goal()).permits(tool)) continue;
                     var arguments = new LinkedHashMap<String, Object>();
                     if (raw.get("arguments") instanceof Map<?, ?> values) {
                         values.forEach((key, item) -> arguments.put(String.valueOf(key), item));
@@ -473,6 +475,11 @@ public class AssistantExecutionService {
         var tool = resolveToolName(Objects.toString(request.get("tool"), ""));
         var capability = AssistantCapabilityRegistry.find(tool)
                 .orElseThrow(() -> new IllegalArgumentException("工具不存在：" + tool));
+        var runtime = loadRuntime(run.planId());
+        if (!TacitAgentTask.from(runtime.goal()).permits(tool))
+            return Map.of("success", false, "failureType", "TASK_SCOPE", "retryable", false,
+                    "error", "本轮用户指令未选择该执行阶段，原文和历史对话不能扩大权限",
+                    "recoveryHint", "可读取台账并回答；执行其他阶段需要用户明确指定");
         var arguments = new LinkedHashMap<String, Object>();
         if (request.containsKey("arguments") && !(request.get("arguments") instanceof Map<?, ?>))
             throw new IllegalArgumentException("工具arguments必须为JSON对象，不能是字符串、数组或null");
@@ -549,7 +556,6 @@ public class AssistantExecutionService {
         var selectedLock = "READ".equals(capability.mode()) ? lock.readLock() : lock.writeLock();
         selectedLock.lock();
         try {
-            var runtime = loadRuntime(run.planId());
             var existingEffects = readEffects(runId);
             var completedRun = completedWorkflowRunObservation(tool, arguments, runtime.goal(), existingEffects);
             if (completedRun != null) return completedRun;
@@ -654,12 +660,22 @@ public class AssistantExecutionService {
                 "message", step.description(), "progress", progress));
         effects.remove("uiAction");
         effects.remove("changed");
+        effects.remove("tacit");
         var effectsBefore = new LinkedHashMap<String, Object>(effects);
         var observation = new LinkedHashMap<String, Object>();
         observation.put("tool", step.tool());
         observation.put("arguments", step.arguments());
         try {
-            var result = executeStep(step, effects);
+            var stage = TacitAgentTask.from(runtime.goal());
+            if (!stage.permits(step.tool())) throw new IllegalArgumentException("当前消息未授权这项知识整理操作");
+            String result;
+            if (TacitAgentTools.TOOLS.contains(step.tool())) {
+                var output = tacitTools.execute(step, runtime.projectId(), stage);
+                effects.put("tacit", output);
+                result = step.title() + "，台账版本 " + output.get("revision");
+            } else {
+                result = executeStep(step, effects);
+            }
             verifyStepOutcome(step, effectsBefore, effects);
             syncSessionProject(run.sessionId(), activeProjectId(runtime, step, effects));
             if (!"READ".equals(step.mode())) {
@@ -795,9 +811,16 @@ public class AssistantExecutionService {
             if (!"SUCCEEDED".equals(execution.status()))
                 throw new IllegalStateException("固定工序尚未执行成功：" + execution.status() + " " + execution.error());
         }
-        verifyTaskCompletion(loadSteps(run.planId()), effects, loadRuntime(run.planId()).goal());
+        var planSteps = loadSteps(run.planId());
+        var runtime = loadRuntime(run.planId());
+        var goal = runtime.goal();
+        var knowledgeTask = TacitAgentTask.from(goal);
+        verifyTaskCompletion(planSteps, effects, goal);
         var safeSummary = summary == null || summary.isBlank() ? "已完成工作台操作。" : summary;
-        if (isCliRuntime(effects.get("agentRuntime"))) {
+        if (knowledgeTask != TacitAgentTask.OTHER) {
+            if (knowledgeTask != TacitAgentTask.DISCUSS)
+                safeSummary = tacitTools.verifiedOutcome(knowledgeTask, runtime.projectId(), planSteps);
+        } else if (isCliRuntime(effects.get("agentRuntime"))) {
             var stages = agentWorks.stages(run.id());
             var blocked = stages.stream().filter(s -> Set.of("FAILED", "STALE").contains(s.status())).findFirst();
             if (blocked.isPresent()) {
@@ -881,9 +904,9 @@ public class AssistantExecutionService {
     Map<String, Object> observationOutput(Map<String, Object> before, Map<String, Object> after) {
         var output = new LinkedHashMap<String, Object>();
         after.forEach((key, value) -> {
-            if (!"uiAction".equals(key) && (Set.of("workflow", "changed").contains(key) || !Objects.equals(before.get(key), value))) {
+            if (!"uiAction".equals(key) && (Set.of("workflow", "changed", "tacit").contains(key) || !Objects.equals(before.get(key), value))) {
                 // Approval scopes must never be truncated into an incomplete list of IDs/versions.
-                output.put(key, "deletionPreview".equals(key) ? value : compactObservationValue(value, 0));
+                output.put(key, Set.of("deletionPreview", "tacit").contains(key) ? value : compactObservationValue(value, 0));
             }
         });
         return output;
@@ -1055,7 +1078,7 @@ public class AssistantExecutionService {
             var status = Objects.toString(effects.get("workflowRunStatus"), "UNKNOWN");
             throw new IllegalStateException("任务尚未完成：工作流状态为 " + status + "，不能报告已完成");
         }
-        if (!isCliRuntime(effects.get("agentRuntime")) && requestsWorkflowRun(goal)
+        if (TacitAgentTask.from(goal) == TacitAgentTask.OTHER && !isCliRuntime(effects.get("agentRuntime")) && requestsWorkflowRun(goal)
                 && steps.stream().noneMatch(step -> "workflow.run".equals(step.tool()) && "SUCCEEDED".equals(step.status()))) {
             throw new IllegalStateException("任务尚未完成：用户要求产出成果，但工作流尚未真正运行");
         }
@@ -1478,6 +1501,7 @@ public class AssistantExecutionService {
 
     static Set<String> supportedTools() {
         var tools = new java.util.LinkedHashSet<>(AssistantWorkspaceToolGateway.supportedTools());
+        tools.addAll(TacitAgentTools.TOOLS);
         // These tools are dispatched by callContinuousToolAsActor, not executeStep.
         tools.addAll(Set.of("work.update", "work.publish_implementation", "work.implementation_status",
                 "work.execute_implementation", "browser.sites", "browser.inspect", "browser.explore"));

@@ -1,3 +1,4 @@
+import type { TacitState, TacitReply, TacitCommand, TacitReviewPage } from '../domain/tacit'
 export type Project = { id: string; name: string; description: string; status: string; createdAt: string; updatedAt: string }
 export type AuthUser = { username: string }
 export type Selection = { type: string; resourceId: string; range: string[] }
@@ -88,7 +89,7 @@ async function request<T>(url: string, options: RequestInit = {}, timeoutMs = 0)
       if (response.status === 401 && url !== '/api/auth/login') {
         window.dispatchEvent(new Event('finflow:unauthorized'))
       }
-      throw new Error(body.message ?? body.detail ?? `请求没有完成（HTTP ${response.status}）`)
+      throw Object.assign(new Error(body.message ?? body.detail ?? `请求没有完成（HTTP ${response.status}）`), { status: response.status })
     }
     return response.status === 204 ? (undefined as T) : response.json() as Promise<T>
   } catch (error) {
@@ -98,6 +99,10 @@ async function request<T>(url: string, options: RequestInit = {}, timeoutMs = 0)
 }
 
 export const api = {
+  tacitWorkspace: (projectId: string) => request<TacitState>(`/api/projects/${encodeURIComponent(projectId)}/tacit`),
+  tacitReviewSnapshot: (projectId:string, revision:number) => request<{target:unknown;sources:unknown}>(`/api/projects/${encodeURIComponent(projectId)}/tacit/reviews/${revision}`),
+  tacitReviewHistory: (projectId:string, before?:number) => request<TacitReviewPage>(`/api/projects/${encodeURIComponent(projectId)}/tacit/reviews?limit=30${before === undefined ? '' : '&before_revision='+before}`),
+  tacitCommand: (projectId: string, command: TacitCommand) => request<TacitReply>(`/api/projects/${encodeURIComponent(projectId)}/tacit/commands`, { method: 'POST', body: JSON.stringify(command) }),
   browserAuthorizations: () => request<Array<{ id: string; kind: string; label: string; status: string; createdAt: string; expiresAt: string }>>('/api/browser/authorizations'),
   browserConnections: () => request<Array<{ session: string; origin: string; status: string; loginWindowExpired: boolean }>>('/api/browser/authorizations/connections'),
   browserControl: (session: string, action: 'login' | 'restart_login' | 'resume' | 'close') => request<{ session: string; status: string }>(`/api/browser/authorizations/connections/${encodeURIComponent(session)}/${action}`, { method: 'POST' }),

@@ -10,6 +10,8 @@ from docx import Document
 from openpyxl import load_workbook
 from pypdf import PdfReader
 from pptx import Presentation
+from pptx.enum.shapes import MSO_SHAPE_TYPE
+from pptx.oxml.ns import qn
 from PIL import Image
 
 from .config import settings
@@ -31,11 +33,11 @@ def parse_document(path: Path, file_name: str, media_type: str) -> ParsedDocumen
         located = []
         warnings.append("图片已保存，未进行文字识别")
     elif suffix == ".pdf" or media_type == "application/pdf":
-        located = _parse_pdf(path)
+        located, warnings = _parse_pdf(path)
     elif suffix == ".docx":
-        located = _parse_docx(path)
+        located, warnings = _parse_docx(path)
     elif suffix == ".pptx":
-        located = _parse_pptx(path)
+        located, warnings = _parse_pptx(path)
     elif suffix in {".xlsx", ".xlsm"}:
         located, warnings = _parse_xlsx(path)
     elif suffix in {".csv", ".tsv"}:
@@ -49,6 +51,11 @@ def parse_document(path: Path, file_name: str, media_type: str) -> ParsedDocumen
     else:
         raise ValueError("暂不支持该文件格式")
 
+    if suffix in {".docx", ".pptx", ".pdf"} or media_type == "application/pdf":
+        # Persist alongside each old-style Ref so the server can distinguish
+        # historical parses that silently skipped scanned pages.
+        for item in located:
+            item.location["text_extraction_version"] = 2
     chunks = _chunk_located_text(located)
     return ParsedDocument(
         file_name=file_name,
@@ -60,7 +67,13 @@ def parse_document(path: Path, file_name: str, media_type: str) -> ParsedDocumen
     )
 
 
-def _parse_pdf(path: Path) -> List[LocatedText]:
+def _page_warning(pages: list[int], unit: str, reason: str) -> str:
+    sample = "、".join(map(str, pages[:12]))
+    listed = f"第{sample}{unit}" if len(pages) <= 12 else f"第{sample}{unit}等 {len(pages)} {unit}"
+    return f"{listed}{reason}，请核对原件并补充可引用文本"
+
+
+def _parse_pdf(path: Path) -> Tuple[List[LocatedText], List[str]]:
     reader = PdfReader(str(path), strict=False)
     if reader.is_encrypted:
         try:
@@ -68,14 +81,24 @@ def _parse_pdf(path: Path) -> List[LocatedText]:
         except Exception as exception:
             raise ValueError("PDF 已加密，无法解析") from exception
     result: List[LocatedText] = []
-    for index, page in enumerate(reader.pages):
+    blank, mixed = [], []
+    for index, page in enumerate(reader.pages, start=1):
         text = page.extract_text() or ""
         if text.strip():
-            result.append(LocatedText(text, {"type": "pdf", "page": index + 1}))
-    return result
+            result.append(LocatedText(text, {"type": "pdf", "page": index}))
+            if len(page.images):
+                mixed.append(index)
+        else:
+            blank.append(index)
+    warnings = []
+    if blank:
+        warnings.append(_page_warning(blank, "页", "未提取到文字，可能是扫描页或空白页"))
+    if mixed:
+        warnings.append(_page_warning(mixed, "页", "仅提取文字层，页内图片未经文字识别"))
+    return result, warnings
 
 
-def _parse_docx(path: Path) -> List[LocatedText]:
+def _parse_docx(path: Path) -> Tuple[List[LocatedText], List[str]]:
     document = Document(str(path))
     result: List[LocatedText] = []
     for index, paragraph in enumerate(document.paragraphs):
@@ -85,20 +108,54 @@ def _parse_docx(path: Path) -> List[LocatedText]:
         rows = ["\t".join(cell.text for cell in row.cells) for row in table.rows]
         if rows:
             result.append(LocatedText("\n".join(rows), {"type": "word_table", "table": table_index + 1}))
-    return result
+    warnings = []
+    if document.element.body.xpath(".//w:drawing | .//w:pict | .//w:object | .//w:txbxContent"):
+        warnings.append("Word 仅提取正文段落及表格，嵌入图形或文本框未经核对，请补充可引用文本")
+    if not any(row.text.strip() for row in result):
+        warnings.append("Word 未提取到可引用的正文文字，请核对原件")
+    return result, warnings
 
 
-def _parse_pptx(path: Path) -> List[LocatedText]:
+def _slide_text(shapes, parts: list[str]) -> bool:
+    incomplete = False
+    for shape in shapes:
+        if shape.element.xpath(".//a:blip"):
+            # Includes photographs placed into PowerPoint picture placeholders.
+            incomplete = True
+        if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
+            if _slide_text(shape.shapes, parts):
+                incomplete = True
+        elif shape.has_table:
+            for row in shape.table.rows:
+                parts.append("\t".join(cell.text for cell in row.cells))
+        elif shape.has_text_frame and shape.text.strip():
+            parts.append(shape.text)
+        elif shape.element.tag in (qn("p:pic"), qn("p:graphicFrame")):
+            # Can also be SmartArt, an image, or linked media.
+            incomplete = True
+    return incomplete
+
+
+def _parse_pptx(path: Path) -> Tuple[List[LocatedText], List[str]]:
     presentation = Presentation(str(path))
     result: List[LocatedText] = []
-    for slide_index, slide in enumerate(presentation.slides):
+    blank, mixed = [], []
+    for slide_index, slide in enumerate(presentation.slides, start=1):
         text_parts: List[str] = []
-        for shape in slide.shapes:
-            if hasattr(shape, "text") and shape.text.strip():
-                text_parts.append(shape.text)
-        if text_parts:
-            result.append(LocatedText("\n".join(text_parts), {"type": "powerpoint", "slide": slide_index + 1}))
-    return result
+        has_visual = _slide_text(slide.shapes, text_parts)
+        text = "\n".join(text_parts)
+        if text.strip():
+            result.append(LocatedText(text, {"type": "powerpoint", "slide": slide_index}))
+            if has_visual:
+                mixed.append(slide_index)
+        else:
+            blank.append(slide_index)
+    warnings = []
+    if blank:
+        warnings.append(_page_warning(blank, "张幻灯片", "未提取到文字"))
+    if mixed:
+        warnings.append(_page_warning(mixed, "张幻灯片", "仅提取文字和表格，图像、图表或嵌入对象未经核对"))
+    return result, warnings
 
 
 def _parse_xlsx(path: Path) -> Tuple[List[LocatedText], List[str]]:

@@ -85,6 +85,15 @@ public final class AssistantCapabilityRegistry {
                 List.of("project_id", "resource_id", "text", "source", "name"));
         register("knowledge.search", "knowledge", "搜索知识", "搜索项目知识库并返回可引用证据", "READ", RiskLevel.READ_ONLY, "never",
                 List.of("project_id", "query", "resource_ids", "limit"));
+        register("tacit.workspace", "tacit", "查看知识台账", "查看当前项目的台账目录、授权资料与阶段状态。section 可读结构化条目、问题、完整CQ、报告和候选，按 next_offset 续读。", "READ", RiskLevel.READ_ONLY, "never", List.of("section", "offset"));
+        register("tacit.preview_source", "tacit", "核对资料原文", "按字符偏移查看已授权来源。只读核对，不产生抽取覆盖记录。", "READ", RiskLevel.READ_ONLY, "never", List.of("expected_revision", "source_id", "offset"));
+        register("tacit.extract", "tacit", "抽取一页业务知识", "对已授权的一个来源抽取并保存一页，使用已返回的版本和 next_offset、稳定来源 ID。首次从 0 开始。", "WRITE", RiskLevel.CREATE_VERSION, "always", List.of("expected_revision", "source_id", "offset"));
+        register("tacit.save_batch", "tacit", "修订业务台账草稿", "按业务梳理范围或同一节的 1 至 5 个稳定条目保存，保留已读原文和未决事项。", "WRITE", RiskLevel.CREATE_VERSION, "always", List.of("expected_revision", "section", "items", "scope"));
+        register("tacit.finalize", "tacit", "生成业务与缺口报告", "从当前台账派生报告。draft 保留待确认事项，complete 由服务端校验全部证据和覆盖。", "WRITE", RiskLevel.CREATE_VERSION, "always", List.of("expected_revision", "completion"));
+        register("tacit.generate_flow", "tacit", "生成待审核业务流程图", "按当前台账的流程、分支与未决项生成流程集合，交用户审核。", "WRITE", RiskLevel.CREATE_VERSION, "always", List.of("expected_revision"));
+        register("tacit.build_candidate", "tacit", "构建本体候选", "从已审核且有效的业务流程生成带证据的本体候选，交用户复核。", "WRITE", RiskLevel.CREATE_VERSION, "always", List.of("expected_revision"));
+        register("tacit.generate_cqs", "tacit", "生成业务能力问题", "从台账提出带来源、期望业务回答、建模要求和验证问题的待审核CQ。", "WRITE", RiskLevel.CREATE_VERSION, "always", List.of("expected_revision"));
+        register("tacit.validate_ontology", "tacit", "校核本体候选", "核对已审核流程与候选，逐条推演业务场景、输出待复核的校核记录。", "WRITE", RiskLevel.CREATE_VERSION, "always", List.of("expected_revision"));
         register("knowledge.read", "knowledge", "读取知识片段", "读取知识库条目、原文摘录和定位信息", "READ", RiskLevel.READ_ONLY, "never",
                 List.of("citation_id", "resource_id"));
         register("knowledge.parse", "knowledge", "解析知识文件", "从文件中解析文本、章节和可检索片段", "WRITE", RiskLevel.CREATE_VERSION, "always",

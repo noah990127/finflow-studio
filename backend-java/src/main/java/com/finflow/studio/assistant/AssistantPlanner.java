@@ -53,6 +53,12 @@ public class AssistantPlanner {
     private PlannedWork fallbackPlan(String goal, String page, Selection selection, WorkspaceContext context) {
         var text = goal == null ? "" : goal.trim();
         var normalized = text.toLowerCase(Locale.ROOT);
+        if (TacitAgentTask.from(text) != TacitAgentTask.OTHER) {
+            var message = "当前 Agent 规划服务不可用。可在项目知识台账查看材料、调整草稿和继续操作。";
+            var reply = step(1, "assistant.respond", "READ", "说明知识整理进度", "保留原有台账", RiskLevel.READ_ONLY,
+                    mapOf("goal", text, "prepared_answer", message));
+            return new PlannedWork(message, List.of(reply));
+        }
         var steps = new ArrayList<PlanStep>();
         var resourceId = selection == null ? null : selection.resourceId();
         var formats = requestedFormats(normalized);
@@ -222,7 +228,7 @@ public class AssistantPlanner {
                 "type", selection.type(), "resource_id", selection.resourceId(), "range", selection.range()));
         request.put("resources", context.resources());
         request.put("recent_messages", context.recentMessages());
-        request.put("capabilities", AssistantCapabilityRegistry.agentCatalog());
+        request.put("capabilities", TacitAgentTask.catalog(goal));
         request.put("continuation", continuation);
         request.put("observation", observation == null ? Map.of() : observation);
         request.put("completed_actions", completedActions);
@@ -276,14 +282,16 @@ public class AssistantPlanner {
             if (!(item instanceof Map<?, ?> raw)) continue;
             var tool = String.valueOf(raw.get("tool"));
             var capability = AssistantCapabilityRegistry.find(tool).orElse(null);
-            if (capability == null) continue;
+            if (capability == null || !TacitAgentTask.from(goal).permits(tool)) continue;
             var arguments = new LinkedHashMap<String, Object>();
             if (raw.get("arguments") instanceof Map<?, ?> values) {
                 values.forEach((key, value) -> arguments.put(String.valueOf(key), value));
             }
-            enrichArguments(arguments, goal, page, context);
-            secureArguments(tool, arguments, context);
-            if (!selectedSkills.isEmpty()) arguments.put("agent_skills", selectedSkills);
+            if (!TacitAgentTools.TOOLS.contains(tool)) {
+                enrichArguments(arguments, goal, page, context);
+                secureArguments(tool, arguments, context);
+                if (!selectedSkills.isEmpty()) arguments.put("agent_skills", selectedSkills);
+            }
             steps.add(step(1, tool, capability.mode(),
                     readable(raw.get("title"), capability.title(), 40),
                     readable(raw.get("description"), capability.description(), 120), capability.risk(), arguments));

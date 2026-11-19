@@ -76,6 +76,29 @@ public class WorkerClient {
         return result;
     }
 
+    public static final class TacitUnavailable extends RuntimeException {
+        public TacitUnavailable(String message) { super(message); }
+    }
+
+    public Map<String, Object> tacitCommand(Object request) {
+        var result = client.post().uri("/tacit/command")
+                .contentType(MediaType.APPLICATION_JSON).bodyValue(request).retrieve()
+                .onStatus(status -> status.is4xxClientError(), response -> response.bodyToMono(String.class)
+                        .defaultIfEmpty("").map(body -> new IllegalArgumentException(workerError(response.statusCode().value(), body))))
+                .onStatus(status -> status.is5xxServerError(), response -> response.bodyToMono(String.class)
+                        .defaultIfEmpty("").map(body -> new TacitUnavailable(workerError(response.statusCode().value(), body))))
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {})
+                .timeout(Duration.ofMinutes(10))
+                .onErrorMap(org.springframework.web.reactive.function.client.WebClientRequestException.class,
+                        e -> new TacitUnavailable("知识服务连接失败，请检查解析服务后重试"))
+                .onErrorMap(java.util.concurrent.TimeoutException.class, e -> new TacitUnavailable("知识服务超时，本次操作尚未提交"))
+                .block();
+        if (result == null || !(result.get("state") instanceof Map) || !(result.get("result") instanceof Map)) {
+            throw new IllegalStateException("知识抽取服务返回的状态不完整");
+        }
+        return result;
+    }
+
     public ParsedDocument parse(Path path, String originalName) {
         var parts = new MultipartBodyBuilder();
         parts.part("file", new FileSystemResource(path));

@@ -12,6 +12,10 @@ public final class ActorContext {
         return Objects.requireNonNullElse(CURRENT.get(), DEFAULT_ACTOR);
     }
 
+    public static boolean isBound() {
+        return CURRENT.get() != null;
+    }
+
     public static Scope bind(String actorId) {
         var previous = CURRENT.get();
         CURRENT.set(actorId);
