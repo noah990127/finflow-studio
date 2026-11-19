@@ -72,12 +72,12 @@ public class TacitWorkspaceService {
 
     public Map<String, Object> executeHuman(String projectId, String action, long revision,
                                            String requestId, Map<String, Object> payload, boolean compact) {
-        if (action == null || !(Set.of("select_sources", "add_note", "remove_item").contains(action)
+        if (action == null || !(Set.of("select_sources", "add_note", "remove_item", "build_ontology_model").contains(action)
                 || READ.contains(action) || HUMAN_DECISION.contains(action)
                 || TASKS.values().stream().anyMatch(actions -> actions.contains(action)))) {
             throw new IllegalArgumentException("未知的知识操作");
         }
-        if (HUMAN_DECISION.contains(action) && !ActorContext.isBound()) {
+        if ((HUMAN_DECISION.contains(action) || action.equals("build_ontology_model")) && !ActorContext.isBound()) {
             throw new SecurityException("请使用项目所有者账户登录后审核");
         }
         return execute(projectId, action, revision, requestId, payload, "human", compact);
@@ -107,6 +107,7 @@ public class TacitWorkspaceService {
         input.remove("_file_catalog");
         if (LEDGER_READ.contains(action)) input.remove("artifacts");
         input.put("source_ids", selected);
+        if (action.equals("build_ontology_model")) input.put("_project_id", id);
         String transitionAction = selecting ? "sync_sources" : action;
         if (action.equals("save_batch") && origin.startsWith("agent:")) transitionAction = "save_agent_batch";
         var response = transition(input, transitionAction, selecting ? Map.of() : args, all);
@@ -116,6 +117,7 @@ public class TacitWorkspaceService {
             return reply(before, result, compact);
         }
         var state = new LinkedHashMap<>(TacitJson.map(response.get("state")));
+        state.remove("_project_id");
         state.put("_file_catalog", summaries(sources));
         var after = new Record(before.revision + 1, selected, catalog.stamp(files), state);
         return tx.execute(ignored -> {
@@ -150,6 +152,7 @@ public class TacitWorkspaceService {
         input.put("source_ids", before.selected);
         var synced = transition(input, "sync_sources", Map.of(), withNotes(sources, before.state));
         var state = new LinkedHashMap<>(TacitJson.map(synced.get("state")));
+        state.remove("_project_id");
         state.put("_file_catalog", summaries(sources));
         var after = new Record(before.revision + 1, before.selected, stamp, state);
         return tx.execute(ignored -> {
@@ -178,6 +181,22 @@ public class TacitWorkspaceService {
         jdbc.sql("select id from project where id=:p and owner_id=:owner and deleted=false for update")
                 .param("p", project).param("owner", ActorContext.current()).query(String.class).optional()
                 .orElseThrow(() -> new IllegalArgumentException("项目不存在"));
+    }
+
+    Map<String, Object> modelForPublication(String projectId, long revision, String digest) {
+        var ledger = read(projectId);
+        if (ledger.revision != revision || !ledger.stamp.equals(catalog.stamp(catalog.files(projectId, ledger.selected, true))))
+            throw conflict();
+        var artifacts = TacitJson.map(ledger.state.getOrDefault("artifacts", Map.of()));
+        var artifact = TacitJson.map(artifacts.getOrDefault("ontology_model", Map.of()));
+        if (!"ready".equals(artifact.get("status")))
+            throw new IllegalStateException("请先根据当前审核结果构建本体模型");
+        var model = TacitJson.map(artifact.get("content"));
+        if (!digest.equals(model.get("digest"))) throw conflict();
+        var quality = TacitJson.map(model.getOrDefault("quality", Map.of()));
+        if (!Boolean.TRUE.equals(quality.get("publication_ready")))
+            throw new IllegalStateException("请完成本版场景走查、处理所有待核验项，再重新构建并发布本体");
+        return model;
     }
 
     private void store(String project, Record before, Record after) {

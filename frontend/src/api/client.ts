@@ -1,3 +1,4 @@
+import type { OntologyBundle, OntologyPublication, PublicationCommand, PublicationPage } from '../domain/ontology'
 import type { TacitState, TacitReply, TacitCommand, TacitReviewPage } from '../domain/tacit'
 export type Project = { id: string; name: string; description: string; status: string; createdAt: string; updatedAt: string }
 export type AuthUser = { username: string }
@@ -98,7 +99,19 @@ async function request<T>(url: string, options: RequestInit = {}, timeoutMs = 0)
   }
 }
 
+function publicationPath(projectId: string, publicationId?: string) {
+  const base = `/api/projects/${encodeURIComponent(projectId)}/tacit/ontology/publications`
+  return publicationId ? `${base}/${encodeURIComponent(publicationId)}` : base
+}
+
 export const api = {
+  ontologyPublications: (projectId: string, before?: string) => request<PublicationPage>(
+    publicationPath(projectId) + (before ? `?before=${encodeURIComponent(before)}` : '')),
+  publishOntology: (projectId: string, command: PublicationCommand) => request<OntologyPublication>(
+    publicationPath(projectId), { method: 'POST', body: JSON.stringify(command) }),
+  retryOntologyPublication: (projectId: string, id: string, revision: number) => request<OntologyPublication>(
+    publicationPath(projectId, id) + '/retry', { method: 'POST', body: JSON.stringify({ expected_revision: revision }) }),
+  ontologyPublicationSnapshot: (projectId: string, id: string) => request<OntologyBundle>(publicationPath(projectId, id) + '/snapshot'),
   tacitWorkspace: (projectId: string) => request<TacitState>(`/api/projects/${encodeURIComponent(projectId)}/tacit`),
   tacitReviewSnapshot: (projectId:string, revision:number) => request<{target:unknown;sources:unknown}>(`/api/projects/${encodeURIComponent(projectId)}/tacit/reviews/${revision}`),
   tacitReviewHistory: (projectId:string, before?:number) => request<TacitReviewPage>(`/api/projects/${encodeURIComponent(projectId)}/tacit/reviews?limit=30${before === undefined ? '' : '&before_revision='+before}`),

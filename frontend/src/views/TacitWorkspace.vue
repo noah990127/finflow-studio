@@ -6,11 +6,12 @@ import { compactReads, label, newRequestId, type Dispatch, type RunBatch, type E
 import TacitEvidenceReview from '../components/tacit/TacitEvidenceReview.vue'
 import TacitSources from '../components/tacit/TacitSources.vue'
 import TacitLedger from '../components/tacit/TacitLedger.vue'
+import TacitOntology from '../components/tacit/TacitOntology.vue'
 import TacitArtifacts from '../components/tacit/TacitArtifacts.vue'
 
 const props = defineProps<{ projectId: string; resources: WorkspaceResource[] }>()
 defineEmits<{ upload: [] }>()
-const views = ['来源与范围', '业务台账', '成果与审核', '检索与对齐'] as const
+const views = ['来源与范围', '业务台账', '成果与审核', '检索与对齐', '本体模型'] as const
 const view = ref<typeof views[number]>('来源与范围')
 const state = shallowRef<TacitState | null>(null)
 const busy = ref(false), error = ref(''), feedback = ref(''), extracting = ref(false)
@@ -111,6 +112,7 @@ onBeforeUnmount(() => { active = false })
       <TacitSources v-if="view === '来源与范围'" :state="state" :resources="resources" :run-batch="runBatch" :dispatch="dispatch" :busy="locked" @upload="$emit('upload')" @extracting="extracting = $event" />
       <TacitLedger v-else-if="view === '业务台账'" :state="state" :dispatch="dispatch" :busy="locked"/>
       <TacitEvidenceReview v-else-if="view === '检索与对齐'" :state="state" :dispatch="dispatch" :busy="locked"/>
+      <TacitOntology v-else-if="view === '本体模型'" :project-id="projectId" :state="state" :dispatch="dispatch" :busy="locked" @refresh="refresh"/>
       <TacitArtifacts v-else :run-batch="runBatch" :project-id="projectId" :state="state" :dispatch="dispatch" :busy="locked"/>
     </template>
     <p v-else-if="busy">正在读取项目台账…</p>

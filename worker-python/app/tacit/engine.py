@@ -228,6 +228,7 @@ def derive(state, action, payload, actor):
 
 
 async def execute(state, action, payload, catalog, actor):
+    previous = state
     state = new_state() | deepcopy(state)
     payload = deepcopy(payload)
     sources = sources_by_id(state, catalog)
@@ -353,7 +354,12 @@ async def execute(state, action, payload, catalog, actor):
         changed_spec(state)
     else:
         state["issues"] = issues_for(state, sources)
-        if action in {"edit_candidates", "check_candidates", "submit_candidates", "review_candidate_item",
+        if action == "build_ontology_model":
+            from .ontology_model import build_ontology_model
+            bundle = build_ontology_model(state, required_string(state, "_project_id"))
+            record(state, "ontology_model", bundle, "ready")
+            result = {"model_digest": bundle["digest"], "counts": bundle["counts"]}
+        elif action in {"edit_candidates", "check_candidates", "submit_candidates", "review_candidate_item",
                       "review_candidate", "propose_scenarios", "review_scenario", "validate_ontology"}:
             from .candidate_work import handle_candidate_action
             result = await handle_candidate_action(state, action, payload, sources, actor)
@@ -369,4 +375,10 @@ async def execute(state, action, payload, catalog, actor):
     sources = sources_by_id(state, catalog)
     sync_sources(state, sources)
     state["issues"] = issues_for(state, sources)
+    model = state["artifacts"].get("ontology_model")
+    if model and action != "build_ontology_model" and model.get("status") == "ready":
+        dependencies = ("flows", "candidates", "cqs", "scenarios", "alignments", "walkthrough")
+        if (state["spec"] != previous.get("spec") or state["source_versions"] != previous.get("source_versions")
+                or any(state["artifacts"].get(k) != previous.get("artifacts", {}).get(k) for k in dependencies)):
+            model["status"] = "stale"
     return {"state": state, "result": result}
