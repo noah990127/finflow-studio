@@ -14,6 +14,7 @@ from ..llm import llm
 from ..research import fetch_web, search_web
 from ..skills.loader import Skill, load_skills
 from .model_config import AgentModelConfig, custom_model
+from .tacit_instructions import TACIT_INSTRUCTIONS, tacit_task
 
 
 _AGENT_CHECKPOINTER = None
@@ -497,6 +498,8 @@ def _continuous_direct_tool_ids(request: ContinuousAgentRequest) -> set[str]:
         "resource.open", "resource.read", "knowledge.search", "knowledge.read",
         "source.verify", "source.add_verified", "deliverable.open",
     }
+    if tacit_task(request.capabilities):
+        return {item.id for item in request.capabilities if item.id.startswith("tacit.")}
     goal = request.goal.lower()
     category_hints = {
         "project.": ("项目",),
@@ -823,6 +826,8 @@ dataset.extract 会把网页 JSON/HTML 真正落为数据文件；后续 dataset
 不得继续使用原网页 resource_id。长任务应依据已执行动作数持续收敛，优先复用已有结果，避免重复读取或重复创建同一资源。
 dataset.transform 的 script 只能是单条只读 DuckDB SELECT/WITH SQL，输入表名固定为 source；不确定 SQL 时省略 script，只提供明确 requirements 让系统生成。
 用业务用户看得懂的中文，不暴露隐藏推理。"""
+    if tacit_task(request.capabilities):
+        instructions += "\n本轮为专业台账任务，以以下规则为准。\n" + TACIT_INSTRUCTIONS
     workbench_tools = build_workbench_tools(deps)
     agent = create_deep_agent(
         model=model,
@@ -882,6 +887,9 @@ dataset.transform 的 script 只能是单条只读 DuckDB SELECT/WITH SQL，输�
 
 
 def _continuous_instructions(request: ContinuousAgentRequest | None) -> str:
+    if request is not None and tacit_task(request.capabilities):
+        return "根据用户当前消息，使用实际提供的工作台工具完成目标。\n" + TACIT_INSTRUCTIONS
+
     contract = _continuous_task_contract(request.goal if request is not None else "")
     boundaries = []
     if contract["source_only"]:

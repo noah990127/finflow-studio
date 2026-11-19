@@ -1,0 +1,209 @@
+{
+  "format": 1,
+  "description": "合成评测标注。逐份文件抽取各自明确记载的数值；两份文件针对同一事项的冲突必须作为候选提交核对，先不裁决。已穷举列出的章节。",
+  "cases": {
+    "travel": {
+      "sections": [
+        "rules",
+        "gaps",
+        "alignments"
+      ],
+      "items": [
+        {
+          "id": "policy-5000",
+          "kind": "assert",
+          "sections": [
+            "rules"
+          ],
+          "statuses": [
+            "source_supported"
+          ],
+          "fields": {
+            "condition.comparator": [
+              "gte"
+            ],
+            "condition.value": [
+              5000
+            ],
+            "condition.unit": [
+              "元"
+            ],
+            "effective_from": [
+              "2026-03-01"
+            ],
+            "condition.operator": [
+              "predicate"
+            ],
+            "results": [
+              [
+                "须经财务经理审批"
+              ],
+              [
+                "经财务经理审批"
+              ],
+              [
+                "财务经理审批"
+              ]
+            ],
+            "exceptions": [
+              [
+                "紧急差旅可先登记后补签"
+              ],
+              [
+                "紧急差旅先登记后补签"
+              ]
+            ]
+          },
+          "spans": [
+            {
+              "source_id": "policy",
+              "text": "5000元须经财务经理审批，紧急差旅可先登记后补签"
+            }
+          ]
+        },
+        {
+          "id": "memo-8000",
+          "kind": "assert",
+          "sections": [
+            "rules"
+          ],
+          "statuses": [
+            "source_supported"
+          ],
+          "fields": {
+            "condition.comparator": [
+              "gte"
+            ],
+            "condition.value": [
+              8000
+            ],
+            "condition.unit": [
+              "元"
+            ],
+            "effective_from": [
+              "2026-03-01"
+            ],
+            "condition.operator": [
+              "predicate"
+            ],
+            "results": [
+              [
+                "须经财务经理审批"
+              ],
+              [
+                "经财务经理审批"
+              ],
+              [
+                "财务经理审批"
+              ]
+            ]
+          },
+          "spans": [
+            {
+              "source_id": "memo",
+              "text": "8000元才须经财务经理审批"
+            }
+          ]
+        },
+        {
+          "id": "precedence",
+          "kind": "abstain",
+          "sections": [
+            "alignments"
+          ],
+          "fields": {
+            "kind": [
+              "possible_conflict"
+            ],
+            "requires_reconciliation": [
+              true
+            ],
+            "different_fields.*": [
+              "condition"
+            ]
+          },
+          "spans": [
+            {
+              "source_id": "policy",
+              "text": "5000元须经财务经理审批"
+            },
+            {
+              "source_id": "memo",
+              "text": "8000元才须经财务经理审批"
+            }
+          ],
+          "statuses": [
+            "pending"
+          ]
+        },
+        {
+          "id": "time-unit",
+          "kind": "abstain",
+          "sections": [
+            "gaps"
+          ],
+          "fields": {
+            "question": [
+              "补签周期按自然日还是工作日？",
+              "紧急差旅补签的3个周期按自然日还是工作日计算？"
+            ]
+          },
+          "spans": [
+            {
+              "source_id": "casefile",
+              "text": "周期按自然日还是工作日尚未确定"
+            }
+          ]
+        }
+      ]
+    },
+    "stock": {
+      "sections": [
+        "rules",
+        "gaps",
+        "alignments"
+      ],
+      "items": [
+        {
+          "id": "stock-check",
+          "kind": "assert",
+          "sections": [
+            "rules"
+          ],
+          "fields": {
+            "condition.comparator": [
+              "gt"
+            ],
+            "condition.value": [
+              2
+            ],
+            "condition.unit": [
+              "件"
+            ],
+            "effective_from": [
+              "2026-05-01"
+            ],
+            "results": [
+              [
+                "交由库管复核"
+              ],
+              [
+                "库管复核"
+              ]
+            ],
+            "condition.operator": [
+              "predicate"
+            ]
+          },
+          "spans": [
+            {
+              "source_id": "inventory",
+              "text": "大于2件时交由库管复核，正好2件无需复核"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "corpus_digest": "7c6571d43bcaaaf625e81e85cbfd094d4d6610c854ba40319fb85a00a2f61f1a"
+}

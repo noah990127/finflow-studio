@@ -184,16 +184,26 @@ public class AssistantService {
                 List.copyOf(workspaceItems),
                 recentMessages(sessionId, session.projectId()));
         AssistantPlanner.PlannedWork plannedWork;
+        final TacitIntent intent;
         try {
-            if (execution.continuousAgentAvailable()) {
+            var intentPage = knowledgeFollowup(sessionId, request) ? "knowledge-extraction" : request.page();
+            intent = TacitAgentTask.mayConcernLedger(request.text(), intentPage)
+                    ? interruption.await(() -> planner.selectIntent(request.text(), intentPage, sessionId))
+                    : new TacitIntent(TacitAgentTask.OTHER, null);
+            if (intent.question() != null) {
+                plannedWork = planner.clarification(request.text(), intent.question());
+            } else if (execution.continuousAgentAvailable()) {
                 var agentStep = new PlanStep(UUID.randomUUID().toString(), 1, "agent.execute", "READ",
                         "自主处理任务", "Agent 会持续选择工具、检查结果并在必要时调整方式",
                         Map.of(), RiskLevel.READ_ONLY, false, "PENDING");
                 plannedWork = new AssistantPlanner.PlannedWork("正在持续处理这项任务", List.of(agentStep), true,
                         "我会结合当前工作区理解你想要的结果，连续执行所需操作，并在报告完成前检查真实产出。");
-            } else {
+            } else if (intent.stage() == TacitAgentTask.OTHER) {
                 plannedWork = interruption.await(() -> planner.plan(request.text(), request.page(), request.selection(), workspaceContext,
                         sessionId, executionPolicy.name()));
+            } else {
+                plannedWork = interruption.await(() -> planner.plan(request.text(), request.page(), request.selection(), workspaceContext,
+                        sessionId, executionPolicy.name(), intent.stage()));
             }
         } catch (CancellationException exception) {
             return interruptedResponse(sessionId, requestId, context, traceId);
@@ -212,7 +222,7 @@ public class AssistantService {
         }
         events.publish(sessionId, null, "agent.planning", Map.of(
                 "status", "completed", "progress", 18, "message", plannedWork.summary()));
-        var plan = savePlan(sessionId, context, request.text(), plannedWork, executionPolicy);
+        var plan = savePlan(sessionId, context, request.text(), plannedWork, executionPolicy, intent.stage());
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override public void afterCommit() {
                 interruption.committed(() -> execution.cancelPlan(plan.id()));
@@ -251,6 +261,17 @@ public class AssistantService {
             run = execution.start(sessionId, plan.id(), "auto-" + plan.id());
         }
         return new MessageResponse(sessionId, plannedWork.summary(), context, plan, run);
+    }
+
+    private boolean knowledgeFollowup(String sessionId, MessageRequest request) {
+        if ("knowledge-extraction".equals(request.page()) || !TacitAgentTask.continuation(request.text())) return false;
+        // A prior ledger turn identifies the topic of "continue", never its current write permission.
+        return jdbc.sql("""
+                select p.tacit_task, p.goal from assistant_plan p join assistant_context_snapshot c on c.id = p.context_snapshot_id
+                where p.session_id = :session and c.project_id = :project order by p.created_at desc limit 1
+                """).param("session", sessionId).param("project", request.projectId())
+                .query((rs, index) -> TacitAgentTask.stored(rs.getString("tacit_task"), rs.getString("goal")))
+                .optional().filter(stage -> stage != TacitAgentTask.OTHER).isPresent();
     }
 
     public void interruptRequest(String sessionId, String requestId) {
@@ -384,7 +405,7 @@ public class AssistantService {
     }
 
     private PlanResponse savePlan(String sessionId, ContextSnapshot context, String goal,
-                                  AssistantPlanner.PlannedWork plannedWork, ExecutionPolicy executionPolicy) {
+                                  AssistantPlanner.PlannedWork plannedWork, ExecutionPolicy executionPolicy, TacitAgentTask stage) {
         var id = UUID.randomUUID().toString();
         var steps = plannedWork.steps();
         var risk = steps.stream().map(PlanStep::risk).max(Comparator.comparing(Enum::ordinal))
@@ -395,6 +416,7 @@ public class AssistantService {
         var expiresAt = Instant.now().plus(30, ChronoUnit.MINUTES);
         var planHash = HashSupport.sha256(writeJson(Map.of(
                 "goal", goal,
+                "tacitTask", stage.name(),
                 "contextHash", context.contextHash(),
                 "steps", steps,
                 "version", 1
@@ -402,9 +424,9 @@ public class AssistantService {
         jdbc.sql("""
                 insert into assistant_plan(id, session_id, context_snapshot_id, goal, summary, version,
                     plan_hash, risk_level, status, affected_resources_json, expires_at, created_at,
-                    execution_mode, dynamic_agent)
+                    execution_mode, dynamic_agent, tacit_task)
                 values (:id, :sessionId, :contextId, :goal, :summary, 1, :planHash, :riskLevel,
-                    :status, :affected, :expiresAt, :createdAt, :executionMode, :dynamicAgent)
+                    :status, :affected, :expiresAt, :createdAt, :executionMode, :dynamicAgent, :tacitTask)
                 """)
                 .param("id", id)
                 .param("sessionId", sessionId)
@@ -419,6 +441,7 @@ public class AssistantService {
                 .param("createdAt", Instant.now())
                 .param("executionMode", executionPolicy.name())
                 .param("dynamicAgent", plannedWork.dynamic())
+                .param("tacitTask", stage.name())
                 .update();
         for (var step : steps) {
             jdbc.sql("""

@@ -181,3 +181,42 @@ async def test_timeout_cleans_up_child(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match='总执行时限'):
         _ = [event async for event in run_opencode_stream(req)]
     assert process in stopped
+
+
+def test_tacit_chat_uses_scoped_ledger_instructions_on_all_runtimes():
+    from app.agent.runtime import AgentCapability, _continuous_instructions
+    from app.agent.tacit_instructions import TACIT_INSTRUCTIONS
+    req = request()
+    req.goal = "只读讨论业务台账"
+    req.capabilities = [
+        AgentCapability(id="tacit.workspace", title="查看台账", description="查看",
+                        mode="READ", risk="READ_ONLY"),
+    ]
+    for prompt in (task_prompt(req), _continuous_instructions(req)):
+        assert TACIT_INSTRUCTIONS in prompt
+        assert "work.publish_implementation" not in prompt
+        assert "private-token" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_intent_inference_has_no_gateway_or_tools(tmp_path, monkeypatch):
+    from app.agent.opencode_runtime import TextInference
+    config = tmp_path / "provider.json"
+    config.write_text('{"provider": {}}')
+    monkeypatch.setattr(settings, "opencode_provider_config", str(config))
+    monkeypatch.setattr(settings, "opencode_model", "company/model")
+    monkeypatch.setattr("app.agent.opencode_runtime.shutil.which", lambda _: "/opencode")
+
+    async def spawn(*args, **kwargs):
+        if "--version" in args:
+            return FakeProcess(b"1.2.0\n")
+        runtime_config = json.loads(kwargs["env"]["OPENCODE_CONFIG_CONTENT"])
+        assert runtime_config["permission"] == {"*": "deny"}
+        assert runtime_config["mcp"] == {}
+        assert not (kwargs["cwd"] / "gateway.json").exists()
+        assert args[-1] == "classify"
+        return FakeProcess(b'{"type":"tool_use","part":{}}\n')
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+    with pytest.raises(RuntimeError, match="不允许工具调用"):
+        _ = [event async for event in run_opencode_stream(TextInference("classify"))]

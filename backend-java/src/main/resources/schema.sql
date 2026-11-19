@@ -68,6 +68,7 @@ create table if not exists assistant_plan (
 
 alter table assistant_plan add column if not exists execution_mode varchar(20) not null default 'APPROVAL';
 alter table assistant_plan add column if not exists dynamic_agent boolean not null default false;
+alter table assistant_plan add column if not exists tacit_task varchar(40);
 alter table assistant_plan alter column goal type text;
 
 create table if not exists assistant_plan_step (
@@ -583,4 +584,39 @@ create table if not exists browser_authorized_session (
     owner_id varchar(160) not null,
     grant_id varchar(64) not null,
     created_at timestamp with time zone not null
+);
+
+create table if not exists tacit_workspace (
+    project_id varchar(64) primary key references project(id),
+    revision bigint not null,
+    selected_json text not null,
+    source_stamp varchar(64) not null,
+    state_json text not null
+);
+
+create table if not exists tacit_command_receipt (
+    project_id varchar(64) not null references tacit_workspace(project_id),
+    request_id varchar(128) not null,
+    request_hash varchar(64) not null,
+    committed_revision bigint not null,
+    result_json text not null,
+    actor_id varchar(64) not null,
+    action varchar(40) not null,
+    created_at timestamp with time zone not null,
+    primary key (project_id, request_id)
+);
+
+create table if not exists tacit_review_event (
+    project_id varchar(64) not null references tacit_workspace(project_id),
+    revision bigint not null,
+    action varchar(40) not null,
+    target_id text not null,
+    target_digest varchar(64) not null,
+    target_json text not null,
+    sources_json text not null,
+    decision varchar(20) not null,
+    actor_id varchar(64) not null,
+    comment_text text not null,
+    created_at timestamp with time zone not null,
+    primary key (project_id, revision)
 );

@@ -45,14 +45,44 @@ public class AssistantPlanner {
 
     public PlannedWork plan(String goal, String page, Selection selection, WorkspaceContext context,
                             String sessionId, String executionMode) {
-        var agentPlan = planWithAgent(goal, page, selection, context, sessionId, executionMode);
-        if (agentPlan != null) return agentPlan;
-        return fallbackPlan(goal, page, selection, context);
+        var intent = selectIntent(goal, page, sessionId);
+        return intent.question() == null ? plan(goal, page, selection, context, sessionId, executionMode, intent.stage())
+                : clarification(goal, intent.question());
     }
 
-    private PlannedWork fallbackPlan(String goal, String page, Selection selection, WorkspaceContext context) {
+    TacitIntent selectIntent(String goal, String page, String sessionId) {
+        return TacitIntent.select(goal, page, () -> {
+            var request = new LinkedHashMap<String, Object>();
+            request.put("directive", TacitAgentTask.directiveText(goal));
+            if (models != null) {
+                var config = models.resolve(sessionId);
+                if (!config.isEmpty()) request.put("model_config", config);
+            }
+            return worker.tacitIntent(request);
+        });
+    }
+
+    PlannedWork clarification(String goal, String question) {
+        return new PlannedWork(question, List.of(step(1, "assistant.respond", "READ", "确认本轮任务",
+                "等待你指定希望处理的知识整理阶段", RiskLevel.READ_ONLY, mapOf("goal", goal, "prepared_answer", question))));
+    }
+
+    PlannedWork plan(String goal, String page, Selection selection, WorkspaceContext context,
+                     String sessionId, String executionMode, TacitAgentTask stage) {
+        var agentPlan = planWithAgent(goal, page, selection, context, sessionId, executionMode, stage);
+        if (agentPlan != null) return agentPlan;
+        return fallbackPlan(goal, page, selection, context, stage);
+    }
+
+    private PlannedWork fallbackPlan(String goal, String page, Selection selection, WorkspaceContext context, TacitAgentTask stage) {
         var text = goal == null ? "" : goal.trim();
         var normalized = text.toLowerCase(Locale.ROOT);
+        if (stage != TacitAgentTask.OTHER) {
+            var message = "当前 Agent 规划服务不可用。可在项目知识台账查看材料、调整草稿和继续操作。";
+            var reply = step(1, "assistant.respond", "READ", "说明知识整理进度", "保留原有台账", RiskLevel.READ_ONLY,
+                    mapOf("goal", text, "prepared_answer", message));
+            return new PlannedWork(message, List.of(reply));
+        }
         var steps = new ArrayList<PlanStep>();
         var resourceId = selection == null ? null : selection.resourceId();
         var formats = requestedFormats(normalized);
@@ -168,18 +198,18 @@ public class AssistantPlanner {
     }
 
     private PlannedWork planWithAgent(String goal, String page, Selection selection, WorkspaceContext context,
-                                      String sessionId, String executionMode) {
+                                      String sessionId, String executionMode, TacitAgentTask stage) {
         Map<String, Object> response;
         try {
             response = worker.planAgent(agentRequest(goal, page, selection, context, sessionId, executionMode,
-                    false, Map.of(), 0));
+                    false, Map.of(), 0, stage));
         } catch (RuntimeException exception) {
             if (Thread.currentThread().isInterrupted()) throw new java.util.concurrent.CancellationException();
             if (models != null && "CUSTOM".equals(models.get(sessionId).mode()))
                 throw new IllegalStateException("自定义模型请求失败，请检查连接、模型名称和工具调用支持；未切换到默认模型。");
             return null;
         }
-        var steps = parseAgentSteps(response, goal, page, context);
+        var steps = parseAgentSteps(response, goal, page, context, stage);
         if (steps.isEmpty() && Boolean.TRUE.equals(response.get("completed"))
                 && response.get("steps") instanceof List<?> rawSteps && rawSteps.isEmpty()
                 && response.get("summary") instanceof String answer && !answer.isBlank()) {
@@ -197,9 +227,16 @@ public class AssistantPlanner {
     public DynamicTurn continueAfterObservation(String goal, String page, WorkspaceContext context,
                                                  String sessionId, String executionMode,
                                                  Map<String, Object> observation, int completedActions) {
+        return continueAfterObservation(goal, page, context, sessionId, executionMode, observation, completedActions,
+                TacitAgentTask.from(goal));
+    }
+
+    DynamicTurn continueAfterObservation(String goal, String page, WorkspaceContext context, String sessionId,
+                                          String executionMode, Map<String, Object> observation, int completedActions,
+                                          TacitAgentTask stage) {
         var response = worker.planAgent(agentRequest(goal, page, null, context, sessionId, executionMode,
-                true, observation, completedActions));
-        var steps = parseAgentSteps(response, goal, page, context);
+                true, observation, completedActions, stage));
+        var steps = parseAgentSteps(response, goal, page, context, stage);
         var completed = Boolean.TRUE.equals(response.get("completed"))
                 && response.get("steps") instanceof List<?> rawSteps && rawSteps.isEmpty()
                 && response.get("summary") instanceof String answer && !answer.isBlank();
@@ -210,7 +247,7 @@ public class AssistantPlanner {
 
     private Map<String, Object> agentRequest(String goal, String page, Selection selection, WorkspaceContext context,
                                              String sessionId, String executionMode, boolean continuation,
-                                             Map<String, Object> observation, int completedActions) {
+                                             Map<String, Object> observation, int completedActions, TacitAgentTask stage) {
         var request = new LinkedHashMap<String, Object>();
         request.put("session_id", sessionId == null ? "" : sessionId);
         request.put("execution_mode", executionMode == null ? "APPROVAL" : executionMode);
@@ -222,7 +259,7 @@ public class AssistantPlanner {
                 "type", selection.type(), "resource_id", selection.resourceId(), "range", selection.range()));
         request.put("resources", context.resources());
         request.put("recent_messages", context.recentMessages());
-        request.put("capabilities", AssistantCapabilityRegistry.agentCatalog());
+        request.put("capabilities", stage.catalog());
         request.put("continuation", continuation);
         request.put("observation", observation == null ? Map.of() : observation);
         request.put("completed_actions", completedActions);
@@ -236,9 +273,9 @@ public class AssistantPlanner {
     public Map<String, Object> continuousRequest(String goal, String page, WorkspaceContext context,
                                                   String sessionId, String executionMode, String runId,
                                                   String gatewayUrl, String gatewayToken, boolean resume,
-                                                  int approvalCount) {
+                                                  int approvalCount, TacitAgentTask stage) {
         var request = agentRequest(goal, page, null, context, sessionId, executionMode,
-                false, Map.of(), 0);
+                false, Map.of(), 0, stage);
         request.put("run_id", runId);
         request.put("gateway_url", gatewayUrl);
         request.put("gateway_token", gatewayToken);
@@ -266,7 +303,7 @@ public class AssistantPlanner {
     private record AgentBudget(int maxToolCalls) { }
 
     private ArrayList<PlanStep> parseAgentSteps(Map<String, Object> response, String goal, String page,
-                                                 WorkspaceContext context) {
+                                                 WorkspaceContext context, TacitAgentTask stage) {
         var selectedSkills = response.get("selected_skills") instanceof List<?> values
                 ? values.stream().map(String::valueOf).filter(value -> !value.isBlank()).limit(4).toList()
                 : List.<String>of();
@@ -276,14 +313,16 @@ public class AssistantPlanner {
             if (!(item instanceof Map<?, ?> raw)) continue;
             var tool = String.valueOf(raw.get("tool"));
             var capability = AssistantCapabilityRegistry.find(tool).orElse(null);
-            if (capability == null) continue;
+            if (capability == null || !stage.permits(tool)) continue;
             var arguments = new LinkedHashMap<String, Object>();
             if (raw.get("arguments") instanceof Map<?, ?> values) {
                 values.forEach((key, value) -> arguments.put(String.valueOf(key), value));
             }
-            enrichArguments(arguments, goal, page, context);
-            secureArguments(tool, arguments, context);
-            if (!selectedSkills.isEmpty()) arguments.put("agent_skills", selectedSkills);
+            if (!TacitAgentTools.TOOLS.contains(tool)) {
+                enrichArguments(arguments, goal, page, context);
+                secureArguments(tool, arguments, context);
+                if (!selectedSkills.isEmpty()) arguments.put("agent_skills", selectedSkills);
+            }
             steps.add(step(1, tool, capability.mode(),
                     readable(raw.get("title"), capability.title(), 40),
                     readable(raw.get("description"), capability.description(), 120), capability.risk(), arguments));

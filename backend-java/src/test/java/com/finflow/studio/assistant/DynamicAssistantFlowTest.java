@@ -43,6 +43,42 @@ class DynamicAssistantFlowTest {
     @Autowired JdbcClient jdbc;
 
     @Test
+    void readsProjectLedgerThroughChatWithoutCreatingAWorkspaceRevision() throws Exception {
+        var project = projects.create("台账讨论", "只读讨论验证");
+        var session = json(postJson("/api/projects/" + project.id() + "/assistant/sessions", Map.of("title", "台账")));
+        var response = json(postJson("/api/assistant/sessions/" + session.get("id").asText() + "/messages", Map.of(
+                "projectId", project.id(), "text", "只读讨论业务知识台账", "page", "project-home",
+                "clientContextVersion", 1, "executionMode", "AUTO")));
+        var run = awaitStatus(response.get("run").get("id").asText(), "SUCCEEDED");
+        assertThat(run.get("status").asText()).isEqualTo("SUCCEEDED");
+        var plan = json(getJson("/api/assistant/plans/" + response.get("plan").get("id").asText()));
+        assertThat(plan.get("steps")).extracting(step -> step.get("tool").asText()).containsExactly("tacit.workspace");
+        assertThat(json(getJson("/api/projects/" + project.id() + "/tacit")).get("revision").asLong()).isZero();
+        var events = json(getJson("/api/assistant/sessions/" + session.get("id").asText() + "/event-history"));
+        assertThat(events).filteredOn(event -> "agent.observation".equals(event.get("type").asText()))
+                .anySatisfy(event -> assertThat(event.at("/payload/output/tacit/revision").asLong(-1)).isZero());
+    }
+
+    @Test
+    void ambiguousKnowledgeMessageHasReadOnlyClarificationAndFrozenScope() throws Exception {
+        var project = projects.create("意图澄清", "台账");
+        var session = json(postJson("/api/projects/" + project.id() + "/assistant/sessions", Map.of("title","台账")));
+        var response = json(postJson("/api/assistant/sessions/" + session.get("id").asText() + "/messages", Map.of(
+                "projectId", project.id(), "text", "继续", "page", "knowledge-extraction", "executionMode", "AUTO")));
+        assertThat(response.get("assistantMessage").asText()).contains("希望处理哪个阶段");
+        String planId = response.at("/plan/id").asText();
+        assertThat(jdbc.sql("select tacit_task from assistant_plan where id = :id").param("id",planId)
+                .query(String.class).single()).isEqualTo("DISCUSS");
+        assertThat(response.at("/plan/steps")).extracting(step -> step.get("tool").asText()).containsExactly("assistant.respond");
+        assertThat(awaitStatus(response.at("/run/id").asText(), "SUCCEEDED").get("status").asText()).isEqualTo("SUCCEEDED");
+        var followup = json(postJson("/api/assistant/sessions/" + session.get("id").asText() + "/messages", Map.of(
+                "projectId", project.id(), "text", "继续", "page", "project-home", "executionMode", "AUTO")));
+        assertThat(followup.get("assistantMessage").asText()).contains("希望处理哪个阶段");
+        assertThat(awaitStatus(followup.at("/run/id").asText(), "SUCCEEDED").get("status").asText()).isEqualTo("SUCCEEDED");
+        assertThat(json(getJson("/api/projects/" + project.id() + "/tacit")).get("revision").asLong()).isZero();
+    }
+
+    @Test
     void autoModeExecutesMultipleToolsAndReplansFromFreshWorkspaceState() throws Exception {
         var project = projects.create("动态 Auto", "多步执行测试");
         var session = json(postJson("/api/projects/" + project.id() + "/assistant/sessions", Map.of("title", "Auto")));
@@ -210,11 +246,28 @@ class DynamicAssistantFlowTest {
         WorkerClient scriptedWorkerClient() {
             return new WorkerClient("http://127.0.0.1:9") {
                 @Override
+                public Map<String,Object> tacitIntent(Map<String,Object> request) {
+                    assertThat(request).containsOnlyKeys("directive");
+                    assertThat(request.get("directive")).isEqualTo("继续");
+                    var result = new java.util.LinkedHashMap<String,Object>();
+                    result.put("mode","execute"); result.put("task_intent","build_ontology");
+                    result.put("reason","上一轮任务可能是修改候选"); result.put("question",null);
+                    return result;
+                }
+
+                @Override
                 @SuppressWarnings("unchecked")
                 public Map<String, Object> planAgent(Object value) {
                     var request = (Map<String, Object>) value;
                     var continuation = Boolean.TRUE.equals(request.get("continuation"));
                     var goal = String.valueOf(request.get("goal"));
+                    if (goal.equals("只读讨论业务知识台账")) {
+                        assertThat((List<Map<String,Object>>) request.get("capabilities"))
+                                .extracting(tool -> tool.get("id"))
+                                .doesNotContain("tacit.finalize", "folder.create", "work.update");
+                        if (!continuation) return action("tacit.workspace", "查看知识台账", "核对实际版本", Map.of());
+                        return Map.of("summary", "当前项目的知识台账为空", "completed", true, "steps", List.of());
+                    }
                     if (goal.contains("只读回答")) return Map.of("summary", "当前没有工作流。",
                             "public_summary", "你只需要工作流清单，当前项目目录已足够回答，不需要修改内容。",
                             "completed", true, "steps", List.of());

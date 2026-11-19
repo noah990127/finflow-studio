@@ -29,6 +29,9 @@ final class AssistantToolContracts {
         schema.put("properties", properties);
         schema.put("required", required(tool));
         schema.put("additionalProperties", false);
+        if ("tacit.edit_candidates".equals(tool)) schema.put("anyOf", List.of(Map.of("required", List.of("patches")),
+                Map.of("required", List.of("extensions")), Map.of("required", List.of("remove_ids"))));
+        if ("tacit.save_batch".equals(tool)) schema.put("anyOf", List.of(Map.of("required", List.of("items")), Map.of("required", List.of("scope"))));
         if ("browser.open".equals(tool)) schema.put("anyOf", List.of(Map.of("required", List.of("url")), Map.of("required", List.of("site"))));
         if ("resource.add".equals(tool)) schema.put("anyOf", List.of(Map.of("required", List.of("url")), Map.of("required", List.of("file_name", "content"))));
         if ("source.add_verified".equals(tool)) schema.put("anyOf", List.of(Map.of("required", List.of("url")), Map.of("required", List.of("sources"))));
@@ -56,6 +59,10 @@ final class AssistantToolContracts {
                 .orElseThrow(() -> new IllegalArgumentException("参数错误：工具 " + tool + " 未注册，请重新搜索工具"));
         validateObject(tool, arguments == null ? Map.of() : arguments, capability.inputSchema(), "参数");
         if (arguments == null) return;
+        if ("tacit.save_batch".equals(tool) && ("scope".equals(arguments.get("section"))
+                ? !arguments.containsKey("scope") || arguments.containsKey("items")
+                : !arguments.containsKey("items") || arguments.containsKey("scope")))
+            throw new IllegalArgumentException("范围节须单独提供 scope，条目节须单独提供 items");
         if ("browser.open".equals(tool) && arguments.containsKey("site") && arguments.containsKey("url"))
             throw new IllegalArgumentException("参数错误：site与url只需提供一个");
         if ("browser.act".equals(tool) && Set.of("fill", "select", "assert_text").contains(arguments.get("action"))) {
@@ -157,6 +164,15 @@ final class AssistantToolContracts {
 
     private static List<String> required(String tool) {
         return switch (tool) {
+            case "tacit.preview_source", "tacit.extract" -> List.of("expected_revision", "source_id", "offset");
+            case "tacit.read_clauses" -> List.of("expected_revision", "source_id");
+            case "tacit.read_fields" -> List.of("expected_revision", "table_id");
+            case "tacit.search_context" -> List.of("expected_revision", "query");
+            case "tacit.align_policies", "tacit.edit_candidates", "tacit.check_candidates", "tacit.submit_candidates",
+                    "tacit.propose_scenarios" -> List.of("expected_revision");
+            case "tacit.save_batch" -> List.of("expected_revision", "section");
+            case "tacit.finalize" -> List.of("expected_revision", "completion");
+            case "tacit.generate_flow", "tacit.build_candidate", "tacit.generate_cqs", "tacit.validate_ontology" -> List.of("expected_revision");
             case "browser.open" -> List.of();
             case "browser.observe", "browser.close", "browser.login", "browser.resume" -> List.of("session");
             case "browser.act" -> List.of("session", "action", "target");
@@ -213,6 +229,39 @@ final class AssistantToolContracts {
     }
 
     private static Map<String, Object> property(String tool, String name) {
+        if (tool.startsWith("tacit.")) {
+            if ("base_children_digest".equals(name)) return Map.of("type","object","properties",Map.of(),
+                    "additionalProperties", string("最近一次完整读取末页返回的 children_digest"),
+                    "description","以 table_id 或 source_id 为键，仅在替换完整字段或条款时使用。");
+            if ("page_size".equals(name)) return Map.of("type", "integer", "minimum", 1, "maximum", 6);
+            if ("limit".equals(name)) return Map.of("type", "integer", "minimum", 1,
+                    "maximum", "tacit.read_fields".equals(tool) ? 160 : "tacit.read_clauses".equals(tool) ? 20 : 100);
+            if ("section".equals(name) && "tacit.search_context".equals(tool))
+                return enumeration("检索范围", List.of("all", "assets", "cqs", "terminology", "ontology", "contract", "decisions"));
+            if ("remove_ids".equals(name)) return boundedArray(string("候选的稳定标识"), 1, 20);
+            if ("patches".equals(name) || "extensions".equals(name)) {
+                var fields = new LinkedHashMap<String,Object>();
+                for (var key : List.of("name","definition")) fields.put(key, string(key));
+                fields.put("evidence", boundedArray(object(Map.of()), 0, 100));
+                boolean patch = "patches".equals(name);
+                var required = patch ? List.of("candidate_id") : List.of("kind","name","process_id","key","definition","evidence");
+                for (var key : required) fields.putIfAbsent(key, string(key));
+                return boundedArray(Map.of("type","object","properties",fields,"required",required,"additionalProperties",false), 1, 20);
+            }
+            if ("expected_revision".equals(name)) return integer("最近一次实际查看的台账版本", 0);
+            if ("offset".equals(name)) return Map.of("type", "integer", "minimum", 0, "maximum", Integer.MAX_VALUE,
+                    "description", "首次为 0，后续使用上页返回的 next_offset");
+            if ("items".equals(name)) return boundedArray(object(Map.of()), 1, 5);
+            if ("scope".equals(name)) return object(Map.of());
+            if ("completion".equals(name)) return enumeration("报告状态", List.of("draft", "complete"));
+            if ("section".equals(name)) {
+                if ("tacit.save_batch".equals(tool)) return enumeration("待保存节", TacitAgentTools.SECTIONS);
+                var options = new java.util.ArrayList<>(TacitAgentTools.SECTIONS);
+                options.addAll(TacitAgentTools.ARTIFACTS);
+                options.addAll(List.of("catalog", "issues"));
+                return enumeration("需读取的节或产物", options);
+            }
+        }
         if (tool.startsWith("browser.")) {
             if ("human_login".equals(name)) return Map.of("type", "boolean", "default", true, "description", "默认先进入人工接管再加载网站；仅公开网页无需登录时传false。复用连接时不会重置页面或登录状态。");
             if ("frame".equals(name)) return Map.of("type", "integer", "minimum", 0, "maximum", 20);

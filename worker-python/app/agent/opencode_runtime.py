@@ -6,6 +6,7 @@ import shutil
 import signal
 import sys
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 from ..config import settings
@@ -35,6 +36,12 @@ def configured_providers(provider_config):
 def task_prompt(request):
     from .naming import RESOURCE_NAMING_POLICY
     from ..semantic_presentation import DESIGN_INSTRUCTIONS
+    from .tacit_instructions import TACIT_INSTRUCTIONS, tacit_task
+    if tacit_task(request.capabilities):
+        context = {"goal": request.goal, "project_id": request.project_id, "resume": request.resume,
+                   "observation": request.observation, "recent_messages": [m.model_dump() for m in request.recent_messages]}
+        return ("使用 finflow MCP catalog 和 execute 工具。用用户使用的语言回答。"
+                + TACIT_INSTRUCTIONS + "\n本轮上下文\n" + json.dumps(context, ensure_ascii=False))
     return RESOURCE_NAMING_POLICY + "\n" + DESIGN_INSTRUCTIONS + "\n" + """You are FinFlow's task agent. Work in the user's language.
 Use the finflow MCP catalog and execute tools to complete the goal. All project
 reads/writes must go through these tools. Do not invent resource IDs or results.
@@ -234,6 +241,16 @@ async def stop_process(process):
         await process.wait()
 
 
+@dataclass(frozen=True)
+class TextInference:
+    """A single text inference with no platform gateway or interactive permissions."""
+    prompt: str
+    model_config_override: None = None
+    timeout_seconds: int = 25
+    idle_timeout_seconds: int = 25
+    tool_timeout_seconds: int = 25
+
+
 async def run_opencode_stream(request):
     from .activity import ActivityWatch
     executable = shutil.which(settings.opencode_cli_path)
@@ -252,10 +269,15 @@ async def run_opencode_stream(request):
     providers = configured_providers(provider_config)
     with tempfile.TemporaryDirectory(prefix="finflow-opencode-") as directory:
         root = Path(directory)
-        request_path = root / "gateway.json"
-        request_path.write_text(request.model_dump_json(by_alias=True), encoding="utf-8")
-        request_path.chmod(0o600)
-        config = cli_config(Path(__file__).with_name("opencode_bridge.py"), request_path)
+        if isinstance(request, TextInference):
+            config = {"autoupdate": False, "share": "disabled", "permission": {"*": "deny"}, "mcp": {}}
+            prompt = request.prompt
+        else:
+            request_path = root / "gateway.json"
+            request_path.write_text(request.model_dump_json(by_alias=True), encoding="utf-8")
+            request_path.chmod(0o600)
+            config = cli_config(Path(__file__).with_name("opencode_bridge.py"), request_path)
+            prompt = task_prompt(request)
         config["provider"] = providers
         config["model"] = settings.opencode_model
         env = {key: value for key, value in os.environ.items() if key in {"PATH", "LANG", "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS"}}
@@ -271,7 +293,7 @@ async def run_opencode_stream(request):
         if not stdout.decode().strip().startswith("1."):
             raise RuntimeError("当前适配器仅支持 OpenCode v1；v2 协议不同，拒绝以错误权限配置启动")
         process = await asyncio.create_subprocess_exec(executable, "run", "--format", "json", "--model", settings.opencode_model,
-                    task_prompt(request), env=env, cwd=root, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
+                    prompt, env=env, cwd=root, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.DEVNULL, start_new_session=True, limit=4 * 1024 * 1024)
         content = []
         terminal = False
@@ -297,6 +319,8 @@ async def run_opencode_stream(request):
                         event = json.loads(line)
                     except ValueError:
                         continue
+                    if isinstance(request, TextInference) and event.get("type") == "tool_use":
+                        raise RuntimeError("意图识别不允许工具调用")
                     if event.get("type") == "error":
                         raise RuntimeError("OpenCode 执行失败，请检查管理员模型与运行时配置")
                     if event.get("type") in {"text", "tool_use", "step_start", "step_finish"}:
