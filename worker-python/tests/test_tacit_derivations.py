@@ -130,7 +130,7 @@ def test_boundary_replay_proves_only_the_path_and_checks_all_supplied_cases():
     assert "业务产出待独立核对" in result["modeling_gap_report"]
 
 
-@pytest.mark.parametrize("value", [None, {"value": 315, "unit": "VA"}, True, "315"])
+@pytest.mark.parametrize("value", [None, 315, {"value": 315, "unit": "VA"}, True, "315"])
 def test_missing_or_wrongly_typed_quantities_stay_unknown(value):
     assert evaluate(pred("lte"), {"容量": value}) is None
     assert evaluate(pred("lte"), {}) is None
@@ -194,9 +194,9 @@ def test_metering_fixture_demands_configuration_difficulty_and_applicability():
     multiple_transformers = {"operator": "all", "clauses": [
         pred("eq", field="电源数", value=1, unit="路"), pred("gte", field="变压器数", value=2, unit="台")]}
     high_branch = {"operator": "any", "clauses": [sources, multiple_transformers]}
-    assert evaluate(high_branch, dict(partial, 电源数=1)) is None
-    assert evaluate(high_branch, dict(partial, 电源数=1, 变压器数=2)) is True
-    assert evaluate(high_branch, dict(partial, 电源数=2)) is True
+    assert evaluate(high_branch, dict(partial, 电源数={"value": 1, "unit": "路"})) is None
+    assert evaluate(high_branch, dict(partial, 电源数={"value": 1, "unit": "路"}, 变压器数={"value": 2, "unit": "台"})) is True
+    assert evaluate(high_branch, dict(partial, 电源数={"value": 2, "unit": "路"})) is True
 
 
 def test_missing_field_mapping_remains_visible_without_synthesizing_a_default():

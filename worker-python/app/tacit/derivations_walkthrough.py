@@ -94,6 +94,9 @@ def evaluate(condition, inputs):
         if actual.get("unit", "") != condition.get("unit", ""):
             return None
         actual = actual["value"]
+    elif condition.get("unit") and comparison not in ("exists", "not_exists"):
+        # A bare value cannot establish whether a source used yuan, thousands or another unit.
+        return None
     if comparison in ("exists", "not_exists"):
         return (actual is not None) == (comparison == "exists")
     if actual is None or expected is None:

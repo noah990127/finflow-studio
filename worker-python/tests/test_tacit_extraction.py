@@ -99,7 +99,7 @@ async def test_policy_preserves_boundaries_configuration_and_case_links(monkeypa
                 "condition": {"operator": "predicate", "field": "容量", "comparator": "lte", "value": 315, "unit": "kVA"},
                 "results": ["纳入容量审查"], "exceptions": ["容量不能单独决定方案"]}
     cases = [{"case_id": "t" + str(value), "name": str(value) + "kVA 边界", "kind": "boundary", "rule_ids": ["r2"],
-              "inputs": {"容量": value}, "expected_outputs": {"纳入容量审查": result}, "status": "defined"}
+              "inputs": {"容量": {"value": value, "unit": "kVA"}}, "expected_outputs": {"纳入容量审查": result}, "status": "defined"}
              for value, result in [(315, True), (316, False)]]
     model = Model({"items": {"rules": [item_with_evidence(rule, quote_a), item_with_evidence(capacity, quote_b, "u2")],
                              "acceptance_cases": cases}, "excluded": []})
@@ -109,7 +109,7 @@ async def test_policy_preserves_boundaries_configuration_and_case_links(monkeypa
     by_name = {r["name"]: r for r in spec["rules"]}
     cond = by_name["核对电源配置"]["condition"]
     assert cond["operator"] == "any" and cond["clauses"][1]["operator"] == "all"
-    assert evaluate(cond, {"电源数": 1, "变压器数": 2}) is True
+    assert evaluate(cond, {"电源数": {"value": 1, "unit": "路"}, "变压器数": {"value": 2, "unit": "台"}}) is True
     assert evaluate(cond, {"容量": 200, "电压": 10}) is None
     limit = by_name["容量审查范围"]
     assert (limit["condition"]["comparator"], limit["condition"]["unit"]) == ("lte", "kVA")
