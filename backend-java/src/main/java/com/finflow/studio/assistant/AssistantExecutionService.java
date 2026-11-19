@@ -1238,7 +1238,9 @@ public class AssistantExecutionService {
                 "不执行", "不要执行", "先别执行", "无需执行", "只创建", "仅创建", "只保存", "仅保存",
                 "不要再跑", "别再跑", "不要跑", "先别跑", "不要重跑",
                 "do not run", "don't run")) return false;
-        if (containsAny(text, "运行", "执行", "重跑", "跑一下", "跑一遍", "试运行", "run")) return true;
+        if (containsAny(text, "运行", "重跑", "跑一下", "跑一遍", "试运行", "run")) return true;
+        if (text.contains("执行") && (containsAny(text, "工作流", "流程", "workflow")
+                || text.strip().matches("(?:请|现在|开始|直接|立即){0,3}执行(?:一下|一遍|它)?[。！!]?"))) return true;
         return explicitlyRequestsDeliverable(text);
     }
 

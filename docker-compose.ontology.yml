@@ -1,0 +1,15 @@
+services:
+  java-api:
+    environment:
+      FINFLOW_AUTO_ONTOLOGY_WORKER_SECRET: ${FINFLOW_AUTO_ONTOLOGY_WORKER_SECRET:?set the shared Java-worker secret}
+  python-worker:
+    environment:
+      FINFLOW_AUTO_ONTOLOGY_WORKER_SECRET: ${FINFLOW_AUTO_ONTOLOGY_WORKER_SECRET:?set the shared Java-worker secret}
+      FINFLOW_AUTO_ONTOLOGY_TARGETS_FILE: /run/finflow/ontology/targets.json
+    env_file:
+      - ${FINFLOW_AUTO_ONTOLOGY_ENV_FILE:?set the worker-only API key file}
+    volumes:
+      - type: bind
+        source: ${FINFLOW_AUTO_ONTOLOGY_CONFIG_DIR:?set the target configuration directory}
+        target: /run/finflow/ontology
+        read_only: true

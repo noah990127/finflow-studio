@@ -65,6 +65,7 @@ import json
 logger = logging.getLogger(__name__)
 
 from ..tacit.api import router as tacit_router
+from ..tacit.ontology_transport import router as ontology_router
 from ..tacit.intent_api import router as tacit_intent_router
 from ..fixed_work import FixedModelRequest, model_snapshot, execute_model
 
@@ -78,6 +79,7 @@ app = FastAPI(
 
 app.include_router(tacit_router)
 app.include_router(tacit_intent_router)
+app.include_router(ontology_router)
 
 
 @app.post("/v1/fixed-work/model-snapshot")

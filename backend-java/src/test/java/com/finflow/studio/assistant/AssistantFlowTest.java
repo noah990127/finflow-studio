@@ -294,7 +294,7 @@ class AssistantFlowTest {
         execution.executeStep(step("workflow.prepare", Map.of(
                 "project_id", project.id(), "name", "月度经营分析", "goal", "分析资料并输出12页PPT和HTML网页报告")), prepareEffects);
         var prepared = workflows.get(prepareEffects.get("workflowId").toString());
-        assertThat(prepared.name()).isEqualTo("月度经营分析工作流");
+        assertThat(prepared.name()).isEqualTo("月度经营分析");
         assertThat(prepared.description()).isEqualTo("分析资料并输出12页PPT和HTML网页报告");
         var outputNodes = prepared.nodes().stream()
                 .filter(node -> node.type() == NodeType.DELIVERABLE)
@@ -371,7 +371,7 @@ class AssistantFlowTest {
 
         var workflow = workflows.get(effects.get("workflowId").toString());
         assertThat(effects).containsEntry("workflowPlanningMode", "deep-agent-spec");
-        assertThat(workflow.name()).isEqualTo("事件舆情动态分析工作流");
+        assertThat(workflow.name()).isEqualTo("事件舆情动态分析");
         assertThat(workflow.nodes()).extracting(NodeDefinition::name)
                 .containsExactlyInAnyOrder("核验官方信息", "观察媒体讨论", "交叉核验并分析", "生成管理简报");
         var analysis = workflow.nodes().stream().filter(node -> "交叉核验并分析".equals(node.name())).findFirst().orElseThrow();

@@ -20,6 +20,7 @@
 | [Python Worker](worker-python/README.md) | CLI 运行时、搜索、文档与测试 |
 | [浏览器执行](worker-python/app/browser_runner/README.md) | 授权边界、登录接管、编辑器和诊断 |
 | [PPT 渲染](worker-python/app/ppt_skills/README.md) | 内容规划、模板和格式限制 |
+| [审核台账与 NVIDIA Auto Ontology](docs/auto-ontology.md) | 原生模型构建、发布前校核、实例配置、读回与故障恢复 |
 | [部署指南](docs/Docker%20部署指南.md) | Docker、持久卷与离线部署 |
 | [演示案例](examples/cases/README.md) | 脱敏数据与历史兼容性样例 |
 

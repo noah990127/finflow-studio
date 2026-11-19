@@ -1,5 +1,6 @@
 package com.finflow.studio.assistant;
 
+import com.finflow.studio.knowledge.KnowledgeService;
 import com.finflow.studio.project.ProjectService;
 import com.finflow.studio.workflow.WorkflowDefinitionService;
 import com.finflow.studio.workflow.WorkflowModels.SaveRequest;
@@ -7,8 +8,16 @@ import com.finflow.studio.assistant.AssistantModels.*;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
+import org.springframework.mock.web.MockMultipartFile;
+
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+
 import static org.assertj.core.api.Assertions.*;
+import static org.awaitility.Awaitility.await;
+import static org.mockito.Mockito.*;
 
 @SpringBootTest(properties = {"spring.datasource.url=jdbc:h2:mem:batch-delete;MODE=PostgreSQL;DB_CLOSE_DELAY=-1",
         "finflow.storage.root=./target/batch-delete-storage", "finflow.ai.enabled=false", "finflow.worker.base-url=http://127.0.0.1:1"})
@@ -17,7 +26,7 @@ class AssistantBatchDeletionTest {
     @Autowired WorkflowDefinitionService workflows;
     @Autowired org.springframework.jdbc.core.simple.JdbcClient jdbc;
     @Autowired AssistantWorkspaceToolGateway gateway;
-    @Autowired com.finflow.studio.knowledge.KnowledgeService files;
+    @MockitoSpyBean KnowledgeService files;
 
     PlanStep step(String tool, Map<String, Object> args) {
         return new PlanStep(UUID.randomUUID().toString(), 1, tool, "WRITE", "delete", "delete", args,
@@ -86,10 +95,18 @@ class AssistantBatchDeletionTest {
     @Test void deletesFilesAndWorkflowsTogether() {
         var project = projects.create("mixed", "").id();
         create(project, "workflow");
-        files.upload(project, null, new org.springframework.mock.web.MockMultipartFile("file", "data.csv", "text/csv", "x\n1".getBytes()));
+        var file = files.upload(project, null, new MockMultipartFile("file", "data.csv", "text/csv", "x\n1".getBytes()));
+        await().until(() -> !"PROCESSING".equals(files.get(file.id()).status()));
         var items = snapshot(project);
         assertThat(items).hasSize(2);
+        // Commit parse metadata after the serializable transaction has read the confirmed inventory.
+        doAnswer(call -> {
+            CompletableFuture.runAsync(() -> jdbc.sql("update file_version set parse_message = 'parsed' where resource_id = :id")
+                    .param("id", file.id()).update()).get(5, TimeUnit.SECONDS);
+            return call.callRealMethod();
+        }).doCallRealMethod().when(files).delete(file.id());
         gateway.execute(step("resource.delete_batch", Map.of("project_id", project, "items", items)), new HashMap<>());
+        verify(files, times(2)).delete(file.id());
         assertThat(snapshot(project)).isEmpty();
     }
 }

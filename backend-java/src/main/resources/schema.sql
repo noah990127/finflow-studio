@@ -620,3 +620,22 @@ create table if not exists tacit_review_event (
     created_at timestamp with time zone not null,
     primary key (project_id, revision)
 );
+
+create table if not exists tacit_ontology_publication (
+    id varchar(36) primary key,
+    project_id varchar(64) not null references project(id),
+    request_id varchar(128) not null,
+    source_revision bigint not null,
+    model_digest varchar(64) not null,
+    target_id varchar(256) not null,
+    actor_id varchar(64) not null,
+    snapshot_json text not null,
+    status varchar(20) not null,
+    attempt integer not null,
+    result_json text not null,
+    created_at timestamp with time zone not null,
+    updated_at timestamp with time zone not null,
+    unique(project_id, request_id),
+    unique(project_id, target_id, model_digest)
+);
+create index if not exists idx_tacit_publication_history on tacit_ontology_publication(project_id,created_at,id);

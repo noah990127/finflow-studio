@@ -28,6 +28,7 @@ demo-services/
 prototype/
 docs/*
 !docs/Docker 部署指南.md
+!docs/auto-ontology.md
 
 /data/
 *.log

@@ -27,10 +27,10 @@ test('error details use the content column instead of the narrow icon column', (
 
 test('approval stays in the persistent composer, outside the scrolling conversation', () => {
   const source = readFileSync(new URL('../src/components/AssistantPanel.vue', import.meta.url), 'utf8')
-  const footer = source.slice(source.indexOf('<footer class="assistant-composer">'))
+  const footer = source.match(/<footer class="assistant-composer">([\s\S]*?)<\/footer>/)[1]
   assert.match(footer, /v-if="waitingConfirmation"/)
-  assert.match(footer, /@click="assistant.confirm"/)
-  assert.equal((source.match(/@click="assistant.confirm"/g) ?? []).length, 1)
+  assert.match(footer, /@click="assistant\.confirm\(hasBrowserAuthorization && rememberBrowserAuthorization\)"/)
+  assert.equal((source.match(/@click="assistant\.confirm\b/g) ?? []).length, 1)
   assert.match(footer, /assistant-approval-scope/)
   assert.match(footer, /step.description/)
 })

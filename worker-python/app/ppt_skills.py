@@ -90,8 +90,17 @@ def render(request: DeliverableRequest) -> bytes:
     slide_number = 2
     for section_index, section in enumerate(request.sections, start=1):
         points = _content_points(section)
-        groups = list(_chunks(points, 3 if valid_chart(section.chart) else 4))
-        for page_index, group in enumerate(groups, start=1):
+        layout = section.layout
+        if layout == "auto" and (section_index == 1 or any(
+                word in section.heading for word in ("摘要", "总体", "核心结论"))):
+            layout = "statement"
+        capacity = 4
+        if valid_chart(section.chart):
+            capacity = 3
+        elif layout == "statement" and all(len(point) <= 36 for point in points):
+            # Four short supporting points fit beside the summary's lead.
+            capacity = 5
+        for page_index, group in enumerate(_chunks(points, capacity), start=1):
             slide = deck.slides.add_slide(deck.slide_layouts[6])
             _background(slide, PAPER)
             heading = section.heading if page_index == 1 else f"{section.heading}（续）"
@@ -100,12 +109,12 @@ def render(request: DeliverableRequest) -> bytes:
                   min_size=22, single_line=True)
             if valid_chart(section.chart):
                 _chart_layout(slide, section.chart, group)
-            elif section.layout in {"process", "timeline"} and section.core_message:
+            elif layout in {"process", "timeline"} and section.core_message:
                 _text(slide, section.core_message, 0.98, 1.66, 11.2, 0.62, 18, INK, min_size=15)
                 steps = [point for point in group if _semantic_key(point) != _semantic_key(section.core_message)]
-                _render_content(slide, heading, steps, section_index, section.layout)
+                _render_content(slide, heading, steps, section_index, layout)
             else:
-                _render_content(slide, heading, group, section_index, section.layout)
+                _render_content(slide, heading, group, section_index, layout)
             refs = inline_sources(request, section.refs)
             if refs and not (valid_chart(section.chart) and section.chart.source_ref):
                 _text(slide, "参考：" + refs[:180], 0.95, 6.93, 10.55, 0.2, 8, MUTED,
@@ -181,8 +190,7 @@ def _render_content(slide, heading: str, points: List[str], section_index: int,
                     requested_layout: str = "auto") -> None:
     layout = requested_layout
     normalized = heading.lower()
-    if layout == "statement" or (layout == "auto" and
-            (section_index == 1 or any(keyword in normalized for keyword in ("摘要", "总体", "核心结论")))):
+    if layout == "statement":
         _summary_layout(slide, points)
     elif layout == "process" or (layout == "auto" and
             any(keyword in normalized for keyword in ("行动", "责任", "闭环", "计划", "要求"))):
@@ -257,14 +265,15 @@ def _summary_layout(slide, points: List[str]) -> None:
     _text(slide, lead, 1.32, 2.48, 5.6, 2.2, 25, INK, bold=True, min_size=19,
           vertical=MSO_ANCHOR.MIDDLE)
     _rect(slide, 1.34, 5.24, 1.34, 0.07, RED)
-    supporting = points[1:4] or [lead]
+    supporting = points[1:] or [lead]
+    row_spacing = min(1.52, 4.6 / len(supporting))
     for index, point in enumerate(supporting):
-        top = 1.83 + index * 1.52
+        top = 1.83 + index * row_spacing
         _text(slide, f"0{index + 1}", 7.38, top + 0.04, 0.42, 0.28, 11, RED, bold=True,
               min_size=11, single_line=True)
         _text(slide, point, 8.05, top, 4.0, 0.92, 16, INK, min_size=14)
         if index < len(supporting) - 1:
-            _rect(slide, 7.38, top + 1.12, 4.68, 0.015, LINE)
+            _rect(slide, 7.38, top + min(1.12, row_spacing - 0.12), 4.68, 0.015, LINE)
 
 
 def _metric_layout(slide, points: List[str]) -> None:

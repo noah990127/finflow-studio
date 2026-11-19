@@ -18,7 +18,7 @@ export type TacitState = {
   interviews?: Record<string,{turns:number;last_asked_at:string;no_increment_count:number;paused:boolean}>
   coverage?: Record<string, number[][]>
   extraction?: Record<string, { version: string; next_offset: number | null }>
-  artifacts: Partial<Record<'business_report' | 'gap_report' | 'flows' | 'candidates' | 'cqs' | 'scenarios' | 'alignments' | 'walkthrough', TacitArtifact>>
+  artifacts: Partial<Record<'business_report' | 'gap_report' | 'flows' | 'candidates' | 'cqs' | 'scenarios' | 'alignments' | 'walkthrough' | 'ontology_model', TacitArtifact>>
 }
 export type TacitCommand = { action: string; expected_revision: number; request_id: string; payload: Entry; compact?: boolean }
 export type TacitReply = { workspace: TacitState | Pick<TacitState,'revision'>; result: Entry }

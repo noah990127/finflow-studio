@@ -3,13 +3,13 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
 const source = path => readFileSync(new URL(`../src/${path}`, import.meta.url), 'utf8')
-test('review is blocked while document is dirty, loading or on another version', () => {
+test('a changed stage output opens the exact referenced version and keeps the current preview separate', () => {
   const work = source('components/AgentWorkOverview.vue')
-  assert.match(work, /documentState\.value\.dirty/)
-  assert.match(work, /documentState\.value\.loading/)
-  assert.match(work, /documentState\.value\.version !== selectedRef\.value\?\.version/)
-  assert.match(work, /if \(reviewBlocked\.value\) return/)
-  assert.match(work, /watch\(\[\(\) => selectedRef/)
+  const stale = work.match(/<section v-if="selected\.stale"[\s\S]*?<\/section>/)[0]
+  assert.match(stale, /<NativeDocument[^>]+:resource-id="selectedRef\.resourceId"[^>]+:requested-version="selectedRef\.version"/)
+  assert.match(stale, /@click="emit\('openResource', selectedRef\.resourceId\)">查看当前版本/)
+  assert.doesNotMatch(stale, /<ResourceWorkbench/)
+  assert.match(work, /v-else-if="selected\.missing"[\s\S]*?v-else-if="selected\.resource"[\s\S]*?<ResourceWorkbench[^>]+:resource="selected\.resource"/)
 })
 test('historical documents cannot save or restore current drafts', () => {
   const doc = source('components/NativeDocument.vue')

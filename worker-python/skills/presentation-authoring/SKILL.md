@@ -38,6 +38,10 @@ Technical validation is not aesthetic approval. Never report a quality score or 
 review without inspecting the output. When rendering reports a defect, repair the specific
 design and re-execute before claiming completion; do not silently downgrade to a text list.
 
+## Human Confirmation Boundary
+Follow the active Auto or Approval mode when creating, replacing, exporting or sharing a deck.
+Planning, inspecting the output and checking its contents are read-only.
+
 ## Sources And Handoff
 Research/external claims need real source records. Internal plans do not need fake evidence.
 Keep provenance in notes; do not force a visible evidence box on every page.

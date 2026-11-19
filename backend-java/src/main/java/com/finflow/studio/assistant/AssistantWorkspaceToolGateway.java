@@ -25,11 +25,15 @@ import com.finflow.studio.workspace.WorkspaceFileClassifier;
 import com.finflow.studio.workspace.WorkspaceModels.FolderRequest;
 import com.finflow.studio.workspace.WorkspaceModels.Resource;
 import com.finflow.studio.workspace.WorkspaceResourceService;
+import org.springframework.core.retry.RetryPolicy;
+import org.springframework.core.retry.RetryTemplate;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -60,6 +64,8 @@ public class AssistantWorkspaceToolGateway {
             "deliverable.open", "deliverable.edit", "deliverable.export", "deliverable.delete"
     );
 
+    private final RetryTemplate deletionRetry = new RetryTemplate(RetryPolicy.builder()
+            .includes(PessimisticLockingFailureException.class).maxRetries(2).delay(Duration.ofMillis(25)).build());
     private final JdbcClient jdbc;
     private final ProjectService projects;
     private final WorkspaceResourceService workspace;
@@ -521,7 +527,8 @@ public class AssistantWorkspaceToolGateway {
     }
 
     private String deleteBatch(PlanStep step, Map<String, Object> effects) {
-        var deleted = deletionTransaction.execute(status -> {
+        // A parser or editor can commit after validation. Retry the whole transaction against the original preview.
+        var deleted = deletionRetry.invoke(() -> deletionTransaction.execute(status -> {
             var items = validateDeletion(step.arguments());
             var projectId = required(step, "project_id", "项目");
             // URL nodes must be removed before their owning workflows disappear.
@@ -532,7 +539,7 @@ public class AssistantWorkspaceToolGateway {
             if (items.stream().anyMatch(i -> remaining.contains(i.get("resource_id"))))
                 throw new IllegalStateException("批量删除校验失败，已回滚");
             return items;
-        });
+        }));
         effects.put("deletionResult", Map.of("deleted", deleted, "count", deleted.size(), "verified", true));
         effects.put("uiAction", Map.of("type", "REFRESH_WORKSPACE", "projectId", required(step, "project_id", "项目")));
         return "已批量删除并验证 " + deleted.size() + " 项；未删除清单之外的任何内容";

@@ -3,6 +3,7 @@ import json
 import math
 import re
 import sys
+from functools import cache
 from html import escape
 from pathlib import Path
 from typing import Iterable, List, Optional
@@ -24,7 +25,8 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+from reportlab.pdfbase.ttfonts import TTFError, TTFont
 from reportlab.platypus import Image as ReportLabImage, ListFlowable, ListItem, PageBreak, Paragraph, SimpleDocTemplate, Spacer
 
 from .charting import add_native_ppt_chart, chart_png, normalize_ppt_chart_ids, valid_chart
@@ -1049,20 +1051,28 @@ def _format_refs(section: DeliverableSection) -> str:
     return "；".join(values)
 
 
+@cache
 def _pdf_font() -> str:
     name = "FinBtpCJK"
     if name in pdfmetrics.getRegisteredFontNames():
         return name
     candidates = [
         Path("/System/Library/Fonts/Supplemental/Arial Unicode.ttf"),
-        Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
         Path("/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc"),
+        Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
     ]
     for candidate in candidates:
         if candidate.exists():
-            pdfmetrics.registerFont(TTFont(name, str(candidate)))
+            try:
+                font = TTFont(name, str(candidate))
+            except TTFError:
+                # Some CJK collections contain PostScript outlines, which TTFont cannot embed.
+                continue
+            pdfmetrics.registerFont(font)
             return name
-    return "Helvetica"
+    fallback = UnicodeCIDFont("STSong-Light")
+    pdfmetrics.registerFont(fallback)
+    return fallback.fontName
 
 
 def _pdf_page(canvas, document) -> None:
