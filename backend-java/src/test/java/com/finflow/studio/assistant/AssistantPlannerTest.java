@@ -10,6 +10,15 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 class AssistantPlannerTest {
 
+    @Test void preservesAgentProjectTitleInsteadOfRewritingItAsAUserRequest() {
+        var planner = new AssistantPlanner(new WorkerClient("http://127.0.0.1:9"));
+        var args = new java.util.LinkedHashMap<String, Object>(Map.of("project_name", "进口猫咪冻干质量安全评估", "topic", "完整需求"));
+        var context = new AssistantPlanner.WorkspaceContext("p", "项目", 0, 0, 0, false, null, null, null, List.of(), List.of());
+        org.springframework.test.util.ReflectionTestUtils.invokeMethod(planner, "secureArguments", "project.create_workspace", args, context);
+        assertThat(args.get("project_name")).isEqualTo("进口猫咪冻干质量安全评估");
+        assertThat(args.get("topic")).isEqualTo("完整需求");
+    }
+
     @Test
     void passesAutoModeAndNamedWorkspaceObjectsToTheAgent() {
         var captured = new AtomicReference<Map<String, Object>>();
@@ -33,6 +42,10 @@ class AssistantPlannerTest {
 
         assertThat(captured.get()).containsEntry("execution_mode", "AUTO");
         assertThat(captured.get().get("resources")).isEqualTo(context.resources());
+        assertThat((List<Map<String, Object>>) captured.get().get("capabilities"))
+                .extracting(item -> item.get("id"))
+                .contains("workflow.prepare", "workflow.run")
+                .doesNotContain("deliverable.create");
         assertThat(work.steps()).extracting(AssistantModels.PlanStep::tool)
                 .containsExactly("workflow.delete");
     }

@@ -10,7 +10,7 @@ import java.util.regex.Pattern;
 public final class WorkflowVariables {
     private WorkflowVariables() { }
     private static final Pattern TOKEN = Pattern.compile("\\{\\{#([^#{}]+)#}}", Pattern.UNICODE_CHARACTER_CLASS);
-    private static final Set<String> TEXT_FIELDS = Set.of("prompt", "generationPrompt", "instruction", "requirements", "query", "body", "instructions");
+    private static final Set<String> TEXT_FIELDS = Set.of("prompt", "generationPrompt", "instruction", "requirements", "query", "body", "instructions", "hint");
     private static final ObjectMapper JSON = new ObjectMapper();
 
     public record Field(String name, String type, String label) { }
@@ -18,16 +18,39 @@ public final class WorkflowVariables {
 
     public static List<Field> outputs(NodeType type) {
         var fields = new ArrayList<Field>();
-        var textual = Set.of(NodeType.AI_ANALYSIS, NodeType.AGENT_TASK, NodeType.FILE_INPUT,
+        var textual = Set.of(NodeType.MYSTERY, NodeType.AI_ANALYSIS, NodeType.AGENT_TASK, NodeType.FILE_INPUT,
                 NodeType.LINK_INPUT, NodeType.REF_SEARCH).contains(type);
         fields.add(new Field("output", textual ? "string" : "object", textual ? "正文内容" : "输出结果"));
         fields.add(new Field("sources", "array", "参考来源"));
         fields.add(new Field("refIds", "array", "来源编号"));
         switch (type) {
+            case MYSTERY -> {
+                fields.add(new Field("content", "string", "变形后的内容"));
+                fields.add(new Field("detectedKind", "string", "识别出的内容类型"));
+                fields.add(new Field("understanding", "string", "公开理解摘要"));
+                fields.add(new Field("inferredIntent", "string", "推测的用户意图"));
+                fields.add(new Field("outputKind", "string", "输出类型"));
+                fields.add(new Field("confidence", "number", "判断置信度"));
+                fields.add(new Field("assumptions", "array", "待确认假设"));
+                fields.add(new Field("workSteps", "array", "建议工作步骤"));
+                fields.add(new Field("suggestedNext", "string", "建议的下一步"));
+            }
             case AI_ANALYSIS, AGENT_TASK -> fields.add(new Field("analysis", "string", "分析正文"));
-            case FILE_INPUT -> { fields.add(new Field("fileId", "string", "文件 ID")); fields.add(new Field("version", "number", "资料版本")); }
+            case FILE_INPUT -> {
+                fields.add(new Field("fileId", "string", "文件 ID"));
+                fields.add(new Field("deliverableId", "string", "成果 ID"));
+                fields.add(new Field("name", "string", "来源名称"));
+                fields.add(new Field("format", "string", "成果格式"));
+                fields.add(new Field("version", "number", "资料版本"));
+            }
             case LINK_INPUT -> fields.add(new Field("url", "string", "网站地址"));
-            case REF_SEARCH -> fields.add(new Field("count", "number", "匹配数量"));
+            case REF_SEARCH -> {
+                fields.add(new Field("query", "string", "本次查找内容"));
+                fields.add(new Field("queryCompacted", "boolean", "是否整理过较长输入"));
+                fields.add(new Field("count", "number", "采用资料数量"));
+                fields.add(new Field("links", "array", "来源链接"));
+                fields.add(new Field("sourceSnapshots", "array", "保存的网页快照"));
+            }
             case DELIVERABLE, OUTPUT -> { fields.add(new Field("deliverableId", "string", "成果 ID")); fields.add(new Field("name", "string", "成果名称")); fields.add(new Field("format", "string", "成果格式")); fields.add(new Field("text", "string", "生成正文")); }
             case DATASET_INPUT, DATA_EXTRACT -> {
                 fields.add(new Field("extractJobId", "string", "数据集 ID"));
@@ -131,7 +154,8 @@ public final class WorkflowVariables {
             result.put("output", value);
         }
         if (!result.containsKey("output")) {
-            if (Set.of(NodeType.AI_ANALYSIS, NodeType.AGENT_TASK).contains(type)) result.put("output", raw.getOrDefault("analysis", ""));
+            if (type == NodeType.MYSTERY) result.put("output", raw.getOrDefault("content", ""));
+            else if (Set.of(NodeType.AI_ANALYSIS, NodeType.AGENT_TASK).contains(type)) result.put("output", raw.getOrDefault("analysis", ""));
             else if (Set.of(NodeType.FILE_INPUT, NodeType.LINK_INPUT, NodeType.REF_SEARCH).contains(type)) {
                 var parts = new ArrayList<String>();
                 if (raw.get("text") instanceof String text) parts.add(text);
@@ -149,6 +173,7 @@ public final class WorkflowVariables {
                 case "number" -> value instanceof Number;
                 case "array" -> value instanceof List<?>;
                 case "object" -> value instanceof Map<?, ?>;
+                case "boolean" -> value instanceof Boolean;
                 default -> false;
             };
             if (!valid) throw new IllegalArgumentException("节点输出类型不匹配：" + field.name() + " 应为 " + field.type());

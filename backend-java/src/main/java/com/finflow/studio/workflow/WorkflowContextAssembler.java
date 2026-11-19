@@ -18,7 +18,7 @@ import java.util.Set;
 
 @Service
 public class WorkflowContextAssembler {
-    static final int MAX_CONTEXT_CHARS = 180_000;
+    static final int MAX_CONTEXT_CHARS = 50_000;
     private static final int MAX_FILE_PREVIEW_BYTES = 300_000;
     private static final Set<String> TEXT_PREVIEW_EXTENSIONS = Set.of(
             "csv", "tsv", "txt", "md", "json", "jsonl", "xml", "html", "htm", "yaml", "yml", "sql");
@@ -35,6 +35,9 @@ public class WorkflowContextAssembler {
         var result = new StringBuilder();
         for (var output : values.values()) {
             var hasParsedText = false;
+            if (output.get("sampleReport") instanceof Map<?, ?> sampleReport) {
+                hasParsedText = appendSampleReport(result, sampleReport);
+            }
             for (var key : List.of("analysis", "summary", "text")) {
                 var value = Objects.toString(output.get(key), "").trim();
                 if (!value.isBlank()) {
@@ -153,6 +156,40 @@ public class WorkflowContextAssembler {
         } catch (Exception ignored) {
             // Dedicated file-processing nodes remain responsible for non-text files.
         }
+    }
+
+    private boolean appendSampleReport(StringBuilder result, Map<?, ?> report) {
+        var rows = list(report.get("rows"));
+        if (rows.isEmpty()) return false;
+        var columnNames = new java.util.ArrayList<String>();
+        for (var item : list(report.get("columns"))) {
+            if (item instanceof Map<?, ?> column) {
+                var name = Objects.toString(column.get("name"), "").trim();
+                if (!name.isBlank()) columnNames.add(name);
+            } else {
+                var name = Objects.toString(item, "").trim();
+                if (!name.isBlank()) columnNames.add(name);
+            }
+        }
+        if (columnNames.isEmpty() && rows.getFirst() instanceof Map<?, ?> first) {
+            first.keySet().forEach(key -> columnNames.add(Objects.toString(key)));
+        }
+        if (columnNames.isEmpty()) return false;
+        result.append("\n--- 数据加工结果样例（由工作流实际计算） ---\n")
+                .append(String.join(" | ", columnNames)).append('\n');
+        var count = 0;
+        for (var item : rows) {
+            if (count++ >= 100) break;
+            if (item instanceof Map<?, ?> row) {
+                result.append(columnNames.stream().map(name -> Objects.toString(row.get(name), ""))
+                        .collect(java.util.stream.Collectors.joining(" | "))).append('\n');
+            } else if (item instanceof List<?> row) {
+                result.append(row.stream().map(value -> Objects.toString(value, ""))
+                        .collect(java.util.stream.Collectors.joining(" | "))).append('\n');
+            }
+        }
+        result.append("样例行数：").append(rows.size()).append("；该样例来自已登记的加工结果文件。\n");
+        return true;
     }
 
     private List<?> list(Object value) {

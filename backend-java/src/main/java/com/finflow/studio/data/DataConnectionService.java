@@ -22,13 +22,20 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Properties;
 import java.util.UUID;
+import java.net.ConnectException;
+import java.net.NoRouteToHostException;
+import java.net.SocketTimeoutException;
+import java.net.UnknownHostException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import javax.net.ssl.SSLException;
 
 @Service
 public class DataConnectionService {
@@ -40,14 +47,17 @@ public class DataConnectionService {
     private final ObjectMapper objectMapper;
     private final ProjectService projects;
     private final SecretResolver secrets;
+    private final DataSecretStore encryptedSecrets;
     private final ReadOnlySqlValidator sqlValidator;
 
     public DataConnectionService(JdbcClient jdbc, ObjectMapper objectMapper, ProjectService projects,
-                                 SecretResolver secrets, ReadOnlySqlValidator sqlValidator) {
+                                 SecretResolver secrets, DataSecretStore encryptedSecrets,
+                                 ReadOnlySqlValidator sqlValidator) {
         this.jdbc = jdbc;
         this.objectMapper = objectMapper;
         this.projects = projects;
         this.secrets = secrets;
+        this.encryptedSecrets = encryptedSecrets;
         this.sqlValidator = sqlValidator;
         DriverManager.setLoginTimeout(15);
     }
@@ -55,9 +65,7 @@ public class DataConnectionService {
     public ConnectionResponse create(CreateConnectionRequest request) {
         projects.get(request.projectId());
         validateUrl(request.sourceType(), request.jdbcUrl());
-        if (request.secretRef() != null && !request.secretRef().isBlank() && !request.secretRef().startsWith("env:")) {
-            throw new IllegalArgumentException("只保存 env:变量名形式的密钥引用");
-        }
+        var secretRef = protectSecret(request.secretRef());
         var id = UUID.randomUUID().toString();
         var now = Instant.now();
         jdbc.sql("""
@@ -72,7 +80,7 @@ public class DataConnectionService {
                 .param("type", request.sourceType().name())
                 .param("url", request.jdbcUrl().trim())
                 .param("username", safe(request.username()))
-                .param("secretRef", safe(request.secretRef()))
+                .param("secretRef", secretRef)
                 .param("options", writeJson(request.options() == null ? Map.of() : request.options()))
                 .param("createdAt", now)
                 .param("updatedAt", now)
@@ -92,11 +100,9 @@ public class DataConnectionService {
     public ConnectionResponse update(String id, UpdateConnectionRequest request) {
         var current = get(id);
         validateUrl(request.sourceType(), request.jdbcUrl());
-        var secretRef = safe(request.secretRef());
-        if (secretRef.isBlank() || secretRef.equals("已配置")) secretRef = current.secretRef();
-        if (!secretRef.isBlank() && !secretRef.startsWith("env:")) {
-            throw new IllegalArgumentException("只保存 env:变量名形式的密钥引用");
-        }
+        var suppliedSecret = request.secretRef() == null ? "" : request.secretRef();
+        var secretRef = suppliedSecret.isBlank() || suppliedSecret.equals("已配置")
+                ? current.secretRef() : protectSecret(suppliedSecret);
         var options = new LinkedHashMap<String, String>();
         if (request.options() != null) options.putAll(request.options());
         options.replaceAll((key, value) -> isSensitiveOption(key) && "已配置".equals(value)
@@ -154,7 +160,7 @@ public class DataConnectionService {
             updateTest(id, "READY", response.message());
             return response;
         } catch (Exception exception) {
-            var message = sanitize(exception.getMessage());
+            var message = diagnoseConnectionFailure(exception);
             updateTest(id, "FAILED", message);
             return new TestConnectionResponse(false, "", "", Duration.between(started, Instant.now()).toMillis(), message);
         }
@@ -431,6 +437,22 @@ public class DataConnectionService {
         if (url.contains("\n") || url.contains("\r") || url.length() > 2000) {
             throw new IllegalArgumentException("连接地址格式不正确");
         }
+        if (type != SourceType.HTTP_API && (url.matches("(?i).*//[^/@\\s]+:[^/@\\s]+@.*")
+                || url.matches("(?i).*[?&](password|pwd)=[^&]*.*"))) {
+            throw new IllegalArgumentException("连接地址中不能包含密码，请在密码框中填写");
+        }
+    }
+
+    private String protectSecret(String value) {
+        if (value == null || value.isBlank()) return "";
+        if (value.startsWith("env:")) return value.trim();
+        if (value.startsWith(DataSecretStore.PREFIX)) {
+            throw new IllegalArgumentException("请填写密码原文，不要粘贴平台密文");
+        }
+        if (value.length() > 4096 || value.indexOf('\r') >= 0 || value.indexOf('\n') >= 0 || value.indexOf('\0') >= 0) {
+            throw new IllegalArgumentException("密码格式不正确，最多支持 4096 个字符且不能包含换行");
+        }
+        return encryptedSecrets.encrypt(value);
     }
 
     String resolveSecret(ConnectionResponse definition) {
@@ -451,7 +473,7 @@ public class DataConnectionService {
             return new TestConnectionResponse(success, "HTTP API", "HTTP/" + response.version(),
                     Duration.between(started, Instant.now()).toMillis(), message);
         } catch (Exception exception) {
-            var message = sanitize(exception.getMessage());
+            var message = diagnoseConnectionFailure(exception);
             updateTest(definition.id(), "FAILED", message);
             return new TestConnectionResponse(false, "HTTP API", "", Duration.between(started, Instant.now()).toMillis(), message);
         }
@@ -518,8 +540,99 @@ public class DataConnectionService {
         if (message == null || message.isBlank()) {
             return "连接失败，请检查地址、账号和网络";
         }
-        var clean = message.replaceAll("(?i)(password|pwd|token|secret)=[^&;\\s]+", "$1=***");
+        var clean = sanitizeFailureText(message);
         return clean.substring(0, Math.min(clean.length(), 900));
+    }
+
+    static String diagnoseConnectionFailure(Throwable exception) {
+        var causes = new ArrayList<Throwable>();
+        var cursor = exception;
+        for (var depth = 0; cursor != null && depth < 12 && !causes.contains(cursor); depth++) {
+            causes.add(cursor);
+            cursor = cursor.getCause();
+        }
+        if (exception instanceof SQLException sqlException) {
+            var next = sqlException.getNextException();
+            for (var depth = 0; next != null && depth < 6 && !causes.contains(next); depth++) {
+                causes.add(next);
+                next = next.getNextException();
+            }
+        }
+
+        var details = causes.stream().map(Throwable::getMessage).filter(Objects::nonNull)
+                .map(DataConnectionService::sanitizeFailureText).filter(message -> !message.isBlank()).toList();
+        var combined = String.join(" | ", details).toLowerCase(Locale.ROOT);
+        var sqlState = causes.stream().filter(SQLException.class::isInstance).map(SQLException.class::cast)
+                .map(SQLException::getSQLState).filter(Objects::nonNull).findFirst().orElse("");
+
+        if (containsCause(causes, UnknownHostException.class)
+                || containsAny(combined, "unknown host", "name or service not known", "nodename nor servname",
+                "could not translate host name", "未知主机")) {
+            return "无法解析主机地址，请检查主机名或 DNS 配置";
+        }
+        if (containsCause(causes, SocketTimeoutException.class)
+                || containsAny(combined, "connect timed out", "connection timed out", "timeout", "timed out", "超时")) {
+            return "连接超时，请检查网络、防火墙、访问白名单和端口";
+        }
+        if (containsCause(causes, NoRouteToHostException.class)
+                || containsAny(combined, "no route to host", "network is unreachable")) {
+            return "无法到达目标主机，请检查网络路由、VPN 或内网访问权限";
+        }
+        if (containsCause(causes, ConnectException.class)
+                || containsAny(combined, "connection refused", "connect refused", "连接被拒绝")) {
+            return "目标主机拒绝连接，请检查主机地址、端口以及数据库服务是否已启动";
+        }
+        if (containsAny(combined, "no pg_hba.conf entry", "host is not allowed to connect")) {
+            return "数据库拒绝当前来源地址，请检查访问白名单、pg_hba.conf 或 SSL 设置";
+        }
+        if (sqlState.startsWith("28") || containsAny(combined, "password authentication failed",
+                "access denied for user", "authentication failed", "invalid authorization", "认证失败", "密码错误")) {
+            return "账号或密码不正确，或该账号没有登录权限";
+        }
+        if (sqlState.equals("3D000") || containsAny(combined, "database does not exist", "unknown database",
+                "数据库不存在", "未知数据库")) {
+            return "数据库不存在或当前账号无权访问，请检查数据库名";
+        }
+        if (sqlState.equals("53300") || containsAny(combined, "too many connections", "remaining connection slots")) {
+            return "数据库连接数已满，请稍后重试或联系数据库管理员";
+        }
+        if (containsCause(causes, SSLException.class)
+                || containsAny(combined, "ssl", "tls", "certificate", "handshake_failure")) {
+            return "SSL/TLS 建连失败，请检查证书、加密方式和连接参数";
+        }
+        if (containsAny(combined, "no suitable driver", "driver class not found")) {
+            return "缺少对应的数据库驱动，请检查数据源类型和服务部署";
+        }
+
+        var detail = details.stream().filter(message -> !isGenericConnectionMessage(message)).reduce((first, second) -> second)
+                .orElse("");
+        return detail.isBlank()
+                ? "连接未建立，请检查主机地址、端口、账号、数据库名和网络访问权限"
+                : "连接未建立：" + detail;
+    }
+
+    private static boolean containsCause(List<Throwable> causes, Class<? extends Throwable> type) {
+        return causes.stream().anyMatch(type::isInstance);
+    }
+
+    private static boolean containsAny(String value, String... candidates) {
+        for (var candidate : candidates) if (value.contains(candidate)) return true;
+        return false;
+    }
+
+    private static boolean isGenericConnectionMessage(String message) {
+        var value = message.toLowerCase(Locale.ROOT).trim();
+        return value.equals("尝试连线已失败。") || value.equals("尝试连线已失败")
+                || value.equals("the connection attempt failed.") || value.equals("the connection attempt failed")
+                || value.equals("connection failed") || value.equals("connect failed");
+    }
+
+    private static String sanitizeFailureText(String message) {
+        return message
+                .replaceAll("(?i)(password|pwd|token|secret|api[_-]?key)=([^&;\\s]+)", "$1=***")
+                .replaceAll("(?i)(jdbc:[a-z0-9]+://)[^/@\\s]+:[^/@\\s]+@", "$1***:***@")
+                .replaceAll("[\\r\\n\\t]+", " ")
+                .trim();
     }
 
     private String sanitizeUrl(String url) {

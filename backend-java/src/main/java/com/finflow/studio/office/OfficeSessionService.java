@@ -15,7 +15,10 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.reactive.function.client.WebClient;
 
 import java.net.URI;
+import java.nio.file.Path;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -23,6 +26,9 @@ import java.util.Map;
 
 @Service
 public class OfficeSessionService {
+    private static final String TOKEN_ISSUER = "finflow-office";
+    private static final String CONTENT_AUDIENCE = "onlyoffice-content";
+    private static final String CALLBACK_AUDIENCE = "onlyoffice-callback";
     private final JdbcClient jdbc;
     private final KnowledgeService knowledge;
     private final ExtractJobService extracts;
@@ -33,6 +39,7 @@ public class OfficeSessionService {
     private final String apiBaseUrl;
     private final String internalDocumentServerUrl;
     private final String jwtSecret;
+    private final long maxEditorFileBytes;
 
     public OfficeSessionService(JdbcClient jdbc, KnowledgeService knowledge, ExtractJobService extracts,
                                 DeliverableService deliverables,
@@ -40,7 +47,8 @@ public class OfficeSessionService {
                                 @Value("${finflow.office.document-server-url:http://localhost:8082}") String documentServerUrl,
                                 @Value("${finflow.office.api-base-url:http://java-api:8080}") String apiBaseUrl,
                                 @Value("${finflow.office.internal-document-server-url:http://onlyoffice-documentserver}") String internalDocumentServerUrl,
-                                @Value("${finflow.office.jwt-secret:}") String jwtSecret) {
+                                @Value("${finflow.office.jwt-secret:}") String jwtSecret,
+                                @Value("${finflow.office.max-editor-file-bytes:314572800}") long maxEditorFileBytes) {
         this.jdbc = jdbc;
         this.knowledge = knowledge;
         this.extracts = extracts;
@@ -52,6 +60,7 @@ public class OfficeSessionService {
         this.apiBaseUrl = stripSlash(apiBaseUrl);
         this.internalDocumentServerUrl = stripSlash(internalDocumentServerUrl);
         this.jwtSecret = jwtSecret;
+        this.maxEditorFileBytes = maxEditorFileBytes;
     }
 
     public SessionResponse createFileSession(String resourceId) {
@@ -60,9 +69,11 @@ public class OfficeSessionService {
 
     public SessionResponse createFileSession(String resourceId, String mode) {
         var file = knowledge.get(resourceId);
+        if (file.sizeBytes() > maxEditorFileBytes) return fileTooLarge(resourceId, file.sizeBytes());
+        var version = file.currentVersion();
         return createSession(resourceId, file.name(), file.currentVersion(),
-                apiBaseUrl + "/api/files/" + resourceId + "/download?version=" + file.currentVersion(),
-                apiBaseUrl + "/api/office/files/" + resourceId + "/callback?version=" + file.currentVersion(),
+                contentUrl("files", resourceId, version),
+                callbackUrl("files", resourceId, version),
                 resourceId, mode);
     }
 
@@ -98,10 +109,29 @@ public class OfficeSessionService {
         var item = deliverables.get(resourceId);
         var extension = item.format().equalsIgnoreCase("mermaid") ? "mmd" : item.format().toLowerCase(Locale.ROOT);
         if (extension.equals("mmd")) throw new IllegalArgumentException("Mermaid 请使用文本编辑器，不通过 ONLYOFFICE 编辑");
-        return createSession(resourceId, item.name() + "." + extension, item.currentVersion(),
-                apiBaseUrl + "/api/deliverables/" + resourceId + "/download?version=" + item.currentVersion(),
-                apiBaseUrl + "/api/office/deliverables/" + resourceId + "/callback?version=" + item.currentVersion(),
+        var version = item.currentVersion();
+        return createSession(resourceId, item.name() + "." + extension, version,
+                contentUrl("deliverables", resourceId, version),
+                callbackUrl("deliverables", resourceId, version),
                 resourceId, mode);
+    }
+
+    private String contentUrl(String kind, String id, int version) {
+        var token = issueAccessToken(CONTENT_AUDIENCE, kind, id, version);
+        return apiBaseUrl + "/api/office/" + kind + "/" + id + "/content?version=" + version + "&token=" + token;
+    }
+
+    private String callbackUrl(String kind, String id, int version) {
+        var token = issueAccessToken(CALLBACK_AUDIENCE, kind, id, version);
+        return apiBaseUrl + "/api/office/" + kind + "/" + id + "/callback?version=" + version + "&accessToken=" + token;
+    }
+
+    private String issueAccessToken(String audience, String kind, String id, int version) {
+        var now = Instant.now();
+        return JWT.create().withIssuer(TOKEN_ISSUER).withAudience(audience)
+                .withSubject(ActorContext.current()).withClaim("kind", kind).withClaim("resourceId", id)
+                .withClaim("version", version).withIssuedAt(Date.from(now))
+                .withExpiresAt(Date.from(now.plus(1, ChronoUnit.HOURS))).sign(Algorithm.HMAC256(jwtSecret));
     }
 
     private SessionResponse createSession(String id, String name, int version, String downloadUrl,
@@ -132,8 +162,46 @@ public class OfficeSessionService {
         config.put("editorConfig", editor);
         config.put("height", "100%");
         config.put("width", "100%");
-        config.put("token", JWT.create().withPayload(config).withIssuedAt(Instant.now()).sign(Algorithm.HMAC256(jwtSecret)));
+        config.put("token", JWT.create().withIssuer(TOKEN_ISSUER).withSubject(ActorContext.current())
+                .withClaim("purpose", "onlyoffice-editor").withPayload(config).withIssuedAt(Instant.now())
+                .sign(Algorithm.HMAC256(jwtSecret)));
         return new SessionResponse(true, documentServerUrl, workingResourceId, "", config);
+    }
+
+    public ContentResource fileContent(String resourceId, int version, String token) {
+        var actor = verifyAccessToken(token, CONTENT_AUDIENCE, "files", resourceId, version);
+        try (var ignored = ActorContext.bind(actor)) {
+            var file = knowledge.get(resourceId);
+            return new ContentResource(knowledge.filePath(resourceId, version), file.name(), file.mediaType());
+        }
+    }
+
+    public ContentResource deliverableContent(String resourceId, int version, String token) {
+        var actor = verifyAccessToken(token, CONTENT_AUDIENCE, "deliverables", resourceId, version);
+        try (var ignored = ActorContext.bind(actor)) {
+            var item = deliverables.get(resourceId);
+            var extension = item.format().equalsIgnoreCase("mermaid") ? "mmd" : item.format().toLowerCase(Locale.ROOT);
+            return new ContentResource(deliverables.path(resourceId, version), item.name() + "." + extension,
+                    deliverableMediaType(item.format()));
+        }
+    }
+
+    private String verifyAccessToken(String token, String audience, String kind, String resourceId, int version) {
+        if (token == null || token.isBlank()) throw new IllegalArgumentException("Office 文件地址缺少签名");
+        try {
+            var decoded = JWT.require(Algorithm.HMAC256(jwtSecret)).withIssuer(TOKEN_ISSUER)
+                    .withAudience(audience).build().verify(token);
+            if (!kind.equals(decoded.getClaim("kind").asString())
+                    || !resourceId.equals(decoded.getClaim("resourceId").asString())
+                    || !Integer.valueOf(version).equals(decoded.getClaim("version").asInt())) {
+                throw new IllegalArgumentException("Office 文件签名与请求不匹配");
+            }
+            return decoded.getSubject();
+        } catch (IllegalArgumentException exception) {
+            throw exception;
+        } catch (Exception exception) {
+            throw new IllegalArgumentException("Office 文件签名无效或已过期");
+        }
     }
 
     private String normalizeMode(String value) {
@@ -147,22 +215,39 @@ public class OfficeSessionService {
                 "ONLYOFFICE Document Server 尚未启动", Map.of());
     }
 
-    public Map<String, Integer> fileCallback(String resourceId, int editingVersion, CallbackRequest request,
-                                             String authorization) {
-        verifyToken(request.token(), authorization);
-        if (!shouldSave(request)) return Map.of("error", 0);
-        var file = knowledge.get(resourceId);
-        if (file.currentVersion() != editingVersion) throw new IllegalStateException("文件已有更新版本，本次编辑未覆盖最新内容");
-        knowledge.createGeneratedVersion(file.projectId(), file.id(), file.name(), file.mediaType(), downloadEdited(request.url()));
-        return Map.of("error", 0);
+    private SessionResponse fileTooLarge(String resourceId, long sizeBytes) {
+        return new SessionResponse(false, documentServerUrl, resourceId,
+                "文件大小 " + humanSize(sizeBytes) + "，超过在线 Office 编辑上限 "
+                        + humanSize(maxEditorFileBytes) + "，请使用大型表格模式", Map.of());
     }
 
-    public Map<String, Integer> deliverableCallback(String resourceId, int editingVersion, CallbackRequest request,
+    private String humanSize(long bytes) {
+        return String.format(Locale.ROOT, "%.1f MB", bytes / 1024d / 1024d);
+    }
+
+    public Map<String, Integer> fileCallback(String resourceId, int editingVersion, String accessToken, CallbackRequest request,
+                                             String authorization) {
+        verifyOnlyOfficeToken(request.token(), authorization);
+        var actor = verifyAccessToken(accessToken, CALLBACK_AUDIENCE, "files", resourceId, editingVersion);
+        try (var ignored = ActorContext.bind(actor)) {
+            if (!shouldSave(request)) return Map.of("error", 0);
+            var file = knowledge.get(resourceId);
+            if (file.currentVersion() != editingVersion) throw new IllegalStateException("文件已有更新版本，本次编辑未覆盖最新内容");
+            knowledge.createGeneratedVersion(file.projectId(), file.id(), file.name(), file.mediaType(), downloadEdited(request.url()));
+            return Map.of("error", 0);
+        }
+    }
+
+    public Map<String, Integer> deliverableCallback(String resourceId, int editingVersion, String accessToken,
+                                                    CallbackRequest request,
                                                     String authorization) {
-        verifyToken(request.token(), authorization);
-        if (!shouldSave(request)) return Map.of("error", 0);
-        deliverables.createEditedVersion(resourceId, editingVersion, downloadEdited(request.url()));
-        return Map.of("error", 0);
+        verifyOnlyOfficeToken(request.token(), authorization);
+        var actor = verifyAccessToken(accessToken, CALLBACK_AUDIENCE, "deliverables", resourceId, editingVersion);
+        try (var ignored = ActorContext.bind(actor)) {
+            if (!shouldSave(request)) return Map.of("error", 0);
+            deliverables.createEditedVersion(resourceId, editingVersion, downloadEdited(request.url()));
+            return Map.of("error", 0);
+        }
     }
 
     private boolean shouldSave(CallbackRequest request) {
@@ -181,13 +266,26 @@ public class OfficeSessionService {
         return bytes;
     }
 
-    private void verifyToken(String bodyToken, String authorization) {
+    private void verifyOnlyOfficeToken(String bodyToken, String authorization) {
         var token = bodyToken;
         if ((token == null || token.isBlank()) && authorization != null && authorization.startsWith("Bearer ")) token = authorization.substring(7);
         if (token == null || token.isBlank()) throw new IllegalArgumentException("ONLYOFFICE 回调缺少签名");
         try { JWT.require(Algorithm.HMAC256(jwtSecret)).build().verify(token); }
         catch (Exception exception) { throw new IllegalArgumentException("ONLYOFFICE 回调签名无效"); }
     }
+
+    private String deliverableMediaType(String format) {
+        return switch (format.toLowerCase(Locale.ROOT)) {
+            case "pptx" -> "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+            case "docx" -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+            case "xlsx" -> "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+            case "pdf" -> "application/pdf";
+            case "csv" -> "text/csv; charset=UTF-8";
+            default -> "application/octet-stream";
+        };
+    }
+
+    public record ContentResource(Path path, String name, String mediaType) { }
 
     private String extension(String name) {
         var dot = name.lastIndexOf('.');

@@ -6,6 +6,8 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
+import org.springframework.web.context.request.async.AsyncRequestTimeoutException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -31,6 +33,15 @@ public class ApiExceptionHandler {
         return response(HttpStatus.UNAUTHORIZED, "UNAUTHENTICATED", ex.getMessage());
     }
 
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    ResponseEntity<Map<String, Object>> uploadTooLarge(MaxUploadSizeExceededException ex) {
+        var limit = ex.getMaxUploadSize();
+        var message = limit > 0
+                ? "文件超过服务允许的上传大小（最大 " + readableBytes(limit) + "）"
+                : "文件超过服务允许的上传大小";
+        return response(HttpStatus.PAYLOAD_TOO_LARGE, "UPLOAD_TOO_LARGE", message);
+    }
+
     @ExceptionHandler(Exception.class)
     ResponseEntity<Map<String, Object>> unexpected(Exception ex) {
         log.error("Unexpected API error", ex);
@@ -51,11 +62,23 @@ public class ApiExceptionHandler {
         // The browser closed a completed or replaced SSE connection; no response can be written here.
     }
 
+    @ExceptionHandler(AsyncRequestTimeoutException.class)
+    void timedOutStream() {
+        // The SSE response has already timed out; writing a JSON error would corrupt text/event-stream.
+    }
+
     private ResponseEntity<Map<String, Object>> response(HttpStatus status, String code, String message) {
         return ResponseEntity.status(status).body(Map.of(
                 "code", code,
                 "message", message == null || message.isBlank() ? "请求没有完成" : message,
                 "timestamp", Instant.now().toString()
         ));
+    }
+
+    private String readableBytes(long bytes) {
+        var megabytes = bytes / (1024 * 1024);
+        return megabytes >= 1024 && megabytes % 1024 == 0
+                ? (megabytes / 1024) + " GB"
+                : megabytes + " MB";
     }
 }

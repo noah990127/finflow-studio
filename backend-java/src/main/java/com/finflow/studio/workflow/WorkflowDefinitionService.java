@@ -2,8 +2,10 @@ package com.finflow.studio.workflow;
 
 import com.finflow.studio.data.DataConnectionService;
 import com.finflow.studio.data.ExtractJobService;
+import com.finflow.studio.deliverable.DeliverableService;
 import com.finflow.studio.knowledge.KnowledgeService;
 import com.finflow.studio.project.ProjectService;
+import com.finflow.studio.skill.AnalysisSkillService;
 import com.finflow.studio.workflow.WorkflowModels.*;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
@@ -24,16 +26,21 @@ public class WorkflowDefinitionService {
     private final DataConnectionService connections;
     private final ExtractJobService extracts;
     private final KnowledgeService knowledge;
+    private final DeliverableService deliverables;
+    private final AnalysisSkillService analysisSkills;
 
     public WorkflowDefinitionService(JdbcClient jdbc, ObjectMapper objectMapper, ProjectService projects,
                                      DataConnectionService connections, ExtractJobService extracts,
-                                     KnowledgeService knowledge) {
+                                     KnowledgeService knowledge, DeliverableService deliverables,
+                                     AnalysisSkillService analysisSkills) {
         this.jdbc = jdbc;
         this.objectMapper = objectMapper;
         this.projects = projects;
         this.connections = connections;
         this.extracts = extracts;
         this.knowledge = knowledge;
+        this.deliverables = deliverables;
+        this.analysisSkills = analysisSkills;
     }
 
     @Transactional
@@ -42,8 +49,14 @@ public class WorkflowDefinitionService {
         return insert(projectId, request);
     }
 
-    @Transactional
     public WorkflowResponse getProjectWorkflow(String projectId) {
+        projects.get(projectId);
+        return findProjectWorkflow(projectId)
+                .orElseThrow(() -> new IllegalArgumentException("项目还没有工作流，请先创建工作流"));
+    }
+
+    @Transactional
+    public WorkflowResponse ensureProjectWorkflow(String projectId) {
         projects.get(projectId);
         return findProjectWorkflow(projectId).orElseGet(() -> insert(projectId,
                 new SaveRequest("主工作流", "项目中的资源通过这条工作流完成自动化处理", List.of(), List.of())));
@@ -204,6 +217,9 @@ public class WorkflowDefinitionService {
             if (node.type() == NodeType.AI_ANALYSIS && !incoming.contains(node.id())) {
                 issues.add(new ValidationIssue(node.id(), "请连接需要分析的资料或数据"));
             }
+            if (node.type() == NodeType.MYSTERY && !incoming.contains(node.id()) && blank(node.config(), "content")) {
+                issues.add(new ValidationIssue(node.id(), "请往神秘节点里丢入内容，或连接一个上游步骤"));
+            }
             if (node.type() == NodeType.DELIVERABLE && !incoming.contains(node.id()) && blank(node.config(), "body")) {
                 issues.add(new ValidationIssue(node.id(), "请连接一个上游步骤，或直接填写内容"));
             }
@@ -244,9 +260,17 @@ public class WorkflowDefinitionService {
         try {
             switch (node.type()) {
                 case FILE_INPUT -> {
-                    require(node, config, issues, "resourceId", "请选择已上传文件");
-                    if (!blank(config, "resourceId") && !knowledge.get(string(config, "resourceId")).projectId().equals(projectId))
+                    var resourceId = string(config, "resourceId");
+                    var deliverableId = string(config, "deliverableId");
+                    if (resourceId.isBlank() && deliverableId.isBlank()) {
+                        issues.add(new ValidationIssue(node.id(), "请选择项目文件或已有成果"));
+                    } else if (!resourceId.isBlank() && !deliverableId.isBlank()) {
+                        issues.add(new ValidationIssue(node.id(), "一个来源步骤只能选择一个项目文件或已有成果"));
+                    } else if (!resourceId.isBlank() && !knowledge.get(resourceId).projectId().equals(projectId)) {
                         issues.add(new ValidationIssue(node.id(), "文件不属于当前项目"));
+                    } else if (!deliverableId.isBlank() && !deliverables.get(deliverableId).projectId().equals(projectId)) {
+                        issues.add(new ValidationIssue(node.id(), "成果不属于当前项目"));
+                    }
                 }
                 case LINK_INPUT -> require(node, config, issues, "url", "请填写链接地址");
                 case DATASET_INPUT -> {
@@ -256,13 +280,15 @@ public class WorkflowDefinitionService {
                 }
                 case DATA_EXTRACT -> {
                     require(node, config, issues, "connectionId", "请选择数据连接");
-                    require(node, config, issues, "sql", "请填写只读查询或 GET");
+                    require(node, config, issues, "sql", "请选择数据表，或在高级设置中填写查询内容");
                     if (!blank(config, "connectionId") && !connections.get(string(config, "connectionId")).projectId().equals(projectId))
                         issues.add(new ValidationIssue(node.id(), "数据连接不属于当前项目"));
                 }
                 case DATA_TRANSFORM -> {
                     require(node, config, issues, "requirements", "请填写数据加工要求");
-                    require(node, config, issues, "script", "请先生成或填写加工脚本");
+                    if (blank(config, "script") && !(config.get("transformPlan") instanceof Map<?, ?> plan && !plan.isEmpty())) {
+                        issues.add(new ValidationIssue(node.id(), "请先生成数据加工方案"));
+                    }
                     require(node, config, issues, "outputName", "请填写输出文件名");
                 }
                 case PROCESS -> {
@@ -270,9 +296,26 @@ public class WorkflowDefinitionService {
                     require(node, config, issues, "script", "请先生成或填写处理脚本");
                     require(node, config, issues, "outputName", "请填写输出名称");
                 }
+                case MYSTERY -> {
+                    var target = string(config, "target").toUpperCase(Locale.ROOT);
+                    if (!target.isBlank() && !List.of("AUTO", "ORGANIZE", "TASK", "WORKFLOW", "DATA", "ANALYZE").contains(target)) {
+                        issues.add(new ValidationIssue(node.id(), "请选择有效的神秘节点处理方向"));
+                    }
+                    if (string(config, "content").length() > 200_000) {
+                        issues.add(new ValidationIssue(node.id(), "丢入的内容不能超过 20 万字符"));
+                    }
+                }
                 case SPREADSHEET_TRANSFORM -> { }
                 case REF_SEARCH -> require(node, config, issues, "query", "请填写需要查找的内容");
-                case AI_ANALYSIS -> require(node, config, issues, "prompt", "请填写分析要求");
+                case AI_ANALYSIS -> {
+                    require(node, config, issues, "prompt", "请填写分析要求");
+                    if (!blank(config, "analysisSkillId")) {
+                        try { analysisSkills.getForProject(projectId, string(config, "analysisSkillId")); }
+                        catch (IllegalArgumentException exception) {
+                            issues.add(new ValidationIssue(node.id(), "所选分析 Skill 不存在或不属于当前项目"));
+                        }
+                    }
+                }
                 case AGENT_TASK -> require(node, config, issues, "instruction", "请填写希望 Agent 完成的任务");
                 case REVIEW -> require(node, config, issues, "instructions", "请填写复核要求");
                 case DELIVERABLE -> {
@@ -325,6 +368,9 @@ public class WorkflowDefinitionService {
         if (node.type() == NodeType.DELIVERABLE && node.config() != null) {
             var config = new LinkedHashMap<>(node.config());
             List.of("title", "subtitle", "heading", "targetAudience", "lengthHint").forEach(config::remove);
+            if (Boolean.TRUE.equals(config.get("includeCitations"))) {
+                config.put("citationStyle", normalizeCitationStyle(string(config, "citationStyle")));
+            }
             return new NodeDefinition(node.id(), node.type(), node.name(), node.x(), node.y(), Map.copyOf(config));
         }
         if (node.type() != NodeType.AI_ANALYSIS || node.config() == null || !node.config().containsKey("maxPoints")) {
@@ -333,6 +379,17 @@ public class WorkflowDefinitionService {
         var config = new LinkedHashMap<>(node.config());
         config.remove("maxPoints");
         return new NodeDefinition(node.id(), node.type(), node.name(), node.x(), node.y(), Map.copyOf(config));
+    }
+
+    private String normalizeCitationStyle(String value) {
+        var normalized = Objects.toString(value, "").trim().toUpperCase(Locale.ROOT)
+                .replace('-', '_').replace(' ', '_').replace('/', '_');
+        return switch (normalized) {
+            case "APA7", "APA_7" -> "APA_7";
+            case "GBT7714", "GBT_7714", "GB_T7714", "GB_T_7714" -> "GB_T_7714";
+            case "", "IEEE" -> "IEEE";
+            default -> value;
+        };
     }
 
     private void insertVersion(String id, int version, WorkflowDocument document, Instant now) {

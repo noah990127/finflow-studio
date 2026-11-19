@@ -9,6 +9,7 @@ from pypdf import PdfReader
 
 from app.deliverables import create_docx, create_excalidraw, create_financial_report, create_html_slides, create_mermaid, create_pdf, create_pptx
 from app.models import DeliverableRequest, DeliverableSection
+from app.ppt_skills import FONT_FAMILY
 
 
 def request() -> DeliverableRequest:
@@ -168,6 +169,41 @@ def test_huawei_style_c_skill_changes_native_pptx_design() -> None:
     )
 
 
+def test_default_pptx_uses_professional_native_renderer_and_speaker_notes() -> None:
+    item = request().model_copy(update={"ppt_skill": "studio-professional-native"}, deep=True)
+
+    deck = Presentation(BytesIO(create_pptx(item)))
+    cover_text = "\n".join(shape.text for shape in deck.slides[0].shapes if hasattr(shape, "text_frame"))
+    notes = deck.slides[1].notes_slide.notes_text_frame.text
+
+    assert "STUDIO PROFESSIONAL" in cover_text
+    assert "结论先行 · 证据驱动" in cover_text
+    assert "核心观点：" in notes
+    assert "来源：" in notes
+
+
+def test_professional_renderer_supports_decision_and_table_layouts() -> None:
+    sections = [
+        DeliverableSection(
+            heading="建议优先改善回款质量", core_message="建议优先改善回款质量", layout="decision",
+            paragraphs=["建议优先改善回款质量"], bullets=["现金转化率下降", "建立专项跟踪", "按月复盘周转天数"],
+        ),
+        DeliverableSection(
+            heading="三类异常需要按优先级处理", core_message="三类异常需要按优先级处理", layout="table",
+            paragraphs=["三类异常需要按优先级处理"], bullets=["大额逾期应收", "低周转客户", "口径差异"],
+        ),
+    ]
+    item = request().model_copy(update={
+        "ppt_skill": "studio-professional-native", "include_citations": False, "sections": sections,
+    }, deep=True)
+
+    deck = Presentation(BytesIO(create_pptx(item)))
+    texts = ["\n".join(shape.text for shape in slide.shapes if hasattr(shape, "text")) for slide in deck.slides]
+
+    assert "建议决策" in texts[1]
+    assert "当前判断" in texts[2]
+
+
 def test_generates_self_contained_frontend_slides_html() -> None:
     plan = """{"slides":[{"title":"收入连续增长","summary":"FY2026收入达到2159亿美元 [Ref 1]","bullets":["数据中心收入是主要增长来源 [Ref 1]"],"chart":{"type":"line","title":"年度营业收入","categories":["FY2024","FY2025","FY2026"],"series":[{"name":"亿美元","values":[609,1305,2159]}],"source_ref":"[Ref 1]"}}]}"""
     item = request().model_copy(update={
@@ -216,7 +252,7 @@ def test_huawei_skill_keeps_long_titles_out_of_master_chrome_and_uses_one_font()
     assert heading.left >= Inches(1.82)
     assert "\n" not in heading.text
     assert len(heading.text) <= 26
-    assert all(run.font.name == "Microsoft YaHei" for run in text_runs)
+    assert all(run.font.name == FONT_FAMILY for run in text_runs)
 
 
 def test_chart_slide_has_one_source_footer() -> None:

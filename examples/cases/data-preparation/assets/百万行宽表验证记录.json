@@ -1,0 +1,22 @@
+{
+  "scenario": "1,000,000-row x 300-column fact table with 1,000-row x 300-column dimension",
+  "sourceTypes": [
+    "Parquet fact file",
+    "Excel dimension",
+    "HTTP API snapshot",
+    "database snapshot"
+  ],
+  "elapsedSeconds": 1.308,
+  "stage": "VERIFIED",
+  "inputRows": 1000000,
+  "filteredRows": 950000,
+  "outputRows": 10,
+  "checks": [
+    "strict transform plan validated",
+    "result reopened successfully",
+    "row and column counts reconciled",
+    "input and output SHA-256 hashes recorded",
+    "M:1 dimension joins did not expand rows"
+  ],
+  "notice": "Deterministic local benchmark measured on 2026-09-11; source generation time excluded."
+}

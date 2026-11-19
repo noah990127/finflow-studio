@@ -47,12 +47,18 @@ GLOBAL_TAX_2026_TRENDS = [
     {"theme": "UN tax convention", "region": "全球", "effective_period": "2025-2027谈判", "status": "2026年实质性谈判", "impact": "国际税收合作、服务课税与争议防范", "priority": 3, "source_url": "https://financing.desa.un.org/unfcitc"},
 ]
 
+SALES_EXCHANGE_RATES = [
+    {"currency": "CNY", "rate": 1.0, "effective_date": "2026-09-01", "source": "simulated"},
+    {"currency": "USD", "rate": 7.12, "effective_date": "2026-09-01", "source": "simulated"},
+    {"currency": "EUR", "rate": 7.78, "effective_date": "2026-09-01", "source": "simulated"},
+]
+
 
 @app.get("/health")
 def health() -> dict:
     return {
         "status": "online",
-        "records": len(NVIDIA_FIVE_YEAR_FINANCIALS) + len(GLOBAL_TAX_2026_TRENDS),
+        "records": len(NVIDIA_FIVE_YEAR_FINANCIALS) + len(GLOBAL_TAX_2026_TRENDS) + len(SALES_EXCHANGE_RATES),
         "notice": "showcase data",
     }
 
@@ -74,3 +80,11 @@ def nvidia_five_year_financials() -> StreamingResponse:
 @app.get("/api/v1/tax/2026-policy-trends")
 def global_tax_2026_trends() -> StreamingResponse:
     return StreamingResponse((json.dumps(item, ensure_ascii=False) + "\n" for item in GLOBAL_TAX_2026_TRENDS), media_type="application/x-ndjson")
+
+
+@app.get("/api/v1/data-preparation/exchange-rates")
+def sales_exchange_rates() -> StreamingResponse:
+    return StreamingResponse(
+        (json.dumps(item, ensure_ascii=False) + "\n" for item in SALES_EXCHANGE_RATES),
+        media_type="application/x-ndjson",
+    )

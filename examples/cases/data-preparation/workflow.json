@@ -1,0 +1,184 @@
+{
+  "name": "多源经营数据标准加工流程",
+  "description": "从文件、Excel、API 和数据库取得数据，完成清洗、M:1 关联、金额折算、区域汇总和目标对比。",
+  "executionMode": "MANUAL",
+  "schedule": null,
+  "nodes": [
+    {
+      "id": "orders_csv",
+      "type": "FILE_INPUT",
+      "name": "读取经营订单明细 CSV",
+      "x": 40,
+      "y": 80,
+      "config": {"resourceId": "40000000-0000-4000-8000-000000000011"}
+    },
+    {
+      "id": "stores_xlsx",
+      "type": "FILE_INPUT",
+      "name": "读取门店维表 Excel",
+      "x": 40,
+      "y": 250,
+      "config": {"resourceId": "40000000-0000-4000-8000-000000000012"}
+    },
+    {
+      "id": "rates_api",
+      "type": "DATA_EXTRACT",
+      "name": "采集汇率 API",
+      "x": 40,
+      "y": 420,
+      "config": {
+        "connectionId": "40000000-0000-4000-8000-000000000002",
+        "sql": "GET",
+        "taskName": "采集模拟汇率",
+        "outputName": "汇率_API快照.csv",
+        "fetchSize": 5000
+      }
+    },
+    {
+      "id": "targets_db",
+      "type": "DATA_EXTRACT",
+      "name": "读取数据库经营目标",
+      "x": 40,
+      "y": 590,
+      "config": {
+        "connectionId": "40000000-0000-4000-8000-000000000001",
+        "sql": "SELECT region, monthly_target_cny, target_owner FROM demo_examples.sales_region_targets ORDER BY region",
+        "taskName": "读取区域月度经营目标",
+        "outputName": "区域经营目标_DB.csv",
+        "fetchSize": 5000
+      }
+    },
+    {
+      "id": "prepare_sales",
+      "type": "DATA_TRANSFORM",
+      "name": "生成区域经营目标达成表",
+      "x": 470,
+      "y": 300,
+      "config": {
+        "requirements": "排除取消订单，关联门店、汇率和区域经营目标，将金额折算为人民币，按区域汇总销售额并计算目标差额。",
+        "inputAliases": {
+          "orders_csv": "orders",
+          "stores_xlsx": "stores",
+          "rates_api": "rates",
+          "targets_db": "targets"
+        },
+        "sheetNames": {"stores_xlsx": "门店维表"},
+        "transformPlan": {
+          "version": "1.0",
+          "goal": "生成可核对的区域销售额与月度目标达成表",
+          "steps": [
+            {
+              "id": "selected",
+              "type": "select",
+              "input": "orders",
+              "title": "保留经营分析字段",
+              "columns": ["order_id", "order_date", "store_code", "channel", "status", "amount", "currency"]
+            },
+            {
+              "id": "active",
+              "type": "filter",
+              "input": "selected",
+              "title": "排除取消订单",
+              "condition": {"column": "status", "operator": "not_equal", "value": "取消"}
+            },
+            {
+              "id": "with_store",
+              "type": "join",
+              "left": "active",
+              "right": "stores",
+              "title": "关联门店区域",
+              "keys": [{"left": "store_code", "right": "store_code"}],
+              "expected_cardinality": "MANY_TO_ONE",
+              "right_columns": ["region", "manager", "store_type"]
+            },
+            {
+              "id": "with_rate",
+              "type": "join",
+              "left": "with_store",
+              "right": "rates",
+              "title": "关联 API 汇率",
+              "keys": [{"left": "currency", "right": "currency"}],
+              "expected_cardinality": "MANY_TO_ONE",
+              "right_columns": ["rate", "effective_date"]
+            },
+            {
+              "id": "typed_amounts",
+              "type": "cast",
+              "input": "with_rate",
+              "title": "统一金额与汇率精度",
+              "casts": {"amount": "DECIMAL", "rate": "DECIMAL"}
+            },
+            {
+              "id": "converted",
+              "type": "derive",
+              "input": "typed_amounts",
+              "title": "折算人民币金额",
+              "expressions": {"sales_cny": "amount * rate"}
+            },
+            {
+              "id": "summary",
+              "type": "aggregate",
+              "input": "converted",
+              "title": "按区域汇总有效订单",
+              "group_by": ["region"],
+              "metrics": [
+                {"name": "order_count", "function": "count", "column": "order_id"},
+                {"name": "sales_cny", "function": "sum", "column": "sales_cny"}
+              ]
+            },
+            {
+              "id": "with_target",
+              "type": "join",
+              "left": "summary",
+              "right": "targets",
+              "title": "关联数据库经营目标",
+              "keys": [{"left": "region", "right": "region"}],
+              "expected_cardinality": "MANY_TO_ONE",
+              "right_columns": ["monthly_target_cny", "target_owner"]
+            },
+            {
+              "id": "typed_targets",
+              "type": "cast",
+              "input": "with_target",
+              "title": "统一经营目标金额精度",
+              "casts": {"monthly_target_cny": "DECIMAL"}
+            },
+            {
+              "id": "result",
+              "type": "derive",
+              "input": "typed_targets",
+              "title": "计算目标差额",
+              "expressions": {"target_gap_cny": "sales_cny - monthly_target_cny"}
+            },
+            {
+              "id": "sorted",
+              "type": "sort",
+              "input": "result",
+              "title": "按销售额排序",
+              "sort_by": [{"column": "sales_cny", "direction": "desc"}]
+            }
+          ],
+          "validations": [
+            {"type": "unique", "input": "stores", "columns": ["store_code"]},
+            {"type": "unique", "input": "rates", "columns": ["currency"]},
+            {"type": "unique", "input": "targets", "columns": ["region"]},
+            {"type": "join_match_rate", "step": "with_store", "minimum": 1.0},
+            {"type": "join_match_rate", "step": "with_rate", "minimum": 1.0},
+            {"type": "join_match_rate", "step": "with_target", "minimum": 1.0},
+            {"type": "row_count", "input": "sorted", "minimum": 10, "maximum": 10}
+          ],
+          "output": {"format": "parquet", "partition_by": []}
+        },
+        "script": "",
+        "outputFormat": "parquet",
+        "outputName": "区域经营目标达成表.parquet"
+      }
+    }
+  ],
+  "edges": [
+    {"id": "e1", "source": "orders_csv", "target": "prepare_sales"},
+    {"id": "e2", "source": "stores_xlsx", "target": "prepare_sales"},
+    {"id": "e3", "source": "rates_api", "target": "prepare_sales"},
+    {"id": "e4", "source": "targets_db", "target": "prepare_sales"}
+  ]
+}

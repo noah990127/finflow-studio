@@ -1,6 +1,7 @@
 import io
 import math
 import re
+import sys
 import zipfile
 from pathlib import Path
 from typing import Optional, Sequence
@@ -15,7 +16,7 @@ from .models import DeliverableChart
 
 
 PALETTE = ["#2F6BCA", "#26A69A", "#F4B740", "#D95763", "#7656B6", "#607D8B"]
-PPT_FONT = "Microsoft YaHei"
+PPT_FONT = "PingFang SC" if sys.platform == "darwin" else "Noto Sans CJK SC"
 
 
 def valid_chart(chart: Optional[DeliverableChart]) -> bool:

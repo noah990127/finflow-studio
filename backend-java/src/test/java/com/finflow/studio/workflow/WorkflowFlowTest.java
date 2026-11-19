@@ -99,7 +99,10 @@ class WorkflowFlowTest {
     @Test
     void supportsMultipleProjectWorkflowsAndRejectsStaleSave() {
         var project = projects.create("多工作流测试", "项目级工作流集合");
-        var first = definitions.getProjectWorkflow(project.id());
+        assertThatThrownBy(() -> definitions.getProjectWorkflow(project.id()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("还没有工作流");
+        var first = definitions.ensureProjectWorkflow(project.id());
         var same = definitions.getProjectWorkflow(project.id());
         assertThat(same.id()).isEqualTo(first.id());
         assertThat(same.status()).isEqualTo("DRAFT");
@@ -132,6 +135,35 @@ class WorkflowFlowTest {
         assertThat(second.id()).isNotEqualTo(first.id());
         assertThat(definitions.list(project.id())).extracting(WorkflowModels.WorkflowResponse::name)
                 .containsExactlyInAnyOrder("主工作流", "另一个工作流");
+    }
+
+    @Test
+    void normalizesCommonCitationStyleSpellingsBeforeValidation() {
+        var project = projects.create("引用格式规范化", "兼容模型常见写法");
+        var result = definitions.create(project.id(), new SaveRequest("引用测试", "",
+                List.of(new NodeDefinition("source", NodeType.REF_SEARCH, "查找资料", 100, 100,
+                                Map.of("query", "公开资料")),
+                        new NodeDefinition("output", NodeType.DELIVERABLE, "生成成果", 400, 100,
+                        Map.of("generationPrompt", "生成带引用的报告", "format", "PPTX",
+                                "includeCitations", true, "citationStyle", "GB/T 7714"))),
+                List.of(new EdgeDefinition("source-output", "source", "output"))));
+
+        assertThat(result.status()).isEqualTo("READY");
+        assertThat(result.nodes().get(1).config()).containsEntry("citationStyle", "GB_T_7714");
+    }
+
+    @Test
+    void readingADeletedProjectWorkflowDoesNotRecreateIt() {
+        var project = projects.create("删除工作流测试", "验证读取无副作用");
+        var workflow = definitions.ensureProjectWorkflow(project.id());
+
+        definitions.delete(workflow.id());
+
+        assertThat(definitions.list(project.id())).isEmpty();
+        assertThatThrownBy(() -> definitions.getProjectWorkflow(project.id()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("还没有工作流");
+        assertThat(definitions.list(project.id())).isEmpty();
     }
 
     @Test

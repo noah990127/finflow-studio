@@ -1,6 +1,13 @@
 export type Project = { id: string; name: string; description: string; status: string; createdAt: string; updatedAt: string }
 export type AuthUser = { username: string }
 export type Selection = { type: string; resourceId: string; range: string[] }
+export type ArtifactRef = { resourceId: string; version: number; role?: 'PRIMARY' | 'SUPPORTING' | 'INTERNAL' }
+export type FixedBound = ArtifactRef & { name: string; type: string }
+export type FixedRun = { id: string; definitionId: string; status: string; createdAt: string; error: string; snapshot: Record<string, FixedBound>; businessStages?: WorkStage[]; stages: Array<{ id: string; title: string; status: string; inputs: FixedBound[]; output: FixedBound | null; error: string }> }
+export type FixedWorkState = { definition: { id: string; version: number; hash: string; verified: boolean; createdAt: string; implementation: { title: string; steps: Array<{ id: string; title: string; kind: string; code: string; outputName: string; inputs: unknown[] }>; modelSnapshot: Record<string, unknown> } } | null; runs: FixedRun[] }
+export type WorkStage = { id: string; title: string; status: string; summary?: string; question?: string; inputs: ArtifactRef[]; outputs: ArtifactRef[] }
+export type AgentWork = { id: string; sessionId: string; title?: string; goal: string; status: string; resultSummary: string; createdAt: string; stages: WorkStage[]; result: Record<string, unknown> }
+export type ArtifactReview = ArtifactRef & { reviewedBy: string; reviewedAt: string }
 export type DataConnection = { id: string; projectId: string; name: string; sourceType: string; jdbcUrl: string; username: string; secretRef: string; options: Record<string, string>; status: string; lastTestMessage: string; lastTestedAt?: string }
 export type ConnectionPreview = { columns: string[]; rows: string[][]; rowCount: number; truncated: boolean; source: string }
 export type DatabaseTable = { catalog: string; schema: string; name: string; description: string; tableType: string; previewQuery: string }
@@ -8,15 +15,22 @@ export type DatabaseSchema = { name: string; technicalName: string; tables: Data
 export type DatabaseCatalog = { schemas: DatabaseSchema[]; tableCount: number; truncated: boolean }
 export type ExtractJob = { id: string; name: string; connectionId: string; status: string; rowCount: number; byteCount: number; outputName: string; errorMessage: string; createdAt: string }
 export type FileResource = { id: string; projectId: string; name: string; mediaType: string; status: string; currentVersion: number; sizeBytes: number; checksum: string; parseStatus: string; parseMessage: string; updatedAt: string }
+export type PasteImportRequest = { name: string; content: string; format: 'AUTO' | 'CSV' | 'TSV' | 'MARKDOWN_TABLE' | 'JSON' | 'TEXT'; sourceAgent: string; sourceQuestion: string; capturedAt?: string; confirmed: boolean }
+export type PasteImportPreview = { detectedFormat: string; structured: boolean; columns: string[]; rows: string[][]; rowCount: number; warnings: string[]; rawHash: string; requiresConfirmation: boolean }
+export type PasteImportResult = { resource: FileResource; preview: PasteImportPreview }
+export type MysteryNodePreview = { title: string; detectedKind: string; understanding: string; inferredIntent: string; outputKind: 'CLEAN_CONTENT' | 'TASK_BRIEF' | 'WORKFLOW_DRAFT' | 'STRUCTURED_DATA' | 'ANALYSIS'; content: string; workSteps: Array<{ title?: string; goal?: string; input?: string; output?: string }>; assumptions: string[]; suggestedNext: string; confidence: number; needsConfirmation: boolean; mode: string }
 export type KnowledgeRef = { id: string; resourceId: string; sourceName: string; text: string; location: Record<string, unknown>; score: number }
 export type Deliverable = { id: string; name: string; format: string; currentVersion: number; status: string; sizeBytes: number; updatedAt: string }
-export type ArtifactQuality = { passed?: boolean; score?: number; issueCount?: number; validatorVersion?: string }
 export type PptSkill = { id: string; name: string; description: string; formats: string[]; theme: string; source: string }
+export type AnalysisSkill = { id: string; projectId: string; name: string; description: string; sourceName: string; contentHash: string; createdAt: string; updatedAt: string }
 export type SpreadsheetProfile = { file_name: string; format: string; has_macros: boolean; sheets: Array<{ name: string; rows: number; columns: number; formula_count: number; merged_range_count: number }>; warnings: string[] }
 export type CsvPreview = { columns: string[]; rows: string[][]; rowOffset: number; nextCursor?: string; hasMore: boolean }
+export type SpreadsheetPreview = CsvPreview & { sheets: string[]; sheetName: string; totalRows: number; pageSize: number; totalPages: number }
+export type SpreadsheetCsvConversion = { sourceId: string; versionNumber: number; status: 'NOT_STARTED' | 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED'; rowsPerFile: number; processedRows: number; partCount: number; errorMessage: string; parts: Array<{ sequenceNumber: number; name: string; sheetName: string; partNumber: number; rowCount: number; sizeBytes: number }> }
 export type PreviewBlock = { type: 'heading' | 'text' | 'table'; text: string; rows: string[][] }
 export type PreviewPage = { number: number; title: string; blocks: PreviewBlock[] }
-export type DocumentPreview = { file_name: string; kind: 'presentation' | 'document' | 'text'; title: string; pages: PreviewPage[]; warnings: string[] }
+export type ResearchSource = { title: string; url: string; text: string; summary: string; capturedAt: string; embedAllowed: boolean }
+export type DocumentPreview = { file_name: string; kind: 'presentation' | 'document' | 'text' | 'research'; title: string; pages: PreviewPage[]; warnings: string[]; research_sources?: ResearchSource[] }
 export type PlanStep = { id: string; order: number; tool: string; mode: string; title: string; description: string; arguments: Record<string, unknown>; risk: 'READ_ONLY' | 'DRAFT_ONLY' | 'CREATE_VERSION' | 'DESTRUCTIVE_OR_EXTERNAL'; requiresConfirmation: boolean; status: string }
 export type Plan = { id: string; sessionId: string; goal: string; summary: string; version: number; planHash: string; risk: string; status: string; affectedResources: string[]; steps: PlanStep[]; expiresAt: string }
 export type ContextSnapshot = { id: string; projectId: string; page: string; selection?: Selection; allowedResourceIds: string[]; resourceVersions: Record<string, number>; contextHash: string; expiresAt: string }
@@ -27,7 +41,7 @@ export type AssistantMessage = { id: string; role: 'USER' | 'ASSISTANT' | 'SYSTE
 export type AssistantSession = { id: string; projectId: string; title: string; status: string; createdAt: string; updatedAt: string }
 export type AgentModelSettings = { mode: 'DEFAULT' | 'CUSTOM'; baseUrl: string; model: string; hasKey: boolean }
 export type AgentModelUpdate = { mode: 'DEFAULT' | 'CUSTOM'; baseUrl?: string; model?: string; apiKey?: string }
-export type WorkflowNodeType = 'RESOURCE' | 'ACQUIRE' | 'PROCESS' | 'AGENT_TASK' | 'TOOL' | 'CONTROL' | 'SUB_WORKFLOW' | 'OUTPUT' | 'FILE_INPUT' | 'LINK_INPUT' | 'DATASET_INPUT' | 'DATA_EXTRACT' | 'DATA_TRANSFORM' | 'SPREADSHEET_TRANSFORM' | 'REF_SEARCH' | 'AI_ANALYSIS' | 'REVIEW' | 'DELIVERABLE'
+export type WorkflowNodeType = 'RESOURCE' | 'ACQUIRE' | 'PROCESS' | 'MYSTERY' | 'AGENT_TASK' | 'TOOL' | 'CONTROL' | 'SUB_WORKFLOW' | 'OUTPUT' | 'FILE_INPUT' | 'LINK_INPUT' | 'DATASET_INPUT' | 'DATA_EXTRACT' | 'DATA_TRANSFORM' | 'SPREADSHEET_TRANSFORM' | 'REF_SEARCH' | 'AI_ANALYSIS' | 'REVIEW' | 'DELIVERABLE'
 export type WorkflowNode = { id: string; type: WorkflowNodeType; name: string; x: number; y: number; config: Record<string, unknown> }
 export type WorkflowEdge = { id: string; source: string; target: string }
 export type WorkflowSchedule = { frequency: 'HOURLY' | 'DAILY' | 'WEEKLY' | 'MONTHLY'; time: string; dayOfWeek?: number; dayOfMonth?: number; timezone: string }
@@ -43,14 +57,17 @@ export type WorkflowPatch = { baseRevision: number; summary: string; operations:
 export type WorkspaceRootKind = 'FILES' | 'DATABASES' | 'WEB_URLS' | 'APIS' | 'OUTPUTS'
 export type WorkspaceFolder = { id: string; projectId: string; parentId?: string; rootKind: WorkspaceRootKind; name: string; sortOrder: number; createdAt: string; updatedAt: string }
 export type WorkspaceResource = { id: string; projectId: string; resourceType: 'DATABASE_CONNECTION' | 'API_CONNECTION' | 'WEB_URL' | 'DATASET' | 'DATA_FILE' | 'OFFICE_FILE' | 'KNOWLEDGE_FILE' | 'DELIVERABLE'; group: 'DATA' | 'KNOWLEDGE' | 'OUTPUT'; name: string; mediaType: string; status: string; currentVersion: number; sizeBytes: number; inProjectWorkflow: boolean; folderId?: string; rootKind: WorkspaceRootKind; updatedAt: string; url?: string }
-export type WebPreview = { title: string; url: string; siteName: string; summary: string; highlights: string[]; sections: Array<{ heading: string; paragraphs: string[] }>; previewMode: 'CURATED' | 'LIVE'; verifiedAt: string; fetchedAt: string }
+export type WebPreview = { title: string; url: string; siteName: string; summary: string; facts: Array<{ label: string; value: string }>; highlights: string[]; sections: Array<{ heading: string; paragraphs: string[] }>; links: Array<{ label: string; url: string }>; previewMode: 'CURATED' | 'LIVE'; verifiedAt: string; fetchedAt: string }
 export type WebEmbedStatus = { status: 'CHECKING' | 'ALLOWED' | 'BLOCKED' | 'UNKNOWN'; reason: string }
 export type WorkflowSummary = { id: string; name: string; status: string; currentVersion: number; updatedAt: string }
-export type ProjectWorkspace = { project: Project; workflow: WorkflowSummary | null; workflows: WorkflowSummary[]; folders: WorkspaceFolder[]; resources: WorkspaceResource[] }
+export type ProjectWorkspace = { project: Project; workflow: WorkflowSummary | null; workflows: WorkflowSummary[]; folders: WorkspaceFolder[]; resources: WorkspaceResource[]; internalResourceIds?: string[] }
 export type OfficeSession = { enabled: boolean; documentServerUrl: string; workingResourceId: string; message: string; config: Record<string, unknown> }
 export type DataTransformSource = { sourceKind: 'FILE' | 'EXTRACT' | 'CONNECTION'; resourceId: string; alias: string; name: string; query?: string; sheetName?: string }
-export type DataTransformScript = { script: string; summary: string; mode: string; assumptions: string[]; quality_rules: string[]; warnings: string[] }
-export type DataTransformSample = { valid: boolean; sampleRowCount: number; columns: Array<{ name: string; dataType: string }>; rows: Array<Record<string, unknown>>; nullCounts: Record<string, number>; checks: string[]; warnings: string[] }
+export type DataTransformPlanStep = { id: string; type: string; title: string; input?: string; left?: string; right?: string }
+export type DataTransformPlan = { version: '1.0'; goal: string; steps: DataTransformPlanStep[]; validations: Array<Record<string, unknown>>; output: { format: 'parquet' | 'csv'; partition_by: string[] } }
+export type DataTransformScript = { plan: DataTransformPlan; script: string; summary: string; mode: string; assumptions: string[]; quality_rules: string[]; warnings: string[] }
+export type DataTransformStepReport = { id: string; type: string; title: string; status: string; inputRowCount?: number; outputRowCount: number; columnCount: number; checks: string[]; warnings: string[]; join?: Record<string, unknown> }
+export type DataTransformSample = { valid: boolean; stage: string; sampleRowCount: number; columns: Array<{ name: string; dataType: string }>; rows: Array<Record<string, unknown>>; nullCounts: Record<string, number>; inputs?: Array<{ alias: string; name: string; sourceKind: string; rowCount: number; columnCount: number; warnings: string[] }>; stepReports: DataTransformStepReport[]; checks: string[]; warnings: string[]; sandbox?: { engine: string; mode: string; rowLimitPerInput: number; inputCount: number } }
 export type CitationLocation = Record<string, string | number | boolean | null>
 export type CitationSource = { id: string; resource_id: string; version: number; source_name: string; text: string; location: CitationLocation; content_hash: string; formatted: string }
 export type FinancialReportChart = { type: 'bar' | 'line' | 'pie'; title: string; categories: string[]; series: Array<{ name: string; values: number[] }>; source_ref: string }
@@ -81,6 +98,13 @@ async function request<T>(url: string, options: RequestInit = {}, timeoutMs = 0)
 }
 
 export const api = {
+  browserAuthorizations: () => request<Array<{ id: string; kind: string; label: string; status: string; createdAt: string; expiresAt: string }>>('/api/browser/authorizations'),
+  browserConnections: () => request<Array<{ session: string; origin: string; status: string; loginWindowExpired: boolean }>>('/api/browser/authorizations/connections'),
+  browserControl: (session: string, action: 'login' | 'restart_login' | 'resume' | 'close') => request<{ session: string; status: string }>(`/api/browser/authorizations/connections/${encodeURIComponent(session)}/${action}`, { method: 'POST' }),
+  browserAuthorizationHistory: (page = 0) => request<Array<{ id: string; grantId: string; stepId: string; event: string; label: string; createdAt: string }>>(`/api/browser/authorizations/history?page=${page}`),
+  revokeBrowserAuthorization: (id: string) => request<void>(`/api/browser/authorizations/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  nativeDocument: (kind: string, id: string, requestedVersion?: number) => request<{ id: string; name: string; format: string; version: number; content: string; editable: boolean }>(`/api/native-documents/${kind}/${id}${requestedVersion ? `?requestedVersion=${requestedVersion}` : ''}`),
+  saveNativeDocument: (kind: string, id: string, content: string, expectedVersion: number) => request<{ version: number; content: string }>(`/api/native-documents/${kind}/${id}`, { method: 'PUT', body: JSON.stringify({ content, expectedVersion }) }),
   login: (username: string, password: string) => request<AuthUser>('/api/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
   me: () => request<AuthUser>('/api/auth/me'),
   logout: () => request<void>('/api/auth/logout', { method: 'POST' }),
@@ -95,9 +119,9 @@ export const api = {
   updateProject: (id: string, name: string, description = '') => request<Project>(`/api/projects/${id}`, { method: 'PUT', body: JSON.stringify({ name, description }) }, 15_000),
   deleteProject: (id: string) => request<void>(`/api/projects/${id}`, { method: 'DELETE' }, 15_000),
   listConnections: (projectId: string) => request<DataConnection[]>(`/api/projects/${projectId}/data-connections`),
-  createConnection: (body: Record<string, unknown>) => request<DataConnection>('/api/data-connections', { method: 'POST', body: JSON.stringify(body) }),
-  updateConnection: (id: string, body: Record<string, unknown>) => request<DataConnection>(`/api/data-connections/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
-  testConnection: (id: string) => request<{ success: boolean; databaseProduct: string; databaseVersion: string; latencyMs: number; message: string }>(`/api/data-connections/${id}/test`, { method: 'POST' }),
+  createConnection: (body: Record<string, unknown>) => request<DataConnection>('/api/data-connections', { method: 'POST', body: JSON.stringify(body) }, 15_000),
+  updateConnection: (id: string, body: Record<string, unknown>) => request<DataConnection>(`/api/data-connections/${id}`, { method: 'PUT', body: JSON.stringify(body) }, 15_000),
+  testConnection: (id: string) => request<{ success: boolean; databaseProduct: string; databaseVersion: string; latencyMs: number; message: string }>(`/api/data-connections/${id}/test`, { method: 'POST' }, 20_000),
   previewConnection: (id: string, query: string, limit = 100) => request<ConnectionPreview>(`/api/data-connections/${id}/preview`, { method: 'POST', body: JSON.stringify({ query, limit }) }),
   getConnectionCatalog: (id: string) => request<DatabaseCatalog>(`/api/data-connections/${id}/catalog`),
   deleteConnection: (id: string) => request<void>(`/api/data-connections/${id}`, { method: 'DELETE' }),
@@ -109,24 +133,33 @@ export const api = {
   listFiles: (projectId: string) => request<FileResource[]>(`/api/projects/${projectId}/files`),
   deleteFile: (id: string) => request<void>(`/api/files/${id}`, { method: 'DELETE' }),
   uploadFile: (projectId: string, file: File, resourceId?: string) => { const body = new FormData(); body.append('file', file); if (resourceId) body.append('resourceId', resourceId); return request<FileResource>(`/api/projects/${projectId}/files`, { method: 'POST', body }) },
+  previewPasteImport: (projectId: string, body: PasteImportRequest) => request<PasteImportPreview>(`/api/projects/${projectId}/paste-imports/preview`, { method: 'POST', body: JSON.stringify(body) }, 20_000),
+  importPastedContent: (projectId: string, body: PasteImportRequest) => request<PasteImportResult>(`/api/projects/${projectId}/paste-imports`, { method: 'POST', body: JSON.stringify(body) }, 30_000),
+  previewMysteryNode: (projectId: string, content: string, hint: string, target: string) => request<MysteryNodePreview>(`/api/projects/${projectId}/mystery-node/preview`, { method: 'POST', body: JSON.stringify({ content, hint, target }) }, 120_000),
   searchRefs: (projectId: string, query: string) => request<KnowledgeRef[]>(`/api/projects/${projectId}/refs/search?query=${encodeURIComponent(query)}`),
   profileSpreadsheet: (id: string) => request<SpreadsheetProfile>(`/api/files/${id}/spreadsheet/profile`),
   transformSpreadsheet: (id: string, body: Record<string, unknown>) => request<FileResource>(`/api/files/${id}/spreadsheet/transform`, { method: 'POST', body: JSON.stringify(body) }),
-  generateDataTransformScript: (projectId: string, requirements: string, inputs: DataTransformSource[]) => request<DataTransformScript>(`/api/projects/${projectId}/data-transforms/generate-script`, { method: 'POST', body: JSON.stringify({ requirements, inputs }) }),
-  sampleDataTransform: (projectId: string, script: string, inputs: DataTransformSource[]) => request<DataTransformSample>(`/api/projects/${projectId}/data-transforms/sample`, { method: 'POST', body: JSON.stringify({ script, inputs }) }),
+  generateDataTransformScript: (projectId: string, requirements: string, inputs: DataTransformSource[]) => request<DataTransformScript>(`/api/projects/${projectId}/data-transforms/generate-script`, { method: 'POST', body: JSON.stringify({ requirements, inputs }) }, 170_000),
+  sampleDataTransform: (projectId: string, script: string, plan: DataTransformPlan | null, inputs: DataTransformSource[]) => request<DataTransformSample>(`/api/projects/${projectId}/data-transforms/sample`, { method: 'POST', body: JSON.stringify({ script, plan, inputs }) }, 90_000),
   previewFileCsv: (id: string, cursor?: string) => request<CsvPreview>(`/api/files/${id}/csv-preview?limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`),
+  previewSpreadsheet: (id: string, sheet?: string, cursor?: string) => request<SpreadsheetPreview>(`/api/files/${id}/spreadsheet-preview?limit=100${sheet ? `&sheet=${encodeURIComponent(sheet)}` : ''}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`),
+  convertSpreadsheetToCsv: (id: string, rowsPerFile = 250_000) => request<SpreadsheetCsvConversion>(`/api/files/${id}/spreadsheet/convert-to-csv`, { method: 'POST', body: JSON.stringify({ rowsPerFile }) }, 15_000),
+  getSpreadsheetCsvConversion: (id: string) => request<SpreadsheetCsvConversion>(`/api/files/${id}/spreadsheet/convert-to-csv`),
+  previewSpreadsheetCsvConversion: (id: string, part = 1, cursor?: string) => request<CsvPreview>(`/api/files/${id}/spreadsheet/convert-to-csv/preview?part=${part}&limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`),
   previewFile: (id: string) => request<DocumentPreview>(`/api/files/${id}/preview`),
   listDeliverables: (projectId: string) => request<Deliverable[]>(`/api/projects/${projectId}/deliverables`),
   deleteDeliverable: (id: string) => request<void>(`/api/deliverables/${id}`, { method: 'DELETE' }),
   createDeliverable: (body: Record<string, unknown>) => request<Deliverable>('/api/deliverables', { method: 'POST', body: JSON.stringify(body) }),
   listPptSkills: () => request<PptSkill[]>('/api/ppt-skills'),
+  listAnalysisSkills: (projectId: string) => request<AnalysisSkill[]>(`/api/projects/${projectId}/analysis-skills`),
+  uploadAnalysisSkill: (projectId: string, file: File) => { const body = new FormData(); body.append('file', file); return request<AnalysisSkill>(`/api/projects/${projectId}/analysis-skills`, { method: 'POST', body }) },
+  deleteAnalysisSkill: (id: string) => request<void>(`/api/analysis-skills/${id}`, { method: 'DELETE' }),
   previewDeliverable: (id: string) => request<DocumentPreview>(`/api/deliverables/${id}/preview`),
   previewDeliverableCsv: (id: string, cursor?: string) => request<CsvPreview>(`/api/deliverables/${id}/csv-preview?limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`),
   getFinancialReport: (id: string) => request<FinancialReportSpec>(`/api/deliverables/${id}/report-spec`),
   getDeliverableCitations: (id: string, version?: number) => request<CitationSource[]>(`/api/deliverables/${id}/citations${version ? `?version=${version}` : ''}`),
-  getDeliverableQuality: (id: string, version?: number) => request<ArtifactQuality>(`/api/deliverables/${id}/quality${version ? `?version=${version}` : ''}`),
-  createSession: (projectId: string, title = '新对话') => request<AssistantSession>(`/api/projects/${projectId}/assistant/sessions`, { method: 'POST', body: JSON.stringify({ title }) }),
-  listAssistantSessions: (projectId: string) => request<AssistantSession[]>(`/api/projects/${projectId}/assistant/sessions`),
+  createSession: (projectId: string, title = '新对话') => request<AssistantSession>('/api/assistant/sessions', { method: 'POST', body: JSON.stringify({ projectId, title }) }),
+  listAssistantSessions: () => request<AssistantSession[]>('/api/assistant/sessions'),
   getAssistantSession: (sessionId: string) => request<AssistantSession>(`/api/assistant/sessions/${sessionId}`),
   listAssistantMessages: (sessionId: string) => request<AssistantMessage[]>(`/api/assistant/sessions/${sessionId}/messages`),
   listAssistantEvents: (sessionId: string, after = 0) => request<AssistantEvent[]>(`/api/assistant/sessions/${sessionId}/event-history?after=${after}`),
@@ -134,11 +167,19 @@ export const api = {
   interruptAssistantRequest: (sessionId: string, requestId: string) => request<{status: string}>(`/api/assistant/sessions/${sessionId}/requests/${requestId}/cancel`, { method: 'POST' }),
   cancelAssistantPlan: (planId: string) => request<{status: string}>(`/api/assistant/plans/${planId}/cancel`, { method: 'POST' }),
   getAssistantPlan: (planId: string) => request<Plan>(`/api/assistant/plans/${planId}`),
-  confirmPlan: (plan: Plan, context: ContextSnapshot) => request<Run>(`/api/assistant/plans/${plan.id}/confirm`, { method: 'POST', body: JSON.stringify({ planVersion: plan.version, planHash: plan.planHash, idempotencyKey: crypto.randomUUID(), expectedResourceVersions: context.resourceVersions }) }),
+  confirmPlan: (plan: Plan, context: ContextSnapshot, rememberBrowserAuthorization = false) => request<Run>(`/api/assistant/plans/${plan.id}/confirm`, { method: 'POST', body: JSON.stringify({ planVersion: plan.version, planHash: plan.planHash, idempotencyKey: crypto.randomUUID(), expectedResourceVersions: context.resourceVersions, rememberBrowserAuthorization }) }, 30_000),
   getRun: (runId: string) => request<Run>(`/api/assistant/runs/${runId}`),
   cancelAssistantRun: (runId: string) => request<Run>(`/api/assistant/runs/${runId}/cancel`, { method: 'POST' }),
   rollback: (runId: string) => request<Run>(`/api/assistant/runs/${runId}/rollback`, { method: 'POST' }),
   getProjectWorkspace: (projectId: string) => request<ProjectWorkspace>(`/api/projects/${projectId}/workspace`),
+  renameWork: (projectId: string, sessionId: string, title: string) => request<void>(`/api/projects/${projectId}/works/${sessionId}/title`, { method: 'PATCH', body: JSON.stringify({ title }) }),
+  listWorks: (projectId: string) => request<AgentWork[]>(`/api/projects/${projectId}/works`),
+  fixedWorkState: (projectId: string, sessionId: string) => request<FixedWorkState>(`/api/projects/${projectId}/works/${sessionId}/implementation`),
+  fixedWorkDefinition: (projectId: string, sessionId: string, definitionId: string) => request<NonNullable<FixedWorkState['definition']>>(`/api/projects/${projectId}/works/${sessionId}/implementation/versions/${definitionId}`),
+  startFixedWork: (projectId: string, sessionId: string, definitionId: string, requestId: string) => request<FixedRun>(`/api/projects/${projectId}/works/${sessionId}/implementation/runs`, { method: 'POST', body: JSON.stringify({ definitionId, requestId }) }),
+  cancelFixedWork: (projectId: string, sessionId: string, runId: string) => request<void>(`/api/projects/${projectId}/works/${sessionId}/implementation/runs/${runId}/cancel`, { method: 'POST' }),
+  listArtifactReviews: (projectId: string) => request<ArtifactReview[]>(`/api/projects/${projectId}/artifact-reviews`),
+  reviewArtifact: (projectId: string, artifact: ArtifactRef) => request<ArtifactReview>(`/api/projects/${projectId}/artifact-reviews`, { method: 'POST', body: JSON.stringify(artifact) }),
   getWebPreview: (projectId: string, resourceId: string, refresh = false) => request<WebPreview>(`/api/projects/${projectId}/workspace/web-preview/${resourceId}${refresh ? '?refresh=true' : ''}`),
   getWebEmbedStatus: (projectId: string, resourceId: string) => request<WebEmbedStatus>(`/api/projects/${projectId}/workspace/web-embed-status/${resourceId}?studioOrigin=${encodeURIComponent(window.location.origin)}`),
   createWorkspaceFolder: (projectId: string, body: { name: string; rootKind: WorkspaceRootKind; parentId?: string }) => request<WorkspaceFolder>(`/api/projects/${projectId}/workspace/folders`, { method: 'POST', body: JSON.stringify(body) }),

@@ -54,11 +54,18 @@ public class WorkflowDeliverableService {
                 + "\n\n根据用户意图与上游资料自主拟定标题、副标题和章节结构，判断合适的使用对象与篇幅。"
                 + "用户已明确选择的成果类型、引用和 Skill 必须遵守："
                 + objectMapper.writeValueAsString(outputPreferences(config));
-        var planning = worker.generateContent("DELIVERABLE_PLAN", planningRequirements,
-                sourceText.substring(0, Math.min(sourceText.length(), MAX_PLANNING_SOURCE_CHARS)));
-        var planningMode = Objects.toString(planning.get("mode"), "");
-        if (planningMode.contains("fallback")) throw new IllegalStateException("大模型当前不可用，无法规划生成成果");
-        var plan = applyOutputPreferences(parsePlan(Objects.toString(planning.get("content"), "")), config);
+        Map<String, Object> plan;
+        String planningMode;
+        if (bool(config, "fastPlanning") && SUPPORTED_FORMATS.contains(optional(config, "format", "").toUpperCase(Locale.ROOT))) {
+            plan = fastPlan(requirements, config);
+            planningMode = "intent-derived";
+        } else {
+            var planning = worker.generateContent("DELIVERABLE_PLAN", planningRequirements,
+                    sourceText.substring(0, Math.min(sourceText.length(), MAX_PLANNING_SOURCE_CHARS)));
+            planningMode = Objects.toString(planning.get("mode"), "");
+            if (planningMode.contains("fallback")) throw new IllegalStateException("大模型当前不可用，无法规划生成成果");
+            plan = applyOutputPreferences(parsePlan(Objects.toString(planning.get("content"), "")), config);
+        }
         var format = plannedFormat(plan);
         var title = plannedText(plan, "title", "成果标题", 280);
         var subtitle = optional(plan, "subtitle", "");
@@ -95,7 +102,11 @@ public class WorkflowDeliverableService {
             }
         });
         var generationMode = Objects.toString(generation.get("mode"), "");
-        if (generationMode.contains("fallback")) throw new IllegalStateException("大模型当前不可用，成果内容未生成");
+        var degradedGeneration = generationMode.contains("fallback");
+        if (degradedGeneration) {
+            events.publish(runId, "MODEL_STATUS", node.id(), node.name(), "RUNNING", Math.max(startProgress, endProgress - 2),
+                    "模型服务繁忙，正在基于已完成分析和引用生成保守版本", "");
+        }
 
         var generatedBody = Objects.toString(generation.get("content"), sourceText);
         var refIds = includeCitations ? contextAssembler.refIds(upstream) : List.<String>of();
@@ -109,8 +120,24 @@ public class WorkflowDeliverableService {
                 "version", item.currentVersion(), "downloadUrl", "/api/deliverables/" + item.id() + "/download",
                 "analysisMode", generationMode, "planningMode", planningMode,
                 "refs", contextAssembler.sourceRefs(upstream), "refIds", contextAssembler.refIds(upstream)));
+        output.put("degradedGeneration", degradedGeneration);
         output.put("text", generatedBody);
         return Map.copyOf(output);
+    }
+
+    private Map<String, Object> fastPlan(String requirements, Map<String, Object> config) {
+        var plan = new LinkedHashMap<String, Object>(outputPreferences(config));
+        var concise = requirements.replaceAll("[\\r\\n]+", " ").replaceAll("\\s+", " ").trim()
+                .replaceFirst("^(请|帮我|请帮我|给我|请给我|生成|输出|写一份|做一份)+", "").trim();
+        var sentenceEnd = concise.indexOf('。');
+        if (sentenceEnd > 0) concise = concise.substring(0, sentenceEnd);
+        var points = concise.codePoints().toArray();
+        if (points.length > 36) concise = new String(points, 0, 36) + "…";
+        if (concise.isBlank()) concise = "工作成果";
+        plan.put("title", concise);
+        plan.put("subtitle", "");
+        plan.put("heading", "核心分析与建议");
+        return Map.copyOf(plan);
     }
 
     Map<String, Object> applyOutputPreferences(Map<String, Object> modelPlan, Map<String, Object> config) {
@@ -169,6 +196,8 @@ public class WorkflowDeliverableService {
     private String plannedPptSkill(Map<String, Object> plan, String format) {
         if (!List.of("PPTX", "HTML_SLIDES").contains(format)) return "";
         var skill = optional(plan, "ppt_skill", "");
+        if ("PPTX".equals(format) && skill.isBlank()) return "studio-professional-native";
+        if ("PPTX".equals(format) && "studio-professional-native".equals(skill)) return skill;
         if ("PPTX".equals(format) && "guizang-huawei-style-c".equals(skill)) return skill;
         if ("HTML_SLIDES".equals(format) && "frontend-slides".equals(skill)) return skill;
         return "";
@@ -181,6 +210,13 @@ public class WorkflowDeliverableService {
     }
 
     private String presentationRequirement(String pptSkill) {
+        if ("studio-professional-native".equals(pptSkill)) {
+            return "\nPPT 技能：Studio Professional 原生可编辑演示。"
+                    + "先用标题串建立结论、证据、驱动、风险和行动的完整论证；"
+                    + "每页一个可单独阅读的结论，最多三个支撑点。"
+                    + "有可靠数值时使用原生图表，每个数字、外部事实和图表必须可追溯；"
+                    + "根据内容选择结论、指标、对比、时间线、流程、矩阵、决策或表格版式，禁止全篇重复同一布局。";
+        }
         if ("guizang-huawei-style-c".equals(pptSkill)) {
             return "\nPPT 技能：华为企业汇报 Style C。采用结论先行的管理层叙事，避免模板化堆框。"
                     + "每页只表达一个判断；标题必须单行且不超过22个汉字，摘要不超过64个汉字，"

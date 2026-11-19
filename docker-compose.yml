@@ -22,6 +22,8 @@ services:
       DATABASE_DRIVER: org.postgresql.Driver
       WORKER_BASE_URL: http://python-worker:8001
       FINFLOW_AGENT_GATEWAY_BASE_URL: http://java-api:8080
+      FINFLOW_WORKFLOW_MAX_PARALLEL_NODES: ${FINFLOW_WORKFLOW_MAX_PARALLEL_NODES:-4}
+      FINFLOW_DATA_CONNECTION_KEY_FILE: /app/data/keys/data-connection.key
       FINFLOW_STORAGE_PROVIDER: s3
       FINFLOW_STORAGE_CACHE_ROOT: /app/data/blob-cache
       FINFLOW_S3_ENDPOINT: http://minio:9000
@@ -29,6 +31,7 @@ services:
       FINFLOW_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-finflow}
       FINFLOW_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-finflow-storage-secret}
       FINFLOW_OFFICE_ENABLED: "true"
+      FINFLOW_OFFICE_MAX_EDITOR_FILE_BYTES: ${FINFLOW_OFFICE_MAX_EDITOR_FILE_BYTES:-314572800}
       FINFLOW_OFFICE_DOCUMENT_SERVER_URL: ${FINFLOW_OFFICE_DOCUMENT_SERVER_URL:-/office}
       FINFLOW_OFFICE_INTERNAL_URL: http://onlyoffice-documentserver
       FINFLOW_OFFICE_API_BASE_URL: http://java-api:8080
@@ -44,6 +47,7 @@ services:
         condition: service_healthy
     volumes:
       - finflow-files:/app/data/storage
+      - finflow-secrets:/app/data/keys
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8080/actuator/health"]
       interval: 10s
@@ -64,12 +68,29 @@ services:
       FINFLOW_AGENT_SKILLS_DIR: ${FINFLOW_AGENT_SKILLS_DIR:-skills}
       FINFLOW_AGENT_MCP_CONFIG: ${FINFLOW_AGENT_MCP_CONFIG:-}
       FINFLOW_AGENT_MCP_ALLOWED_TOOLS: ${FINFLOW_AGENT_MCP_ALLOWED_TOOLS:-}
+      FINFLOW_DUCKDB_MEMORY_MB: ${FINFLOW_DUCKDB_MEMORY_MB:-2048}
       AGENT_MAX_TOOL_CALLS: ${AGENT_MAX_TOOL_CALLS:-80}
       AGENT_TASK_TIMEOUT_SECONDS: ${AGENT_TASK_TIMEOUT_SECONDS:-900}
-      RESEARCH_SEARXNG_URL: ${RESEARCH_SEARXNG_URL:-}
+      AGENT_RUNTIME: ${AGENT_RUNTIME:-opencode}
+      OPENCODE_CLI_PATH: ${OPENCODE_CLI_PATH:-opencode}
+      OPENCODE_MODEL: ${OPENCODE_MODEL:-}
+      OPENCODE_PROVIDER_CONFIG: ${OPENCODE_PROVIDER_CONFIG:-}
+      RESEARCH_SEARCH_PROVIDER: ${RESEARCH_SEARCH_PROVIDER:-searxng}
+      RESEARCH_SEARXNG_URL: ${FINFLOW_RESEARCH_SEARXNG_URL:-http://searxng:8080}
+      RESEARCH_SEARXNG_ENGINES: ${RESEARCH_SEARXNG_ENGINES:-sogou,bing,baidu,brave,duckduckgo}
+      RESEARCH_SEARCH_CONNECT_TIMEOUT_SECONDS: ${RESEARCH_SEARCH_CONNECT_TIMEOUT_SECONDS:-5}
+      RESEARCH_SEARCH_TIMEOUT_SECONDS: ${RESEARCH_SEARCH_TIMEOUT_SECONDS:-15}
+      HTTP_PROXY: ${FINFLOW_OUTBOUND_PROXY:-}
+      HTTPS_PROXY: ${FINFLOW_OUTBOUND_PROXY:-}
+      http_proxy: ${FINFLOW_OUTBOUND_PROXY:-}
+      https_proxy: ${FINFLOW_OUTBOUND_PROXY:-}
+      NO_PROXY: localhost,127.0.0.1,searxng,backend-java,minio,postgres
+      no_proxy: localhost,127.0.0.1,searxng,backend-java,minio,postgres
       RESEARCH_ALLOWED_DOMAINS: ${RESEARCH_ALLOWED_DOMAINS:-}
       RESEARCH_MAX_DOWNLOAD_BYTES: ${RESEARCH_MAX_DOWNLOAD_BYTES:-10485760}
-      CODEX_CLI_MODEL: ${CODEX_CLI_MODEL:-gpt-5.6-sol}
+      CODEX_CLI_MODEL: ${CODEX_CLI_MODEL:-}
+      LLM_MAX_ATTEMPTS: ${LLM_MAX_ATTEMPTS:-2}
+      LLM_RETRY_BASE_SECONDS: ${LLM_RETRY_BASE_SECONDS:-1}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       DEEPSEEK_CHAT_MODEL: ${DEEPSEEK_CHAT_MODEL:-deepseek-v4-flash}
       WHISPER_MODEL: ${WHISPER_MODEL:-small}
@@ -78,11 +99,41 @@ services:
       HF_HOME: /app/models
     volumes:
       - finflow-models:/app/models
+    depends_on:
+      searxng:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
       interval: 10s
       timeout: 3s
       retries: 20
+    restart: unless-stopped
+
+  searxng:
+    image: ${SEARXNG_IMAGE:-ghcr.io/searxng/searxng}:${SEARXNG_VERSION:-2026.9.25-12f8b6515}
+    ports:
+      - "${SEARXNG_HOST_PORT:-8888}:8080"
+    environment:
+      SEARXNG_BASE_URL: ${SEARXNG_BASE_URL:-http://localhost:8888/}
+      SEARXNG_SECRET: ${SEARXNG_SECRET:-finflow-local-search-secret}
+      SEARXNG_LIMITER: "false"
+      HTTP_PROXY: ${SEARXNG_OUTBOUND_PROXY:-}
+      HTTPS_PROXY: ${SEARXNG_OUTBOUND_PROXY:-}
+      http_proxy: ${SEARXNG_OUTBOUND_PROXY:-}
+      https_proxy: ${SEARXNG_OUTBOUND_PROXY:-}
+      NO_PROXY: localhost,127.0.0.1,searxng
+      no_proxy: localhost,127.0.0.1,searxng
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./infra/searxng/settings.yml:/etc/searxng/settings.yml:ro
+      - finflow-searxng-cache:/var/cache/searxng
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- 'http://localhost:8080/search?q=health&format=json' >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
     restart: unless-stopped
 
   postgres:
@@ -153,7 +204,9 @@ services:
 volumes:
   finflow-postgres:
   finflow-files:
+  finflow-secrets:
   finflow-models:
   finflow-objects:
   finflow-onlyoffice-data:
   finflow-onlyoffice-logs:
+  finflow-searxng-cache:

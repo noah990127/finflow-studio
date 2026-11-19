@@ -35,6 +35,12 @@ public final class AssistantModels {
     public record CreateSessionRequest(String title) {
     }
 
+    public record CreateGlobalSessionRequest(
+            @NotBlank String projectId,
+            String title
+    ) {
+    }
+
     public record SessionResponse(
             String id,
             String projectId,
@@ -128,7 +134,8 @@ public final class AssistantModels {
             int planVersion,
             @NotBlank String planHash,
             @NotBlank String idempotencyKey,
-            @NotNull Map<String, Integer> expectedResourceVersions
+            @NotNull Map<String, Integer> expectedResourceVersions,
+            Boolean rememberBrowserAuthorization
     ) {
     }
 

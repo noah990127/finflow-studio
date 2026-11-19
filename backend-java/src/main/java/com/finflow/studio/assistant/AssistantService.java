@@ -20,6 +20,8 @@ import java.util.*;
 
 @Service
 public class AssistantService {
+    @org.springframework.beans.factory.annotation.Autowired
+    private BrowserAuthorizationService browserAuthorizations;
 
     private final JdbcClient jdbc;
     private final ObjectMapper objectMapper;
@@ -67,8 +69,9 @@ public class AssistantService {
     }
 
     public SessionResponse getSession(String id) {
-        var session = jdbc.sql("select * from assistant_session where id = :id")
+        var session = jdbc.sql("select * from assistant_session where id = :id and default_user_id = :actor")
                 .param("id", id)
+                .param("actor", ActorContext.current())
                 .query((rs, rowNum) -> new SessionResponse(
                         rs.getString("id"),
                         rs.getString("project_id"),
@@ -79,18 +82,21 @@ public class AssistantService {
                 ))
                 .optional()
                 .orElseThrow(() -> new IllegalArgumentException("助手会话不存在"));
-        projects.get(session.projectId());
         return session;
     }
 
     public List<SessionResponse> listSessions(String projectId) {
         projects.get(projectId);
+        return listSessions();
+    }
+
+    public List<SessionResponse> listSessions() {
         return jdbc.sql("""
                         select * from assistant_session
-                        where project_id = :projectId
+                        where default_user_id = :actor
                         order by updated_at desc
                         """)
-                .param("projectId", projectId)
+                .param("actor", ActorContext.current())
                 .query((rs, rowNum) -> new SessionResponse(
                         rs.getString("id"), rs.getString("project_id"), rs.getString("title"),
                         rs.getString("status"), rs.getTimestamp("created_at").toInstant(),
@@ -117,8 +123,14 @@ public class AssistantService {
     public MessageResponse sendMessage(String sessionId, MessageRequest request) {
         jdbc.sql("select id from assistant_session where id = :id for update").param("id", sessionId).query(String.class).single();
         var session = getSession(sessionId);
+        projects.get(request.projectId());
+        if (jdbc.sql("select count(*) from fixed_work_run where session_id=:id and status in ('QUEUED','RUNNING','CANCEL_REQUESTED')")
+                .param("id", sessionId).query(Integer.class).single() > 0)
+            throw new IllegalStateException("固定流程正在执行，请先中止再通过Agent修改需求或实现");
         if (!session.projectId().equals(request.projectId())) {
-            throw new IllegalArgumentException("当前对话属于其他项目，请切换到对应项目或在当前项目中新建对话");
+            jdbc.sql("update assistant_session set project_id = :projectId, updated_at = :now where id = :id")
+                    .param("projectId", request.projectId()).param("now", Instant.now()).param("id", sessionId).update();
+            session = getSession(sessionId);
         }
         var requestId = request.requestId() == null ? UUID.randomUUID().toString() : request.requestId();
         var interruption = interruptions.token(sessionId, requestId);
@@ -143,7 +155,7 @@ public class AssistantService {
                 .filter(resource -> resource.id().equals(request.selection().resourceId()))
                 .findFirst().orElse(null);
         var workspaceItems = new ArrayList<Map<String, Object>>();
-        workspaceResponse.folders().stream().limit(120).forEach(folder -> {
+        workspaceResponse.folders().stream().limit(60).forEach(folder -> {
             var item = new LinkedHashMap<String, Object>();
             item.put("id", folder.id());
             item.put("name", folder.name());
@@ -153,11 +165,11 @@ public class AssistantService {
             if (folder.parentId() != null) item.put("parent_id", folder.parentId());
             workspaceItems.add(item);
         });
-        workspaceResponse.workflows().stream().limit(Math.max(0, 120 - workspaceItems.size())).forEach(workflow ->
+        workspaceResponse.workflows().stream().limit(Math.max(0, 60 - workspaceItems.size())).forEach(workflow ->
                 workspaceItems.add(Map.<String, Object>of(
                         "id", workflow.id(), "name", workflow.name(), "type", "WORKFLOW",
                         "group", "WORKFLOW", "status", workflow.status())));
-        workspaceResponse.resources().stream().limit(Math.max(0, 120 - workspaceItems.size())).forEach(resource ->
+        workspaceResponse.resources().stream().limit(Math.max(0, 60 - workspaceItems.size())).forEach(resource ->
                 workspaceItems.add(Map.<String, Object>of(
                         "id", resource.id(), "name", resource.name(), "type", resource.resourceType(),
                         "group", resource.group(), "status", resource.status())));
@@ -256,12 +268,12 @@ public class AssistantService {
 
     private List<Map<String, String>> recentMessages(String sessionId, String projectId) {
         var messages = new ArrayList<Map<String, String>>();
-        memory.list(projectId).stream().limit(20).forEach(item -> messages.add(Map.of(
+        memory.list(projectId).stream().limit(8).forEach(item -> messages.add(Map.of(
                 "role", "system",
                 "content", "工作记忆[" + item.scope() + "/" + item.key() + "]：" + writeJson(item.value()))));
         var history = jdbc.sql("""
                 select role, content from assistant_message where session_id = :sessionId
-                order by created_at desc limit 30
+                order by created_at desc limit 12
                 """)
                 .param("sessionId", sessionId)
                 .query((rs, rowNum) -> Map.of("role", rs.getString("role").toLowerCase(Locale.ROOT),
@@ -297,7 +309,16 @@ public class AssistantService {
     @Transactional
     public RunResponse confirm(String planId, ConfirmPlanRequest request) {
         var plan = getPlan(planId);
-        if (plan.expiresAt().isBefore(Instant.now())) {
+        var pausedRunId = jdbc.sql("""
+                        select id from assistant_run
+                        where plan_id = :planId and status = 'WAITING_CONFIRMATION'
+                        order by created_at desc limit 1
+                        """)
+                .param("planId", planId)
+                .query(String.class)
+                .optional();
+        // A plan preview may expire, but a run explicitly paused for a human decision must remain resumable.
+        if (pausedRunId.isEmpty() && plan.expiresAt().isBefore(Instant.now())) {
             throw new IllegalStateException("计划已经过期，请重新生成预览");
         }
         if (plan.version() != request.planVersion() || !plan.planHash().equals(request.planHash())) {
@@ -314,19 +335,12 @@ public class AssistantService {
             throw new IllegalStateException("当前计划不能再次确认");
         }
         verifyResourceVersions(planId, request.expectedResourceVersions());
-        var pausedRunId = jdbc.sql("""
-                        select id from assistant_run
-                        where plan_id = :planId and status = 'WAITING_CONFIRMATION'
-                        order by created_at desc limit 1
-                        """)
-                .param("planId", planId)
-                .query(String.class)
-                .optional();
         var confirmed = jdbc.sql("update assistant_plan set status = 'CONFIRMED', confirmed_at = :now where id = :id and status in ('WAITING_CONFIRMATION', 'PLAN_READY')")
                 .param("now", Instant.now())
                 .param("id", planId)
                 .update();
         if (confirmed == 0) throw new IllegalStateException("当前计划已停止或已确认，不能再次执行");
+        browserAuthorizations.approve(plan.steps(), Boolean.TRUE.equals(request.rememberBrowserAuthorization()));
         if (pausedRunId.isPresent()) {
             return execution.resume(pausedRunId.get());
         }

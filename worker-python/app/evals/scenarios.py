@@ -46,15 +46,15 @@ _MULTI_STEP_TOOLS = {
     "folder.create": ("folder.rename",),
     "resource.add": ("resource.open", "knowledge.add"),
     "resource.upload": ("resource.read", "knowledge.parse"),
-    "resource.read": ("knowledge.add", "deliverable.create"),
+    "resource.read": ("knowledge.add", "workflow.prepare"),
     "knowledge.search": ("knowledge.read",),
     "knowledge.extract_table": ("dataset.open", "dataset.transform"),
     "dataset.create": ("dataset.query", "dataset.open", "dataset.transform"),
     "dataset.import": ("dataset.query", "dataset.open"),
-    "workflow.prepare": ("workflow.add_node", "workflow.open"),
+    "workflow.prepare": ("workflow.run", "workflow.add_node", "workflow.open"),
     "workflow.add_node": ("workflow.connect", "workflow.save_version"),
-    "workflow.run": ("deliverable.open",),
-    "deliverable.create": ("deliverable.open", "deliverable.export"),
+    "workflow.run": ("deliverable.export",),
+    "deliverable.create": ("workflow.prepare", "workflow.run"),
     "workspace.inspect": ("workspace.navigate", "workspace.select"),
 }
 
@@ -66,6 +66,66 @@ _TARGET_NAMES = {
     "dataset": "业务明细",
     "workflow": "项目处理流程",
     "deliverable": "阶段成果",
+}
+
+_NATURAL_ACTIONS = {
+    "workspace.inspect": "看看当前项目里已经有什么内容",
+    "workspace.navigate": "切到{target}所在的页面",
+    "workspace.select": "选中{target}",
+    "assistant.respond": "直接回答我关于当前工作的这个问题",
+    "assistant.analyze_context": "结合我现在打开的内容做个简短判断",
+    "project.list": "看看我现在都有哪些项目",
+    "project.open": "打开名为“{target}”的项目",
+    "project.create_workspace": "新建一个叫“{target}”的项目",
+    "project.rename": "把当前项目改名为“{target}复核版”",
+    "project.delete": "删除名为“{target}”的项目",
+    "folder.create": "建一个叫“{target}”的文件夹",
+    "folder.rename": "把刚才那个文件夹改名为“{target}复核版”",
+    "folder.move": "把“{target}”文件夹移到“已复核”下面",
+    "folder.delete": "删掉“{target}”文件夹",
+    "resource.upload": "把“{target}”文件上传到当前项目",
+    "resource.add": "把“{target}”这份内容加入当前项目",
+    "resource.open": "打开“{target}”这份材料",
+    "resource.read": "读一下“{target}”里面写了什么",
+    "resource.edit": "把“{target}”里的说明更新成我刚才补充的内容",
+    "resource.rename": "把“{target}”改名为“{target}复核版”",
+    "resource.move": "把“{target}”移到待复核目录",
+    "resource.delete": "删除“{target}”这份材料",
+    "source.verify": "先确认这个网址确实能打开而且有正文",
+    "source.add_verified": "把已经确认能访问的网址加入资料来源",
+    "knowledge.discover_external_sources": "帮我找几份可信的公开资料",
+    "knowledge.add": "把“{target}”加入知识资料",
+    "knowledge.search": "在已有资料里找和“{target}”有关的内容",
+    "knowledge.read": "把找到的“{target}”相关原文读出来",
+    "knowledge.parse": "把“{target}”这份文档整理成可检索内容",
+    "knowledge.extract_table": "把“{target}”里的表格数据提取出来",
+    "dataset.add_source": "把“{target}”作为一个数据来源接进来",
+    "dataset.connect": "测试并保存已经配置好的“{target}数据库”连接",
+    "dataset.import": "把“{target}”的数据导入项目",
+    "dataset.query": "从“{target}”里筛出我要的数据",
+    "dataset.extract": "把网页里的明细真正提取成可用数据",
+    "dataset.create": "新建一份叫“{target}”的数据",
+    "dataset.transform": "按刚才的要求加工“{target}”",
+    "dataset.open": "打开“{target}”看看结果",
+    "dataset.delete": "删除“{target}”这份数据",
+    "dataset.profile": "先检查“{target}”的数据量、字段和质量",
+    "workflow.initialize": "给当前项目建立一条基础处理流程",
+    "workflow.prepare": "把这项工作整理成一条可复用流程",
+    "workflow.open": "打开“{target}”这条流程",
+    "workflow.edit": "按我刚才说的要求调整“{target}”流程",
+    "workflow.add_selected_resource": "把我现在选中的内容放进流程",
+    "workflow.add_node": "在流程里加上刚才说的处理环节",
+    "workflow.remove_node": "从流程里去掉刚才提到的环节",
+    "workflow.connect": "把前后两个处理环节接起来",
+    "workflow.run": "运行“{target}”这条流程",
+    "workflow.save_version": "把当前流程保存成一个新版本",
+    "workflow.delete": "删除“{target}”这条流程",
+    "workflow.add_data_transform": "在流程里加一步数据整理",
+    "workflow.add_outputs": "让这条流程最后生成汇报成果",
+    "deliverable.open": "打开刚生成的“{target}”",
+    "deliverable.edit": "按我刚才的意见修改“{target}”",
+    "deliverable.export": "把“{target}”导出来",
+    "deliverable.delete": "删除“{target}”",
 }
 
 _INTERNAL_ID = re.compile(
@@ -181,20 +241,24 @@ class NaturalLanguageScenarioGenerator:
 
     def _prompt(self, tool: ToolDefinition, style: str, rng: random.Random) -> str:
         object_word = rng.choice(_OBJECT_WORDS.get(tool.category, ("内容", "对象")))
-        action = tool.description.rstrip("。")
         target = _TARGET_NAMES.get(tool.category)
-        target_clause = f"，对象叫“{target}”" if target else ""
+        action = self._action(tool)
         opener = rng.choice(_OPENERS)
         boundary = rng.choice(_BOUNDARIES)
         if style == "direct":
-            return f"{opener}{action}{target_clause}，完成后把结果直接打开。{boundary}"
+            return f"{opener}{action}，完成后把结果直接打开。{boundary}"
         if style == "goal":
-            return f"我想把{object_word}处理好：{action}{target_clause}。你自己判断要用哪些功能。{boundary}"
+            return f"我想把{object_word}处理好：{action}。你自己判断要用哪些功能。{boundary}"
         if style == "contextual":
-            return f"就按当前页面和我选中的{object_word}继续，{action}，不用问我内部编号。{boundary}"
+            return f"就按当前页面和我选中的{object_word}继续，{action}，不用问我什么内部编号。{boundary}"
         if style == "terse":
-            return f"{tool.title}一下{target_clause}。{boundary}"
-        return f"{opener}{action}{target_clause}；先检查现有内容，避免重复，并保留可追溯的处理记录。{boundary}"
+            return f"{action}。{boundary}"
+        return f"{opener}{action}；先看看现有内容，别重复建东西，处理依据也要能查到。{boundary}"
+
+    def _action(self, tool: ToolDefinition) -> str:
+        target = _TARGET_NAMES.get(tool.category, "当前内容")
+        template = _NATURAL_ACTIONS.get(tool.id, f"{tool.title}，处理对象是“{{target}}”")
+        return template.format(target=target)
 
     def _partner(self, primary: ToolDefinition, rng: random.Random) -> ToolDefinition | None:
         partner_ids = set(_MULTI_STEP_TOOLS.get(primary.id, ()))
@@ -203,12 +267,9 @@ class NaturalLanguageScenarioGenerator:
 
     def _combined_prompt(self, first: ToolDefinition, second: ToolDefinition, rng: random.Random) -> str:
         connector = rng.choice(("然后", "接着", "确认没问题后再", "处理完以后"))
-        first_target = _TARGET_NAMES.get(first.category, "当前对象")
-        second_target = _TARGET_NAMES.get(second.category, first_target)
         return (
-            f"先{first.description.rstrip('。')}，对象叫“{first_target}”，{connector}"
-            f"{second.description.rstrip('。')}“{second_target}”。系统对象由你根据名称和当前工作区解析，"
-            "不要让我提供内部 ID。"
+            f"先{self._action(first)}，{connector}{self._action(second)}。"
+            "你根据名称和当前工作区自己找到对象，不要让我提供系统编号。"
             f"{rng.choice(_BOUNDARIES)}"
         )
 

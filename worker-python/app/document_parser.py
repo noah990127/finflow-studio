@@ -5,10 +5,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
 
+import duckdb
 from docx import Document
 from openpyxl import load_workbook
 from pypdf import PdfReader
 from pptx import Presentation
+from PIL import Image
 
 from .config import settings
 from .models import ParsedChunk, ParsedDocument
@@ -23,7 +25,12 @@ class LocatedText:
 def parse_document(path: Path, file_name: str, media_type: str) -> ParsedDocument:
     suffix = Path(file_name).suffix.lower()
     warnings: List[str] = []
-    if suffix == ".pdf" or media_type == "application/pdf":
+    if suffix in {".png", ".jpg", ".jpeg", ".webp"}:
+        with Image.open(path) as image:
+            image.verify()
+        located = []
+        warnings.append("图片已保存，未进行文字识别")
+    elif suffix == ".pdf" or media_type == "application/pdf":
         located = _parse_pdf(path)
     elif suffix == ".docx":
         located = _parse_docx(path)
@@ -33,6 +40,8 @@ def parse_document(path: Path, file_name: str, media_type: str) -> ParsedDocumen
         located, warnings = _parse_xlsx(path)
     elif suffix in {".csv", ".tsv"}:
         located, warnings = _parse_delimited(path, suffix == ".tsv")
+    elif suffix == ".parquet" or media_type == "application/vnd.apache.parquet":
+        located, warnings = _parse_parquet(path)
     elif suffix in {".txt", ".md", ".mermaid", ".mmd", ".excalidraw", ".srt", ".vtt", ".json"} or media_type.startswith("text/"):
         located = [LocatedText(_read_text(path), {"type": "text", "start": 0})]
     elif suffix in {".mp4", ".mov", ".mkv", ".mp3", ".wav", ".m4a"}:
@@ -108,6 +117,27 @@ def _parse_xlsx(path: Path) -> Tuple[List[LocatedText], List[str]]:
             result.append(LocatedText("\n".join(rows), {"type": "excel", "sheet": sheet.title, "rows": "1:%d" % len(rows)}))
     workbook.close()
     return result, warnings
+
+
+def _parse_parquet(path: Path) -> Tuple[List[LocatedText], List[str]]:
+    max_rows = 200
+    max_columns = 50
+    warnings: List[str] = []
+    with duckdb.connect() as connection:
+        cursor = connection.execute("SELECT * FROM read_parquet(?) LIMIT ?", [str(path), max_rows + 1])
+        columns = [item[0] for item in cursor.description]
+        rows = cursor.fetchall()
+    visible_columns = columns[:max_columns]
+    visible_rows = rows[:max_rows]
+    lines = ["\t".join(visible_columns)]
+    lines.extend("\t".join("" if value is None else str(value) for value in row[:max_columns]) for row in visible_rows)
+    if len(columns) > max_columns:
+        warnings.append(f"Parquet 共 {len(columns)} 列，作为资料仅解析前 {max_columns} 列；完整字段可在数据预览中查看")
+    if len(rows) > max_rows:
+        warnings.append(f"Parquet 超过 {max_rows} 行，作为资料仅解析前 {max_rows} 行；完整数据可分页预览")
+    return [LocatedText("\n".join(lines), {
+        "type": "parquet", "rows": f"1:{len(visible_rows)}", "columns": len(columns),
+    })], warnings
 
 
 def _parse_delimited(path: Path, tsv: bool) -> Tuple[List[LocatedText], List[str]]:

@@ -20,6 +20,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
         "spring.datasource.url=jdbc:h2:mem:finflow-extract-test;MODE=PostgreSQL;DB_CLOSE_DELAY=-1",
         "finflow.ai.enabled=false",
         "finflow.storage.root=${java.io.tmpdir}/finflow-extract-test",
+        "finflow.data.connection-key-file=${java.io.tmpdir}/finflow-extract-test/data-connection.key",
         "finflow.extract.progress-interval=1000"
 })
 class ExtractJobFlowTest {
@@ -58,5 +59,20 @@ class ExtractJobFlowTest {
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> validator.validate("select 1; select 2"))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void encryptsUserEnteredConnectionPasswordAndNeverReturnsItForDisplay() {
+        var project = projects.create("连接密码测试", "表单密码应加密保存");
+        var created = connections.create(new CreateConnectionRequest(project.id(), "预算数据库",
+                SourceType.DUCKDB, "jdbc:duckdb:", "budget_user", "plain-password", Map.of()));
+
+        var stored = connections.get(created.id());
+        assertThat(stored.secretRef()).startsWith("enc:v1:").doesNotContain("plain-password");
+        assertThat(connections.resolveSecret(stored)).isEqualTo("plain-password");
+        assertThat(created.secretRef()).isEqualTo("已配置");
+        assertThat(connections.list(project.id()).stream().filter(item -> item.id().equals(created.id()))
+                .map(connections::safeForDisplay).findFirst().orElseThrow().secretRef())
+                .isEqualTo("已配置");
     }
 }

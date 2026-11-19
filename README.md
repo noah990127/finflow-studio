@@ -1,144 +1,114 @@
-# FinBTP Studio
+# FinBTP Studio / FinFlow
 
-面向个人专注工作的财经数据工作流平台。代码目录即当前目录：
+面向个人工作的 Agent 工作台：用户提出目标、提供资料并检查成果，Agent 安排业务工序、调用工具、生成文件。“我的工作”是业务工作流，技术调用与执行记录按需展开，不要求用户配置技术节点。
 
-- `frontend`：Vue 3 业务工作台；
-- `backend-java`：JDK 21 / Spring Boot 主服务；
-- `worker-python`：FastAPI 文件、表格和输出计算服务；
-- `docker-compose.yml`：生产依赖和前后端服务编排。
+## 当前能力
+
+- 项目来源目录、原生 Markdown 预览与编辑、网页资料阅读和在线 Office 文件查看。
+- 业务工序按用户检查的成果组织，技术片段与辅助材料不抢占主成果展示。
+- Codex CLI / OpenCode CLI 任务运行时切换，结构化工具契约、审批、审计、流式进展与中止。
+- 固定版本重复执行：输入可以更新，已发布 SQL、提示词或工具逻辑不因重跑自动改写；改逻辑时生成新版本。
+- SearxNG 搜索、网页读取与快照、结构化数据处理，以及报告、文档和演示文稿输出。
+- 独立浏览器执行服务：用户登录、Agent 操作、对外操作确认与结果核验。定时执行尚未实现。
+
+## 文档导航
+
+| 模块 | 说明 |
+| --- | --- |
+| [前端](frontend/README.md) | 简约交互、人工操作条、构建与验证 |
+| [Java 后端](backend-java/README.md) | 工具契约、业务工序、授权与密钥 |
+| [Python Worker](worker-python/README.md) | CLI 运行时、搜索、文档与测试 |
+| [浏览器执行](worker-python/app/browser_runner/README.md) | 授权边界、登录接管、编辑器和诊断 |
+| [PPT 渲染](worker-python/app/ppt_skills/README.md) | 内容规划、模板和格式限制 |
+| [部署指南](docs/Docker%20部署指南.md) | Docker、持久卷与离线部署 |
+| [演示案例](examples/cases/README.md) | 脱敏数据与历史兼容性样例 |
 
 ## 本地启动
 
-推荐使用统一启动脚本。它会启动或复用 ONLYOFFICE Document Server，等待健康检查通过，再依次启动 Python、Java 和 Vue：
+准备 JDK 21、Maven、Node.js/npm、Python 3.12，以及 Docker 或 Colima。按 `.env.example` 创建本地 `.env`，替换默认密码与所有示例密钥；不要提交 `.env`。
+
+```bash
+python3.12 -m venv worker-python/.venv312
+worker-python/.venv312/bin/pip install -e './worker-python[dev]'
+worker-python/.venv312/bin/python -m playwright install chromium
+npm --prefix frontend install
+```
+
+配置所选 CLI 的可执行路径、登录或模型提供方后启动：
 
 ```bash
 ./scripts/start-local.sh
 ```
 
-打开 `http://127.0.0.1:5174/`。ONLYOFFICE 使用 `http://127.0.0.1:8082/`，服务日志和进程号保存在 `.run/`。停止整套本地服务：
+| 服务 | 本地地址 |
+| --- | --- |
+| 工作台 | http://127.0.0.1:5174/ |
+| Java API | http://127.0.0.1:8080/ |
+| Python Worker | http://127.0.0.1:8001/ |
+| Browser Runner（可选） | http://127.0.0.1:8002/ |
+| ONLYOFFICE | http://127.0.0.1:8082/ |
+| SearxNG | http://127.0.0.1:8888/ |
 
-```bash
-./scripts/stop-local.sh
+日志与进程号位于 `.run/`。脚本复用健康服务；修改代码或环境后需重启对应服务，健康不等于已更新。停止本地应用用 `./scripts/stop-local.sh`。浏览器服务重启会丢失内存登录会话，先核验未完成的对外提交再重启。
+
+## 模型与运行时
+
+`AGENT_RUNTIME` 选择任务框架，与工具内部生成内容使用的 `FINFLOW_LLM_PROVIDER` 分开：
+
+```dotenv
+AGENT_RUNTIME=codex-cli
+CODEX_CLI_PATH=codex
+# 公司部署可改为：
+# AGENT_RUNTIME=opencode
+# OPENCODE_CLI_PATH=opencode
+# OPENCODE_MODEL=提供方/模型
 ```
 
-首次启动需要下载 ONLYOFFICE 镜像，所以会比后续启动慢。不配置模型 API Key 时，资料解析、数据抽取、表格加工和文件输出仍可用，智能分析使用本地提取式降级。
+CLI 必须预先安装并能由服务运行账号调用。公司环境须提供批准的 CLI、模型配置与依赖镜像；桌面登录态不会自动进入容器。CLI 不可用时排查具体错误，不依赖自动切回旧助手。工具内部生成任务仍需配置对应模型。
 
-## Agent 自定义模型
+自定义模型设置、数据源凭据由后端管理。默认密钥文件包括 `backend-java/data/agent-model.key` 和 `backend-java/data/data-connection.key`；迁移时和数据库一起安全备份，不能推送 GitHub。默认账号和示例密码仅供本地演示。
 
-Agent 面板顶部的模型入口支持默认模型和自定义模型切换。自定义模式填写 OpenAI 兼容 API Base URL、模型名称与 API Key；连接测试会验证工具调用能力。远程地址要求 HTTPS，本机服务可使用 HTTP。
+## 浏览器人工操作
 
-配置按对话保存，恢复历史对话时沿用该对话的模型；新对话仍使用服务端默认配置。当前范围是右侧 Agent 的决策、续轮与直接回答，不覆盖独立工作流节点或工具内部的专用生成模型。运行中或待审批的任务需要先结束或中断才能换模型。自定义模型失败不会自动降级到默认模型。
+本机可见窗口需设置 `BROWSER_RUNNER_ENABLED=true`、`BROWSER_INTERACTIVE_HEADED=true`，并配置同一个足够长的随机 `BROWSER_RUNNER_TOKEN`。它是服务间令牌，不是用户授权或网站登录凭据。
 
-API Key 不保存在浏览器或聊天历史中，以 AES-GCM 加密保存在数据库。加密主密钥默认位于 Java 服务的 `./data/agent-model.key`（可用 `finflow.agent.key-file` 指定），文件权限为仅所有者读写。备份和迁移时必须同时保留数据库与该文件，不能提交到 Git；丢失主密钥后需要重新填写 API Key。清除配置会删除该对话保存的密钥。
+1. 在项目对话中提出任务，首次连接网站由用户授权。
+2. 在打开的网站窗口完成登录或人工操作。
+3. 回到当前对话，在输入框上方点击 **“我已完成，继续执行”**。平台交还控制并继续原任务，无需另外输入消息。
+4. Agent 检查页面并处理内容；发送、提交等对外操作仍需确认。
+5. 提交后核验结果。结果不明确时允许查看记录，但禁止盲目重发。
 
-当前平台是个人工作台，模型设置沿用现有本地信任边界，没有新增多租户身份认证。不要将无鉴权的 Java/Python 端口直接暴露到公网。
+按钮只显示当前对话关联且处于人工接管状态的连接。网站授权弹窗用于连接管理、撤销和审计，不是正常继续任务的主要入口。可见浏览器接管目前面向本机单用户；远程部署需另建受保护的人工操作通道。
 
-## 生产部署
+## 验证
+
+```bash
+./scripts/verify.sh
+node --test frontend/tests/*.test.mjs
+```
+
+统一脚本运行 Java、Python、前端构建和空白错误检查。浏览器测试使用本地模拟网站，不向真实邮箱发送邮件；依赖外部模型或系统软件的可选测试可能跳过。点击成功或 Agent 声称完成，不能代替真实产物与业务结果校验。
+
+## 部署与数据安全
+
+### 本次开发快照验证（2026-11-19）
+
+本次是 `dev` 开发快照，不是全量验收通过的发布版本：
+
+| 检查 | 结果 |
+| --- | --- |
+| Java 全量 | 306 项，7 失败、1 错误、1 跳过 |
+| Python 全量 | 258 通过、2 失败、1 跳过 |
+| 前端单元测试 | 78 通过、3 失败 |
+| 前端类型检查及构建 | 通过 |
+| Git 空白检查 | 通过 |
+
+待处理项包括 Java 工序标题断言、任务中止状态、搜索测试和批量删除事务锁；Python 技能边界说明断言与 PPT 页数预期；前端审批模板、文档复核和旧执行详情文案断言。失败原因仍需逐项复核，不能一概视为测试过时。浏览器局部回归和模拟交互通过不代表这些全量问题已经解决。
 
 ```bash
 docker compose up --build -d
 ```
 
-生产环境通过 `DATABASE_PASSWORD`、`DEEPSEEK_API_KEY` 和各数据源密码环境变量注入密钥。数据库连接配置中的密码字段只能填写 `env:变量名`，不会保存明文。
+Compose 与桌面环境不是等价运行时，详见部署指南。离线环境提前提供批准的包、CLI、镜像、字体、浏览器与模型服务，并配置企业数据源和网络策略。不要直接公开 Worker、Browser Runner、调试端口或默认凭据。
 
-FinBTP Studio 是一个面向个人深度工作的智能工作流平台。当前仓库包含三个可独立运行的应用：
-
-- `frontend`：Vue 3 + TypeScript 的蓝白业务界面；
-- `backend-java`：JDK 21、Spring Boot 4、Spring AI 的主后端与 AI 安全执行控制面；
-- `worker-python`：FastAPI 资料解析、Ref 检索和文件分析 Worker。
-
-## 已实现的第一版能力
-
-- 创建和读取个人项目；
-- 全局 AI 助手会话；
-- 当前页面和选中对象的上下文快照；
-- 自动生成可读任务步骤；
-- `READ_ONLY`、`DRAFT_ONLY`、`CREATE_VERSION` 风险分级；
-- 修改型计划的版本、哈希、过期和确认校验；
-- 幂等任务创建、后台执行、事件历史、SSE、取消与撤销；
-- Codex Responses API 模型网关，保留 DeepSeek 适配；没有 API Key 时自动使用本地安全计划器和提取式分析；
-- Python 本地摘要、Ref 检索和样本数据概况；
-- Vue 项目工作台和完整 AI 任务面板。
-- Vue Flow 可视化工作流编排，支持选择已有文件、数据连接、表格、Ref、AI 分析和成果生成；
-- 工作流草稿、一键检查、不可变版本、逐步运行记录、停止和从失败处续跑。
-- CSV 大文件游标分页预览，以及 PDF、PowerPoint、Word 和文本的在线查看。
-- 内置 ECharts 财务报告和 Perspective 自助分析，无需额外部署 BI 或报告设计服务。
-
-## 本机启动
-
-### 1. Python Worker
-
-```bash
-cd worker-python
-python3.12 -m venv .venv312
-source .venv312/bin/activate
-pip install '.[dev]'
-python -m uvicorn app.main:app --reload --port 8001
-```
-
-### 2. Java 主后端
-
-需要 JDK 21：
-
-```bash
-cd backend-java
-mvn spring-boot:run
-```
-
-默认使用文件型 H2，数据保存在 `backend-java/data`。切换 PostgreSQL 或 openGauss 时设置 `DATABASE_URL`、`DATABASE_USERNAME`、`DATABASE_PASSWORD` 和 JDBC Driver。
-
-### 3. Vue 前端
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-打开 `http://127.0.0.1:5173`。若端口被占用，可执行 `npm run dev -- --port 5174`。
-
-## 配置 Codex 分析
-
-取得 API Key 后：
-
-```bash
-export FINFLOW_LLM_PROVIDER=codex
-export OPENAI_API_KEY='你的 OpenAI API Key'
-export OPENAI_MODEL=gpt-5.6-sol
-export OPENAI_REASONING_EFFORT=medium
-```
-
-API Key 只在 Python 服务端读取，不会进入浏览器，也不会复用桌面 Codex 登录态。没有 Key 时项目、计划、确认、任务和手动页面仍然可用。
-
-## 测试
-
-```bash
-./scripts/verify.sh
-```
-
-该命令统一使用与本地启动脚本相同的 `worker-python/.venv312`，依次运行 Java 测试、Python 测试、前端类型检查与生产构建，以及 Git 空白错误检查。
-
-Agent 验收不围绕某几个演示问题写固定流程。启动 Java API 后，可以直接从实时 Tool Manifest 生成覆盖全部能力域的隐藏自然语言场景：
-
-```bash
-worker-python/.venv312/bin/python scripts/generate-agent-eval-suite.py \
-  --count 180 --seed 20260904 --output /tmp/finflow-agent-evals.jsonl
-```
-
-生成集会轮换用户角色、表达风格、模糊指代、多步骤目标、多轮补充、Auto/审批和失败恢复条件。`worker-python/app/evals` 根据真实工具事件、Observation、审批时序和工作区状态变化评分，不把 Agent 回复中的“已完成”当作成功依据。固定场景只承担基础回归，版本质量以未向 Agent 暴露的生成场景为主。
-
-模型意图与工具发现可以独立抽样运行，避免把模型选择正确误算为工作区任务已经完成：
-
-```bash
-worker-python/.venv312/bin/python scripts/run-agent-intent-evals.py \
-  /tmp/finflow-agent-evals.jsonl --limit 20 --timeout 60 \
-  --output /tmp/finflow-agent-intent-report.json
-```
-
-## Docker Compose
-
-仓库包含 `docker-compose.yml`。平台全部服务、ONLYOFFICE、MinIO、环境变量、两套案例初始化和离线镜像部署步骤见 [`docs/Docker 部署指南.md`](docs/Docker%20部署指南.md)。
-
-## 可部署示范案例
-
-仓库在 `examples/cases` 中提供两个经过脱敏的可移植案例：英伟达近五年经营状况分析和 2026 年全球税务政策趋势。资源包包含源文件、脱敏连接、工作流、模拟数据库/API 和初始成果规格，部署与导入步骤见 `examples/cases/README.md`。
+`.run/`、`artifacts/`、本地数据库、浏览器状态、密钥及个人资料不属于源码发布内容。保留所有模板与示例的上游许可证。

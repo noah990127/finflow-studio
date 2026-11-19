@@ -1,0 +1,9 @@
+{
+  "forecast_rows": 48,
+  "actual_rows": 48,
+  "adjustment_rows": 8,
+  "period": "2026-08",
+  "regions": 4,
+  "products": 12,
+  "simulated": true
+}

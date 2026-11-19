@@ -68,7 +68,7 @@ public class KnowledgeService {
                     """).param("id", resolvedResourceId).param("projectId", projectId).param("name", originalName)
                     .param("mediaType", mediaType).param("now", now).update();
         } else {
-            var current = jdbc.sql("select current_version from file_resource where id = :id and project_id = :projectId")
+            var current = jdbc.sql("select current_version from file_resource where id = :id and project_id = :projectId for update")
                     .param("id", resolvedResourceId).param("projectId", projectId).query(Integer.class).optional()
                     .orElseThrow(() -> new IllegalArgumentException("资料不存在或不属于当前项目"));
             version = current + 1;
@@ -92,11 +92,25 @@ public class KnowledgeService {
     @Transactional
     public FileResourceResponse createGeneratedVersion(String projectId, String resourceId, String name,
                                                        String mediaType, byte[] content) {
+        return createContentVersion(projectId, resourceId, name, mediaType, content, false);
+    }
+
+    @Transactional
+    public FileResourceResponse createTextVersion(String resourceId, int expectedVersion, byte[] content) {
+        var current = get(resourceId);
+        var version = jdbc.sql("select current_version from file_resource where id = :id for update")
+                .param("id", resourceId).query(Integer.class).single();
+        if (version != expectedVersion) throw new IllegalStateException("文档已有新版本，你的修改未覆盖它；请对照最新版本后再保存");
+        return createContentVersion(current.projectId(), resourceId, current.name(), current.mediaType(), content, true);
+    }
+
+    private FileResourceResponse createContentVersion(String projectId, String resourceId, String name,
+                                                       String mediaType, byte[] content, boolean allowEmpty) {
         projects.get(projectId);
-        if (content == null || content.length == 0) throw new IllegalArgumentException("加工结果为空");
+        if (content == null || (!allowEmpty && content.length == 0)) throw new IllegalArgumentException("加工结果为空");
         if (content.length > maxFileBytes) throw new IllegalArgumentException("加工结果超过允许的大小");
         var originalName = safeName(name);
-        var current = jdbc.sql("select current_version from file_resource where id = :id and project_id = :projectId")
+        var current = jdbc.sql("select current_version from file_resource where id = :id and project_id = :projectId for update")
                 .param("id", resourceId).param("projectId", projectId).query(Integer.class).optional()
                 .orElseThrow(() -> new IllegalArgumentException("表格不存在或不属于当前项目"));
         var version = current + 1;
@@ -205,12 +219,17 @@ public class KnowledgeService {
         get(resourceId);
         var locations = jdbc.sql("select storage_path from file_version where resource_id = :id")
                 .param("id", resourceId).query(String.class).list();
+        var derivedLocations = jdbc.sql("select storage_path from spreadsheet_conversion_part where resource_id = :id")
+                .param("id", resourceId).query(String.class).list();
         jdbc.sql("delete from office_working_copy where resource_id = :id or (source_kind = 'files' and source_id = :id)")
                 .param("id", resourceId).update();
+        jdbc.sql("delete from pasted_import_provenance where resource_id = :id").param("id", resourceId).update();
         jdbc.sql("delete from knowledge_ref where resource_id = :id").param("id", resourceId).update();
+        jdbc.sql("delete from spreadsheet_conversion_part where resource_id = :id").param("id", resourceId).update();
+        jdbc.sql("delete from spreadsheet_conversion_job where resource_id = :id").param("id", resourceId).update();
         jdbc.sql("delete from file_version where resource_id = :id").param("id", resourceId).update();
         jdbc.sql("delete from file_resource where id = :id").param("id", resourceId).update();
-        afterCommit(() -> locations.forEach(blobStore::delete));
+        afterCommit(() -> { locations.forEach(blobStore::delete); derivedLocations.forEach(blobStore::delete); });
     }
 
     public Path filePath(String resourceId, Integer version) {

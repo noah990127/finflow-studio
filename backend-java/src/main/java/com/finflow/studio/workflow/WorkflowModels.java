@@ -16,6 +16,7 @@ public final class WorkflowModels {
         RESOURCE,
         ACQUIRE,
         PROCESS,
+        MYSTERY,
         AGENT_TASK,
         TOOL,
         CONTROL,

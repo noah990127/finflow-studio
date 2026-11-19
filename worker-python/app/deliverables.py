@@ -2,6 +2,7 @@ import io
 import json
 import math
 import re
+import sys
 from html import escape
 from pathlib import Path
 from typing import Iterable, List, Optional
@@ -29,7 +30,7 @@ from reportlab.platypus import Image as ReportLabImage, ListFlowable, ListItem, 
 from .charting import add_native_ppt_chart, chart_png, normalize_ppt_chart_ids, valid_chart
 from .citations import compact_inline_citations, inline_sources, normalize_markers, reference_entries, reference_records
 from .models import DeliverableChart, DeliverableRef, DeliverableRequest, DeliverableSection
-from .ppt_skills import HUAWEI_STYLE_C, render as render_ppt_skill
+from .ppt_skills import HUAWEI_STYLE_C, STUDIO_PROFESSIONAL, render as render_ppt_skill
 
 
 BLUE = PptColor(47, 107, 202)
@@ -38,12 +39,18 @@ DARK = PptColor(31, 41, 55)
 MUTED = PptColor(91, 105, 125)
 PALE_BLUE = PptColor(238, 246, 255)
 LIGHT_LINE = PptColor(218, 229, 242)
-PPT_FONT = "Microsoft YaHei"
+PPT_FONT = "PingFang SC" if sys.platform == "darwin" else "Noto Sans CJK SC"
 
 
 def create_pptx(request: DeliverableRequest) -> bytes:
+    if request.ppt_skill == "blue-professional-v2":
+        from .semantic_presentation import render
+        return render(request)
     request = _normalize_ppt_request(request)
-    if request.ppt_skill == HUAWEI_STYLE_C:
+    if request.ppt_skill == "presenton-executive-v1":
+        from .presentation_templates import render
+        return render(request)
+    if request.ppt_skill in {None, "", HUAWEI_STYLE_C, STUDIO_PROFESSIONAL}:
         return render_ppt_skill(request)
     presentation = Presentation()
     presentation.slide_width = Inches(13.333)

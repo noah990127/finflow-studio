@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>费用报表 · 验证环境</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font:14px system-ui,sans-serif;color:#252b32;background:#f6f7f9;letter-spacing:0}header{padding:20px 32px;background:#fff;border-bottom:1px solid #e0e4e8;display:flex;justify-content:space-between}header span{color:#78818b}main{max-width:1080px;margin:38px auto;padding:0 24px}h1{font-size:24px;font-weight:600}form{display:flex;align-items:end;gap:16px;padding:24px 0;flex-wrap:wrap}label{display:grid;gap:8px;color:#5b6570}input,button{height:36px;border:1px solid #cdd4dc;border-radius:4px;padding:0 12px;background:white;font:inherit}button{cursor:pointer}button[type=submit]{background:#176b59;border-color:#176b59;color:white}button:disabled{opacity:.45;cursor:default}.summary{display:flex;justify-content:space-between;border-top:1px solid #dce1e6;padding:20px 0;min-height:60px}table{width:100%;border-collapse:collapse;background:white}th,td{text-align:left;padding:16px;border-bottom:1px solid #e8ecf0}th{font-size:12px;color:#707b85;font-weight:500}td:last-child,th:last-child{text-align:right}#error{color:#b22}footer{color:#7c858e;padding:22px 0;font-size:12px}
+</style>
+<header><strong>费用管理</strong><span>验证环境 · 合成数据</span></header>
+<main><h1>费用报表</h1>
+<form id="query"><label for="start">开始日期<input id="start" type="date" value="2026-10-01" required></label><label for="end">结束日期<input id="end" type="date" value="2026-10-31" required></label><button type="submit">查询</button><button id="download" type="button" disabled>导出CSV</button></form>
+<p id="error" role="alert"></p><div class="summary"><span role="status" aria-label="查询结果">尚未查询</span><strong id="total"></strong></div>
+<table><thead><tr><th>日期</th><th>部门</th><th>金额（元）</th></tr></thead><tbody id="rows"></tbody></table><footer>数据范围：2026年10月—11月</footer></main>
+<script>
+const start=document.querySelector('#start'),end=document.querySelector('#end'),download=document.querySelector('#download');let lastQuery='';
+document.querySelector('#query').addEventListener('submit',async event=>{event.preventDefault();download.disabled=true;document.querySelector('#error').textContent='';const params=new URLSearchParams({start:start.value,end:end.value});const response=await fetch('/reports?'+params);if(!response.ok){document.querySelector('#error').textContent='日期范围无效';return}const data=await response.json();document.querySelector('#rows').replaceChildren(...data.rows.map(row=>{const tr=document.createElement('tr');for(const key of ['date','department','amount']){const td=document.createElement('td');td.textContent=row[key];tr.append(td)}return tr}));document.querySelector('[role=status]').textContent=`查询完成：${start.value} 至 ${end.value}，共 ${data.rows.length} 条`;document.querySelector('#total').textContent=`合计 ¥${data.total.toLocaleString()}`;lastQuery=params.toString();download.disabled=data.rows.length===0});
+for(const field of [start,end])field.addEventListener('input',()=>{download.disabled=true});
+download.addEventListener('click',()=>{const a=document.createElement('a');a.href='/export?'+lastQuery;a.download='expense-report.csv';a.click()});
+</script></html>

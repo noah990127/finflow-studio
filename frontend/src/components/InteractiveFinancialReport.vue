@@ -130,7 +130,7 @@ async function load() {
     ])
     report.value = reportResult
     const candidates = workspace.resources.filter(resource => resource.resourceType === 'DATASET' ||
-      (['DATA_FILE', 'KNOWLEDGE_FILE', 'OFFICE_FILE'].includes(resource.resourceType) && /\.(csv|tsv)$/i.test(resource.name)))
+      (['DATA_FILE', 'KNOWLEDGE_FILE', 'OFFICE_FILE'].includes(resource.resourceType) && /\.(csv|tsv|parquet)$/i.test(resource.name)))
     const sources = Array.from(candidates
       .sort((left, right) => Number(right.resourceType === 'DATASET') - Number(left.resourceType === 'DATASET'))
       .reduce((items, resource) => {

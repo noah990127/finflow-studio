@@ -7,6 +7,7 @@ import com.finflow.studio.deliverable.DeliverableModels.CitationRequest;
 import com.finflow.studio.deliverable.DeliverableModels.CreateRequest;
 import com.finflow.studio.deliverable.DeliverableModels.SectionRequest;
 import com.finflow.studio.deliverable.DeliverableService;
+import com.finflow.studio.data.DataTransformService;
 import com.finflow.studio.knowledge.KnowledgeService;
 import com.finflow.studio.project.ProjectService;
 import com.finflow.studio.worker.WorkerClient;
@@ -35,12 +36,15 @@ import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.Set;
+import com.finflow.studio.assistant.AssistantModels.RiskLevel;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import tools.jackson.core.JacksonException;
@@ -60,12 +64,21 @@ public class AssistantExecutionService {
     private final KnowledgeService knowledge;
     private final DeliverableService deliverables;
     private final WorkflowRunService workflowRuns;
+    private final DataTransformService dataTransforms;
     private final AssistantWorkspaceToolGateway workspaceTools;
     private final AssistantPlanner planner;
+    private final AgentWorkService agentWorks;
+    @org.springframework.beans.factory.annotation.Autowired
+    private FixedWorkService fixedWorks;
+    @org.springframework.beans.factory.annotation.Autowired
+    private BrowserAuthorizationService browserAuthorizations;
     private final int maxDynamicActions;
     private final AssistantInterruptions interruptions;
     private final String gatewayBaseUrl;
     private final Map<String, ReentrantReadWriteLock> runLocks = new ConcurrentHashMap<>();
+    private volatile boolean continuousAgentHealthy;
+    private volatile String continuousRuntimeMode = "deep-agents";
+    private volatile long continuousAgentHealthExpiresAt;
 
     public AssistantExecutionService(JdbcClient jdbc, AssistantEventService events,
                                      @Qualifier("applicationTaskExecutor") TaskExecutor taskExecutor,
@@ -73,10 +86,11 @@ public class AssistantExecutionService {
                                      WorkerClient worker, ObjectMapper objectMapper,
                                      WorkspaceResourceService workspace, KnowledgeService knowledge,
                                      DeliverableService deliverables, WorkflowRunService workflowRuns,
+                                     DataTransformService dataTransforms,
                                      AssistantWorkspaceToolGateway workspaceTools, AssistantPlanner planner,
                                      @Value("${finflow.agent.max-dynamic-actions:80}") int maxDynamicActions,
                                      @Value("${finflow.agent.gateway-base-url:http://127.0.0.1:8080}") String gatewayBaseUrl,
-                                     AssistantInterruptions interruptions) {
+                                     AssistantInterruptions interruptions, AgentWorkService agentWorks) {
         this.jdbc = jdbc;
         this.events = events;
         this.taskExecutor = taskExecutor;
@@ -88,11 +102,13 @@ public class AssistantExecutionService {
         this.knowledge = knowledge;
         this.deliverables = deliverables;
         this.workflowRuns = workflowRuns;
+        this.dataTransforms = dataTransforms;
         this.workspaceTools = workspaceTools;
         this.planner = planner;
         this.maxDynamicActions = Math.max(12, maxDynamicActions);
         this.gatewayBaseUrl = gatewayBaseUrl;
         this.interruptions = interruptions;
+        this.agentWorks = agentWorks;
     }
 
     public RunResponse start(String sessionId, String planId, String idempotencyKey) {
@@ -263,11 +279,28 @@ public class AssistantExecutionService {
         }
     }
 
+    private static boolean isCliRuntime(Object mode) {
+        return "opencode".equals(mode) || "codex-cli".equals(mode);
+    }
+
     public boolean continuousAgentAvailable() {
-        var health = worker.health();
-        return "online".equals(health.get("status"))
-                && "deep-agents".equals(health.get("agentRuntimeMode"))
-                && Boolean.TRUE.equals(health.get("continuousAgent"));
+        var now = System.nanoTime();
+        if (now < continuousAgentHealthExpiresAt) return continuousAgentHealthy;
+        synchronized (this) {
+            if (now < continuousAgentHealthExpiresAt) return continuousAgentHealthy;
+            try {
+                var health = worker.health();
+                continuousRuntimeMode = Objects.toString(health.get("agentRuntimeMode"), "deep-agents");
+                continuousAgentHealthy = "online".equals(health.get("status"))
+                        && Set.of("deep-agents", "opencode", "codex-cli").contains(Objects.toString(health.get("agentRuntimeMode"), ""))
+                        && Boolean.TRUE.equals(health.get("continuousAgent"));
+                continuousAgentHealthExpiresAt = now + java.util.concurrent.TimeUnit.SECONDS.toNanos(30);
+            } catch (RuntimeException exception) {
+                // Keep the last known mode briefly so one transient health probe does not switch runtimes mid-session.
+                continuousAgentHealthExpiresAt = now + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+            }
+            return continuousAgentHealthy;
+        }
     }
 
     @SuppressWarnings("unchecked")
@@ -278,15 +311,38 @@ public class AssistantExecutionService {
                         "approvalCount", rs.getInt("approval_count"))).single();
         var approvalCount = ((Number) row.get("approvalCount")).intValue();
         var resume = approvalCount > 0;
+        if (resume && isCliRuntime(continuousRuntimeMode)) {
+            // A human approved these exact arguments. Execute them once before asking the CLI to continue.
+            for (var approved : loadSteps(run.planId()).stream()
+                    .filter(step -> "PENDING".equals(step.status()) && step.requiresConfirmation()).toList()) {
+                var result = executeAndObserve(run, approved, new LinkedHashMap<>(readEffects(run.id())));
+                if (!Boolean.TRUE.equals(result.get("success")))
+                    throw new IllegalStateException("已确认操作执行失败：" + result.get("error"));
+            }
+            effects.putAll(readEffects(run.id()));
+            jdbc.sql("update assistant_run set approval_count = 0 where id = :id").param("id", run.id()).update();
+        }
         var context = withRecentMessages(workspaceContext(runtime.projectId()), run.sessionId());
+        effects.put("agentRuntime", continuousRuntimeMode);
+        jdbc.sql("update assistant_run set effects_json = :effects where id = :id")
+                .param("effects", writeJson(effects)).param("id", run.id()).update();
         var request = planner.continuousRequest(runtime.goal(), runtime.page(), context, run.sessionId(),
                 runtime.executionMode(), run.id(), gatewayBaseUrl, String.valueOf(row.get("token")),
                 resume, approvalCount);
+        if (isCliRuntime(continuousRuntimeMode)) {
+            request.put("capabilities", AssistantCapabilityRegistry.catalog());
+            request.put("max_tool_calls", maxDynamicActions);
+        }
+        request.put("observation", Map.of("previousEffects", readEffects(run.id()),
+                "work", runtime.projectId() == null ? List.of() : agentWorks.list(runtime.projectId()).stream()
+                        .filter(work -> work.sessionId().equals(run.sessionId())).toList(),
+                "approvedActions", loadSteps(run.planId()).stream().filter(step -> "PENDING".equals(step.status()) && !"agent.execute".equals(step.tool()))
+                        .map(step -> Map.of("tool", step.tool(), "arguments", step.arguments())).toList()));
         jdbc.sql("update assistant_plan_step set status = 'RUNNING' where plan_id = :id and tool_name = 'agent.execute' and status = 'PENDING'")
                 .param("id", run.planId()).update();
         var result = interruptions.token("run", run.id()).await(() -> worker.runContinuousAgentStreaming(request, event -> {
             var type = Objects.toString(event.get("type"), "");
-            if (Set.of("tool_call", "observation", "waiting_confirmation", "completed", "error").contains(type)) return;
+            if (Set.of("tool_call", "completed", "heartbeat").contains(type)) return;
             var payload = new LinkedHashMap<String, Object>();
             event.forEach((key, value) -> { if (value != null) payload.put(key, value); });
             events.publish(run.sessionId(), run.id(), "agent." + type, payload);
@@ -305,9 +361,15 @@ public class AssistantExecutionService {
                     if (raw.get("arguments") instanceof Map<?, ?> values) {
                         values.forEach((key, item) -> arguments.put(String.valueOf(key), item));
                     }
+                    var description = "resource.delete_batch".equals(tool)
+                            ? workspaceTools.deletionDescription(arguments) : "browser.commit".equals(tool)
+                            ? BrowserAuthorizationService.approvalDescription(browserSession("preview", arguments)) : "browser.open".equals(tool)
+                            ? browserAuthorizations.scope(tool, arguments).label()
+                              + (Boolean.FALSE.equals(arguments.get("human_login")) ? "。本次由Agent浏览公开页面。" : "。本次先交给你操作，再打开网站；登录后由你交还Agent。")
+                              + "网站可正常加载数据和维持连接；填写可能触发自动保存。发送、发布、删除等操作另行确认。不允许访问未授权的本机私有服务。记住授权有效期为30天。" : capability.description();
                     var proposed = new PlanStep(UUID.randomUUID().toString(), 0, capability.id(), capability.mode(),
-                            capability.title(), capability.description(), arguments, capability.risk(), true, "PENDING");
-                    staged.add(appendDynamicStep(run.planId(), proposed, runtime.executionMode(),
+                            capability.title(), description, arguments, capability.risk(), true, "PENDING");
+                    staged.add(appendDynamicStep(run.planId(), proposed, "APPROVAL",
                             "Agent 已停在执行前，等待确认写入操作"));
                 }
             }
@@ -326,14 +388,79 @@ public class AssistantExecutionService {
 
     public Map<String, Object> callContinuousTool(String runId, String gatewayToken, Map<String, Object> request) {
         var actor = jdbc.sql("""
-                select p.owner_id from assistant_run r
+                select s.default_user_id from assistant_run r
                 join assistant_session s on s.id = r.session_id
-                join project p on p.id = s.project_id
-                where r.id = :id and p.deleted = false
+                where r.id = :id
                 """).param("id", runId).query(String.class).optional()
                 .orElseThrow(() -> new IllegalArgumentException("助手任务不存在"));
         try (var ignored = ActorContext.bind(actor)) {
             return callContinuousToolAsActor(runId, gatewayToken, request);
+        }
+    }
+
+    public Map<String, Object> workflowRunStatus(String runId, String workflowRunId, String gatewayToken) {
+        var actor = jdbc.sql("""
+                select s.default_user_id from assistant_run r
+                join assistant_session s on s.id = r.session_id
+                where r.id = :id
+                """).param("id", runId).query(String.class).optional()
+                .orElseThrow(() -> new IllegalArgumentException("助手任务不存在"));
+        try (var ignored = ActorContext.bind(actor)) {
+            var stored = jdbc.sql("select gateway_token from assistant_run where id = :id")
+                    .param("id", runId).query(String.class).single();
+            if (stored.isBlank() || !stored.equals(gatewayToken)) throw new SecurityException("Agent 工具网关凭证无效");
+            if (!"RUNNING".equals(get(runId).status())) throw new IllegalStateException("Agent 任务当前不允许读取工作流状态");
+            var effects = new LinkedHashMap<>(readEffects(runId));
+            if (!workflowRunId.equals(Objects.toString(effects.get("workflowRunId"), ""))) {
+                throw new SecurityException("工作流运行不属于当前 Agent 任务");
+            }
+            var workflowRun = workflowRuns.get(workflowRunId);
+            var completedNodes = workflowRun.nodes().stream()
+                    .filter(node -> Set.of("SUCCEEDED", "FAILED", "CANCELED", "REUSED").contains(node.status())).count();
+            var totalNodes = Math.max(1, workflowRun.nodes().size());
+            var progress = Math.min(99, 10 + (int) (completedNodes * 85 / totalNodes));
+            var currentNode = workflowRun.nodes().stream()
+                    .filter(node -> Objects.equals(node.nodeId(), workflowRun.currentNodeId())).findFirst()
+                    .map(node -> node.nodeName()).orElse("正在准备下一步");
+            var status = workflowRun.status();
+            if (Set.of("QUEUED", "RUNNING", "CANCEL_REQUESTED").contains(status)) {
+                return Map.of("success", true, "terminal", false, "status", status,
+                        "progress", progress, "completedNodes", completedNodes, "totalNodes", totalNodes,
+                        "message", currentNode);
+            }
+            effects.put("workflowRunStatus", status);
+            effects.put("workflowRunOutput", Map.of("status", status, "nodeCount", workflowRun.nodes().size(),
+                    "completedNodeCount", completedNodes));
+            if ("FAILED".equals(status) || "CANCELED".equals(status) || "REJECTED".equals(status)) {
+                jdbc.sql("update assistant_run set effects_json = :effects where id = :id")
+                        .param("effects", writeJson(effects)).param("id", runId).update();
+                var error = Objects.toString(workflowRun.errorMessage(), "工作流未完成：" + status);
+                return Map.of("success", false, "terminal", true, "status", status, "progress", 100,
+                        "error", error, "failureType", "WORKFLOW_FAILED", "retryable", false,
+                        "recoveryHint", "检查失败节点和输入资料后再运行工作流");
+            }
+            if ("WAITING_REVIEW".equals(status)) {
+                jdbc.sql("update assistant_run set effects_json = :effects where id = :id")
+                        .param("effects", writeJson(effects)).param("id", runId).update();
+                return Map.of("success", false, "terminal", true, "status", status, "progress", progress,
+                        "error", "工作流停在人工复核节点；Studio 不会把等待复核当作任务完成",
+                        "failureType", "WAITING_REVIEW", "retryable", false,
+                        "recoveryHint", "移除人工复核节点后重新运行，或在工作流页面手动处理该节点",
+                        "taskComplete", false);
+            }
+            collectWorkflowDeliverables(workflowRun, effects);
+            persistCompactCompletedEffects(runId, effects);
+            var arguments = effects.get("workflowRunArguments") instanceof Map<?, ?> raw
+                    ? raw.entrySet().stream().collect(LinkedHashMap<String, Object>::new,
+                    (map, entry) -> map.put(String.valueOf(entry.getKey()), entry.getValue()), Map::putAll)
+                    : new LinkedHashMap<String, Object>();
+            var step = new PlanStep("workflow-result", 0, "workflow.run", "WRITE", "运行工作流", "运行工作流",
+                    Map.copyOf(arguments), RiskLevel.CREATE_VERSION, false, "SUCCEEDED");
+            var completion = deterministicWorkflowRunCompletion(step, loadRuntime(get(runId).planId()).goal(), effects);
+            if (completion == null) completion = "工作流已经执行完成。";
+            return Map.of("success", true, "terminal", true, "status", status, "progress", 100,
+                    "result", completion, "output", observationOutput(Map.of(), effects),
+                    "taskComplete", true, "completionSummary", completion);
         }
     }
 
@@ -347,8 +474,71 @@ public class AssistantExecutionService {
         var capability = AssistantCapabilityRegistry.find(tool)
                 .orElseThrow(() -> new IllegalArgumentException("工具不存在：" + tool));
         var arguments = new LinkedHashMap<String, Object>();
+        if (request.containsKey("arguments") && !(request.get("arguments") instanceof Map<?, ?>))
+            throw new IllegalArgumentException("工具arguments必须为JSON对象，不能是字符串、数组或null");
         if (request.get("arguments") instanceof Map<?, ?> values) {
             values.forEach((key, value) -> arguments.put(String.valueOf(key), value));
+        }
+        if ("work.update".equals(tool)) {
+            AssistantToolContracts.validate(tool, arguments);
+            var stages = agentWorks.update(runId, arguments);
+            events.publish(run.sessionId(), runId, "agent.plan_updated", Map.of("message", "业务工序已更新", "stages", stages));
+            return Map.of("success", true, "result", "业务工序已保存", "output", Map.of("stages", stages));
+        }
+        if ("work.publish_implementation".equals(tool)) {
+            AssistantToolContracts.validate(tool, arguments);
+            var definition = fixedWorks.publish(runId, arguments);
+            var savedEffects = new LinkedHashMap<>(readEffects(runId));
+            savedEffects.put("fixedImplementationId", definition.id());
+            jdbc.sql("update assistant_run set effects_json=:effects where id=:id")
+                    .param("effects", writeJson(savedEffects)).param("id", runId).update();
+            events.publish(run.sessionId(), runId, "work.implementation_published", Map.of("version", definition.version(), "hash", definition.hash()));
+            return Map.of("success", true, "output", definition, "result", "固定实现已保存；首次固定执行成功后才标记为验证通过");
+        }
+        if ("work.implementation_status".equals(tool)) {
+            AssistantToolContracts.validate(tool, arguments);
+            return Map.of("success", true, "output", fixedWorks.state(fixedWorks.projectForRun(runId), run.sessionId()));
+        }
+        if ("browser.inspect".equals(tool)) {
+            AssistantToolContracts.validate(tool, arguments);
+            return Map.of("success", true, "output", worker.browser("inspect", arguments));
+        }
+        if (Set.of("browser.observe", "browser.act", "browser.close").contains(tool)) {
+            AssistantToolContracts.validate(tool, arguments);
+            var output = browserSession(tool.substring("browser.".length()), arguments);
+            events.publish(run.sessionId(), runId, "agent.observation", Map.of("toolName", tool,
+                    "message", capability.title(), "status", "completed", "output", output));
+            return Map.of("success", true, "output", output);
+        }
+        if ("browser.sites".equals(tool)) {
+            AssistantToolContracts.validate(tool, arguments);
+            return Map.of("success", true, "output", worker.browser("sites", Map.of()));
+        }
+        if ("browser.explore".equals(tool)) {
+            AssistantToolContracts.validate(tool, arguments);
+            return Map.of("success", true, "output", worker.browser("explore", arguments));
+        }
+        if ("work.execute_implementation".equals(tool)) {
+            AssistantToolContracts.validate(tool, arguments);
+            var execution = fixedWorks.startForAgent(runId);
+            var savedEffects = new LinkedHashMap<>(readEffects(runId));
+            savedEffects.put("fixedImplementationId", execution.definitionId());
+            savedEffects.put("fixedRunId", execution.id());
+            jdbc.sql("update assistant_run set effects_json=:effects where id=:id")
+                    .param("effects", writeJson(savedEffects)).param("id", runId).update();
+            events.publish(run.sessionId(), runId, "work.execution_started", Map.of("fixedRunId", execution.id()));
+            return Map.of("success", true, "output", execution, "result", "已启动固定执行，请检查状态并登记实际产物后再报告完成");
+        }
+        if ("resource.delete_batch".equals(tool)) {
+            var done = loadSteps(run.planId()).stream().anyMatch(step -> "SUCCEEDED".equals(step.status())
+                    && tool.equals(step.tool()) && step.arguments().equals(arguments));
+            if (done) return Map.of("success", true, "result", "该冻结清单已执行成功，不需要再次审批或执行");
+            try {
+                workspaceTools.deletionDescription(arguments);
+            } catch (IllegalArgumentException | IllegalStateException invalid) {
+                return Map.of("success", false, "failureType", "CONFLICT", "retryable", false,
+                        "error", invalid.getMessage(), "recoveryHint", "调用 resource.prepare_delete 重新读取清单；不要重复原样提交");
+            }
         }
         if (completedActionCount(run.planId()) >= maxDynamicActions) {
             return Map.of("success", false, "error", "本次任务已用完工具调用预算",
@@ -360,13 +550,18 @@ public class AssistantExecutionService {
         selectedLock.lock();
         try {
             var runtime = loadRuntime(run.planId());
+            var existingEffects = readEffects(runId);
+            var completedRun = completedWorkflowRunObservation(tool, arguments, runtime.goal(), existingEffects);
+            if (completedRun != null) return completedRun;
             PlanStep step;
             synchronized (lock) {
                 step = loadSteps(run.planId()).stream()
-                        .filter(item -> "PENDING".equals(item.status()) && item.tool().equals(tool))
+                        .filter(item -> "PENDING".equals(item.status()) && item.tool().equals(tool) && item.arguments().equals(arguments))
                         .findFirst().orElse(null);
                 if (step == null) {
-                    if (!"READ".equals(capability.mode()) && !"AUTO".equalsIgnoreCase(runtime.executionMode())) {
+                    if (!"READ".equals(capability.mode()) && (!"AUTO".equalsIgnoreCase(runtime.executionMode())
+                            || capability.risk() == RiskLevel.DESTRUCTIVE_OR_EXTERNAL)
+                            && !browserAuthorizations.canReuse(tool, arguments)) {
                         return Map.of("success", false, "error", "该写入操作尚未获得用户确认",
                                 "failureType", "AUTHORIZATION", "retryable", false,
                                 "recoveryHint", "暂停并等待用户在界面中确认");
@@ -380,13 +575,15 @@ public class AssistantExecutionService {
             if (Boolean.TRUE.equals(observation.get("success"))) {
                 var currentEffects = readEffects(runId);
                 var goal = loadRuntime(run.planId()).goal();
-                var completion = "deliverable.create".equals(tool)
-                        ? deterministicDeliverableCompletion(goal, currentEffects)
+                var completion = "workflow.run".equals(tool)
+                        ? deterministicWorkflowRunCompletion(step, goal, currentEffects)
                         : deterministicWorkflowCompletion(tool, goal, currentEffects);
+                if (completion == null) completion = deterministicSimpleCompletion(tool, goal, currentEffects);
                 if (completion != null) {
                     observation = new LinkedHashMap<>(observation);
                     observation.put("taskComplete", true);
                     observation.put("completionSummary", completion);
+                    persistCompactCompletedEffects(runId, currentEffects);
                 }
             }
             return observation;
@@ -420,7 +617,7 @@ public class AssistantExecutionService {
                                                                   String sessionId) {
         var messages = jdbc.sql("""
                         select role, content from assistant_message where session_id = :sessionId
-                        order by created_at desc limit 30
+                        order by created_at desc limit 12
                         """).param("sessionId", sessionId)
                 .query((rs, row) -> Map.of("role", rs.getString("role").toLowerCase(Locale.ROOT),
                         "content", rs.getString("content"))).list();
@@ -434,7 +631,8 @@ public class AssistantExecutionService {
     private Map<String, Object> executeAndObserve(RunResponse run, PlanStep step, Map<String, Object> effects) {
         if (isCanceled(run.id())) return Map.of("success", false, "error", "任务已停止");
         var runtime = loadRuntime(run.planId());
-        step = applyDeliverablePolicy(withWorkspaceContext(step, runtime), runtime.goal());
+        step = withWorkspaceContext(step, runtime, effects);
+        if (!isCliRuntime(effects.get("agentRuntime"))) step = applyDeliverablePolicy(step, runtime.goal());
         var total = loadSteps(run.planId()).size();
         var progress = dynamicProgress(completedActionCount(run.planId()));
         jdbc.sql("update assistant_run set current_step = :step where id = :id")
@@ -463,6 +661,7 @@ public class AssistantExecutionService {
         try {
             var result = executeStep(step, effects);
             verifyStepOutcome(step, effectsBefore, effects);
+            syncSessionProject(run.sessionId(), activeProjectId(runtime, step, effects));
             if (!"READ".equals(step.mode())) {
                 var action = new LinkedHashMap<String, Object>();
                 if (effects.get("uiAction") instanceof Map<?, ?> existing) existing.forEach((key, value) -> action.put(String.valueOf(key), value));
@@ -485,10 +684,13 @@ public class AssistantExecutionService {
             payload.put("provenance", provenance(step, effects));
             if (effects.get("uiAction") instanceof Map<?, ?> action) payload.put("uiAction", action);
             events.publish(run.sessionId(), run.id(), "assistant.step.completed", payload);
-            events.publish(run.sessionId(), run.id(), "agent.observation", Map.of(
-                    "status", "completed", "step", step.order(), "toolName", step.tool(),
-                    "resultSummary", result, "message", result, "progress", progress,
-                    "provenance", provenance(step, effects)));
+            var publicObservation = new LinkedHashMap<String, Object>();
+            publicObservation.put("status", "completed"); publicObservation.put("step", step.order());
+            publicObservation.put("toolName", step.tool()); publicObservation.put("resultSummary", result);
+            publicObservation.put("message", result); publicObservation.put("progress", progress);
+            publicObservation.put("output", observationOutput(effectsBefore, effects));
+            publicObservation.put("provenance", provenance(step, effects));
+            events.publish(run.sessionId(), run.id(), "agent.observation", publicObservation);
         } catch (RuntimeException exception) {
             var error = exception.getMessage() == null ? "工具执行失败" : exception.getMessage();
             var failure = AssistantFailurePolicy.classify(exception);
@@ -500,10 +702,15 @@ public class AssistantExecutionService {
             observation.put("retryable", failure.retryable());
             observation.put("recoveryHint", failure.recoveryHint());
             observation.put("provenance", provenance(step, effects));
-            events.publish(run.sessionId(), run.id(), "agent.observation", Map.of(
-                    "status", "failed", "step", step.order(), "toolName", step.tool(),
-                    "resultSummary", error, "message", "工具没有完成，Agent 正在调整方案",
-                    "error", error, "progress", progress, "provenance", provenance(step, effects)));
+            var publicFailure = new LinkedHashMap<String, Object>();
+            publicFailure.put("status", "failed"); publicFailure.put("step", step.order());
+            publicFailure.put("toolName", step.tool()); publicFailure.put("resultSummary", error);
+            publicFailure.put("message", "工具没有完成，Agent 正在调整方案");
+            publicFailure.put("error", error); publicFailure.put("progress", progress);
+            publicFailure.put("failureType", failure.category().name());
+            publicFailure.put("retryable", failure.retryable()); publicFailure.put("recoveryHint", failure.recoveryHint());
+            publicFailure.put("provenance", provenance(step, effects));
+            events.publish(run.sessionId(), run.id(), "agent.observation", publicFailure);
         }
         jdbc.sql("update assistant_run set effects_json = :effects where id = :id")
                 .param("effects", writeJson(effects)).param("id", run.id()).update();
@@ -511,7 +718,7 @@ public class AssistantExecutionService {
     }
 
     @SuppressWarnings("unchecked")
-    private PlanStep withWorkspaceContext(PlanStep step, PlanRuntime runtime) {
+    private PlanStep withWorkspaceContext(PlanStep step, PlanRuntime runtime, Map<String, Object> effects) {
         var capability = AssistantCapabilityRegistry.find(step.tool()).orElse(null);
         if (capability == null) return step;
         var properties = capability.inputSchema().get("properties") instanceof Map<?, ?> values
@@ -519,9 +726,11 @@ public class AssistantExecutionService {
         var arguments = new LinkedHashMap<>(step.arguments());
         Set.of("page", "goal", "project_id").stream()
                 .filter(key -> !properties.containsKey(key)).forEach(arguments::remove);
+        var activeProjectId = Objects.toString(effects.get("currentProjectId"),
+                Objects.toString(effects.get("createdProjectId"), runtime.projectId()));
         if (properties.containsKey("project_id") && !arguments.containsKey("project_id")
-                && runtime.projectId() != null && !runtime.projectId().isBlank()) {
-            arguments.put("project_id", runtime.projectId());
+                && !activeProjectId.isBlank()) {
+            arguments.put("project_id", activeProjectId);
         }
         if (arguments.equals(step.arguments())) return step;
         return new PlanStep(step.id(), step.order(), step.tool(), step.mode(), step.title(), step.description(),
@@ -580,14 +789,41 @@ public class AssistantExecutionService {
     }
 
     private void finishRun(RunResponse run, String summary, Map<String, Object> effects) {
-        verifyTaskCompletion(loadSteps(run.planId()), effects);
+        if (effects.get("fixedRunId") != null) {
+            var state = fixedWorks.state(fixedWorks.projectForRun(run.id()), run.sessionId());
+            var execution = state.runs().stream().filter(r -> r.id().equals(effects.get("fixedRunId"))).findFirst().orElseThrow();
+            if (!"SUCCEEDED".equals(execution.status()))
+                throw new IllegalStateException("固定工序尚未执行成功：" + execution.status() + " " + execution.error());
+        }
+        verifyTaskCompletion(loadSteps(run.planId()), effects, loadRuntime(run.planId()).goal());
         var safeSummary = summary == null || summary.isBlank() ? "已完成工作台操作。" : summary;
+        if (isCliRuntime(effects.get("agentRuntime"))) {
+            var stages = agentWorks.stages(run.id());
+            var blocked = stages.stream().filter(s -> Set.of("FAILED", "STALE").contains(s.status())).findFirst();
+            if (blocked.isPresent()) {
+                var stage = blocked.get();
+                var reason = "STALE".equals(stage.status()) ? "输入或产物已变化，需要重新执行该工序"
+                        : stage.summary() == null || stage.summary().isBlank() ? "执行失败，请查看技术详情" : stage.summary();
+                throw new IllegalStateException("工序“" + stage.title() + "”未完成：" + reason);
+            }
+            var waiting = stages.stream().filter(s -> "WAITING_INPUT".equals(s.status())).findFirst();
+            if (waiting.isPresent()) {
+                safeSummary = "需要你的输入：" + waiting.get().question();
+                effects.put("workStatus", "WAITING_INPUT");
+            } else if (stages.stream().anyMatch(s -> !"SUCCEEDED".equals(s.status()))) {
+                throw new IllegalStateException("业务工序尚未完成，请查看已保存的中间产物");
+            } else if (stages.isEmpty() && loadSteps(run.planId()).stream().anyMatch(s -> !"READ".equals(s.mode()))) {
+                throw new IllegalStateException("Agent 未登记业务工序及产物，不能报告完成");
+            }
+            if (waiting.isEmpty() && stages.stream().anyMatch(s -> !s.outputs().isEmpty())) fixedWorks.requirePublished(run.id());
+            jdbc.sql("update assistant_run set effects_json = :effects where id = :id")
+                    .param("effects", writeJson(effects)).param("id", run.id()).update();
+        }
         var changed = jdbc.sql("update assistant_run set status = 'SUCCEEDED', result_summary = :summary, finished_at = :now where id = :id and status = 'RUNNING'")
                 .param("summary", safeSummary).param("now", Instant.now()).param("id", run.id()).update();
         if (changed == 0) return;
         jdbc.sql("update assistant_plan set status = 'COMPLETED', summary = :summary where id = :id")
                 .param("summary", safeSummary).param("id", run.planId()).update();
-        moveSessionToCreatedProject(run, effects);
         saveAssistantMessage(run.sessionId(), safeSummary, run.id());
         events.publish(run.sessionId(), run.id(), "agent.generating", Map.of(
                 "status", "completed", "message", "正在整理最终结果和执行轨迹", "progress", 98));
@@ -598,13 +834,6 @@ public class AssistantExecutionService {
                 "status", "completed", "summary", safeSummary, "message", safeSummary, "progress", 100,
                 "provenance", Map.of("traceId", run.id(), "toolCount", completedActionCount(run.planId()))));
         runLocks.remove(run.id());
-    }
-
-    private void moveSessionToCreatedProject(RunResponse run, Map<String, Object> effects) {
-        var projectId = Objects.toString(effects.get("createdProjectId"), "");
-        if (projectId.isBlank()) return;
-        jdbc.sql("update assistant_session set project_id = :projectId, updated_at = :now where id = :id")
-                .param("projectId", projectId).param("now", Instant.now()).param("id", run.sessionId()).update();
     }
 
     private void failRun(RunResponse run, RuntimeException exception) {
@@ -635,15 +864,73 @@ public class AssistantExecutionService {
 
     private String activeProjectId(PlanRuntime runtime, PlanStep completedStep, Map<String, Object> effects) {
         if ("project.delete".equals(completedStep.tool())) return null;
-        return Objects.toString(effects.get("createdProjectId"), runtime.projectId());
+        return Objects.toString(effects.get("currentProjectId"),
+                Objects.toString(effects.get("createdProjectId"), runtime.projectId()));
     }
 
-    private Map<String, Object> observationOutput(Map<String, Object> before, Map<String, Object> after) {
+    private void syncSessionProject(String sessionId, String projectId) {
+        if (projectId == null || projectId.isBlank()) return;
+        projects.get(projectId);
+        jdbc.sql("""
+                update assistant_session set project_id = :projectId, updated_at = :now
+                where id = :sessionId and project_id <> :projectId
+                """).param("projectId", projectId).param("now", Instant.now())
+                .param("sessionId", sessionId).update();
+    }
+
+    Map<String, Object> observationOutput(Map<String, Object> before, Map<String, Object> after) {
         var output = new LinkedHashMap<String, Object>();
         after.forEach((key, value) -> {
-            if (!"uiAction".equals(key) && (Set.of("workflow", "changed").contains(key) || !Objects.equals(before.get(key), value))) output.put(key, value);
+            if (!"uiAction".equals(key) && (Set.of("workflow", "changed").contains(key) || !Objects.equals(before.get(key), value))) {
+                // Approval scopes must never be truncated into an incomplete list of IDs/versions.
+                output.put(key, "deletionPreview".equals(key) ? value : compactObservationValue(value, 0));
+            }
         });
         return output;
+    }
+
+    private Object compactObservationValue(Object value, int depth) {
+        if (value == null || value instanceof Number || value instanceof Boolean) return value;
+        if (value instanceof String text) {
+            return text.length() <= 1200 ? text : text.substring(0, 1200) + "…（已省略，完整内容保留在工作区）";
+        }
+        if (depth >= 4) return "已保留完整详情";
+        if (value instanceof Map<?, ?> raw) {
+            var result = new LinkedHashMap<String, Object>();
+            int count = 0;
+            for (var entry : raw.entrySet()) {
+                var key = Objects.toString(entry.getKey(), "");
+                if (Set.of("text", "excerpt", "content", "sourceText", "source_text").contains(key)) {
+                    var text = Objects.toString(entry.getValue(), "");
+                    result.put(key + "Summary", compactObservationValue(text, depth + 1));
+                } else {
+                    result.put(key, compactObservationValue(entry.getValue(), depth + 1));
+                }
+                if (++count >= 30) {
+                    result.put("truncated", true);
+                    break;
+                }
+            }
+            return result;
+        }
+        if (value instanceof Collection<?> values) {
+            var result = new ArrayList<>();
+            values.stream().limit(12).forEach(item -> result.add(compactObservationValue(item, depth + 1)));
+            if (values.size() > 12) result.add(Map.of("truncated", true, "total", values.size()));
+            return result;
+        }
+        try {
+            return compactObservationValue(objectMapper.convertValue(value, Object.class), depth + 1);
+        } catch (RuntimeException ignored) {
+            return compactObservationValue(Objects.toString(value, ""), depth + 1);
+        }
+    }
+
+    private void persistCompactCompletedEffects(String runId, Map<String, Object> effects) {
+        var compact = new LinkedHashMap<String, Object>();
+        effects.forEach((key, value) -> compact.put(key, compactObservationValue(value, 0)));
+        jdbc.sql("update assistant_run set effects_json = :effects where id = :id")
+                .param("effects", writeJson(compact)).param("id", runId).update();
     }
 
     private void verifyStepOutcome(PlanStep step, Map<String, Object> before, Map<String, Object> effects) {
@@ -658,6 +945,7 @@ public class AssistantExecutionService {
         if ("workflow.run".equals(step.tool()) && "SUCCEEDED".equals(effects.get("workflowRunStatus"))) {
             var requested = step.arguments().get("output_formats") instanceof List<?> values && !values.isEmpty();
             verifyNewDeliverables(before, effects, requested);
+            verifyRequestedWorkflowFormats(step, effects);
         }
         if ("deliverable.edit".equals(step.tool())) {
             var item = deliverables.get(Objects.toString(step.arguments().get("deliverable_id"), ""));
@@ -668,6 +956,21 @@ public class AssistantExecutionService {
             var id = Objects.toString(export.get("deliverableId"), "");
             if (id.isBlank()) throw new IllegalStateException("结果验证失败：导出操作没有返回交付件 ID");
             verifyArtifact(id, Objects.toString(export.get("format"), ""));
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private void verifyRequestedWorkflowFormats(PlanStep step, Map<String, Object> effects) {
+        var required = new LinkedHashSet<>(requestedFormats(step));
+        if (required.isEmpty()) return;
+        var actual = effects.get("deliverables") instanceof List<?> values
+                ? values.stream().filter(Map.class::isInstance).map(item -> (Map<String, Object>) item)
+                .map(item -> normalizeRequestedFormat(Objects.toString(item.get("format"), "")))
+                .collect(java.util.stream.Collectors.toSet())
+                : Set.<String>of();
+        var missing = required.stream().filter(format -> !actual.contains(format)).toList();
+        if (!missing.isEmpty()) {
+            throw new IllegalStateException("结果验证失败：工作流未生成要求的成果格式 " + String.join("、", missing));
         }
     }
 
@@ -739,7 +1042,7 @@ public class AssistantExecutionService {
         }
     }
 
-    private void verifyTaskCompletion(List<PlanStep> steps, Map<String, Object> effects) {
+    private void verifyTaskCompletion(List<PlanStep> steps, Map<String, Object> effects, String goal) {
         if (steps.stream().anyMatch(step -> Set.of("PENDING", "RUNNING").contains(step.status())))
             throw new IllegalStateException("任务尚未完成：仍有工具操作未结束");
         var lastRealStep = steps.stream().filter(step -> !"agent.execute".equals(step.tool())).reduce((left, right) -> right);
@@ -747,6 +1050,15 @@ public class AssistantExecutionService {
             throw new IllegalStateException("任务尚未完成：最后一个工具操作失败，且没有经过替代方式恢复");
         if (steps.stream().anyMatch(step -> "deliverable.create".equals(step.tool())))
             verifyNewDeliverables(Map.of(), effects, true);
+        if (steps.stream().anyMatch(step -> "workflow.run".equals(step.tool()))
+                && !"SUCCEEDED".equals(Objects.toString(effects.get("workflowRunStatus"), ""))) {
+            var status = Objects.toString(effects.get("workflowRunStatus"), "UNKNOWN");
+            throw new IllegalStateException("任务尚未完成：工作流状态为 " + status + "，不能报告已完成");
+        }
+        if (!isCliRuntime(effects.get("agentRuntime")) && requestsWorkflowRun(goal)
+                && steps.stream().noneMatch(step -> "workflow.run".equals(step.tool()) && "SUCCEEDED".equals(step.status()))) {
+            throw new IllegalStateException("任务尚未完成：用户要求产出成果，但工作流尚未真正运行");
+        }
         var verifiedWrites = steps.stream().filter(step -> "SUCCEEDED".equals(step.status()) && !"READ".equals(step.mode())).count();
         if (verifiedWrites > 0 && Boolean.FALSE.equals(effects.get("changed")) && !effects.containsKey("verifiedArtifacts"))
             throw new IllegalStateException("任务尚未完成：最后一次修改没有产生变化，不能报告已完成");
@@ -770,13 +1082,49 @@ public class AssistantExecutionService {
     }
 
     @SuppressWarnings("unchecked")
+    String deterministicWorkflowRunCompletion(PlanStep step, String goal, Map<String, Object> effects) {
+        if (!"SUCCEEDED".equals(Objects.toString(effects.get("workflowRunStatus"), ""))) return null;
+        var required = new LinkedHashSet<>(requestedFormats(step));
+        if (required.isEmpty()) required.addAll(requestedFormats(goal));
+        var outputs = effects.get("deliverables") instanceof List<?> values
+                ? values.stream().filter(Map.class::isInstance).map(item -> (Map<String, Object>) item).toList()
+                : List.<Map<String, Object>>of();
+        var actual = outputs.stream().map(item -> normalizeRequestedFormat(Objects.toString(item.get("format"), "")))
+                .collect(java.util.stream.Collectors.toSet());
+        if (!actual.containsAll(required)) return null;
+        var workflowId = Objects.toString(effects.get("workflowId"), "");
+        var workflowName = workflowId.isBlank() ? "工作流" : workflows.get(workflowId).name();
+        if (outputs.isEmpty()) return "已运行并验证工作流“" + workflowName + "”。";
+        var names = outputs.stream().map(item -> Objects.toString(item.get("name"), "输出件")).distinct().toList();
+        return "已运行并验证工作流“" + workflowName + "”，生成"
+                + String.join("、", names) + "。";
+    }
+
+    Map<String, Object> completedWorkflowRunObservation(String tool, Map<String, Object> arguments,
+                                                         String goal, Map<String, Object> effects) {
+        if (!"workflow.run".equals(tool)) return null;
+        var requestedWorkflowId = Objects.toString(arguments.get("workflow_id"), "");
+        var completedWorkflowId = Objects.toString(effects.get("workflowId"), "");
+        if (!requestedWorkflowId.isBlank() && !requestedWorkflowId.contains("${")
+                && !requestedWorkflowId.equals(completedWorkflowId)) return null;
+        var step = new PlanStep("completed-workflow-run", 0, tool, "WRITE", "运行工作流", "运行工作流",
+                Map.copyOf(arguments), RiskLevel.CREATE_VERSION, false, "SUCCEEDED");
+        var completion = deterministicWorkflowRunCompletion(step, goal, effects);
+        if (completion == null) return null;
+        return Map.of("success", true,
+                "result", "相同工作流已经成功完成，已跳过重复运行",
+                "output", observationOutput(Map.of(), effects),
+                "taskComplete", true,
+                "completionSummary", completion);
+    }
+
+    @SuppressWarnings("unchecked")
     String deterministicWorkflowCompletion(String tool, String goal, Map<String, Object> effects) {
-        if (!Set.of("workflow.edit", "workflow.prepare", "workflow.initialize", "workflow.initialize_analysis").contains(tool))
+        if (!Set.of("workflow.edit", "workflow.duplicate", "workflow.prepare", "workflow.initialize", "workflow.initialize_analysis").contains(tool))
             return null;
         var normalizedGoal = Objects.toString(goal, "").toLowerCase(Locale.ROOT);
-        if (!containsAny(normalizedGoal, "工作流", "workflow")) return null;
-        if (containsAny(normalizedGoal, "运行工作流", "执行工作流", "并运行", "并执行", "跑一下", "试运行", "run workflow"))
-            return null;
+        if (!containsAny(normalizedGoal, "工作流", "流程", "workflow")) return null;
+        if (requestsWorkflowRun(normalizedGoal)) return null;
         if (!(effects.get("workflow") instanceof Map<?, ?> rawWorkflow)) return null;
         var workflow = (Map<String, Object>) rawWorkflow;
         if (!"READY".equals(Objects.toString(workflow.get("status"), ""))) return null;
@@ -787,6 +1135,91 @@ public class AssistantExecutionService {
         var version = workflow.get("currentVersion") instanceof Number number ? number.intValue() : 1;
         return "已创建并验证可复用工作流“" + name + "”（v" + version + "），包含 "
                 + nodes.size() + " 个步骤和 " + edges.size() + " 条连线，已在工作流画布中打开。";
+    }
+
+    private String deterministicSimpleCompletion(String tool, String goal, Map<String, Object> effects) {
+        var text = Objects.toString(goal, "").toLowerCase(Locale.ROOT);
+        return switch (tool) {
+            case "project.open" -> containsAny(text, "打开项目", "切换到", "进入项目")
+                    && !containsAny(text, "分析", "调研", "研究", "工作流", "报告", "ppt", "html")
+                    ? "已打开项目“" + Objects.toString(effects.get("currentProjectName"), "目标项目") + "”。" : null;
+            case "project.create_workspace" -> containsAny(text, "新建项目", "创建项目", "建一个项目")
+                    && !containsAny(text, "分析", "调研", "研究", "工作流", "报告", "ppt", "html", "然后", "并且")
+                    ? "已创建并打开项目“" + Objects.toString(effects.get("createdProjectName"), "新项目") + "”。" : null;
+            case "project.rename" -> containsAny(text, "重命名项目", "项目改名", "项目改成") ? "项目已重命名并刷新工作区。" : null;
+            case "project.delete" -> containsAny(text, "删除项目", "删掉项目") ? "项目已删除，工作区已刷新。" : null;
+            case "workflow.delete" -> containsAny(text, "删除", "删掉") && containsAny(text, "工作流", "workflow")
+                    ? "工作流已删除，工作区已刷新。" : null;
+            case "folder.rename" -> containsAny(text, "重命名", "改名", "改成") && containsAny(text, "目录", "文件夹")
+                    ? "目录修改已经完成，工作区已刷新。" : null;
+            case "folder.delete" -> containsAny(text, "删除", "删掉") && containsAny(text, "目录", "文件夹")
+                    ? "目录已删除，工作区已刷新。" : null;
+            case "dataset.profile" -> containsAny(text, "概况", "画像", "字段", "数据质量", "profile")
+                    ? "已完成数据概况检查，结果可在当前任务记录中查看。" : null;
+            case "source.add_verified" -> containsAny(text, "只找资料", "仅找资料", "只搜索资料", "仅搜索资料", "先找资料", "先搜资料")
+                    && effects.get("verifiedSources") instanceof List<?> values && !values.isEmpty()
+                    ? "已验证并保存 " + values.size() + " 份可访问来源及正文快照，未创建工作流或输出件。" : null;
+            case "workspace.inspect" -> workspaceInspectCompletion(text, effects);
+            default -> null;
+        };
+    }
+
+    @SuppressWarnings("unchecked")
+    private String workspaceInspectCompletion(String goal, Map<String, Object> effects) {
+        if (containsAny(goal, "删除", "删掉") && containsAny(goal, "工作流", "流程", "workflow")) {
+            var items = effects.get("workspaceItems") instanceof List<?> values ? values : List.of();
+            var hasWorkflow = items.stream().filter(Map.class::isInstance).map(Map.class::cast)
+                    .anyMatch(item -> "WORKFLOW".equals(Objects.toString(item.get("type"), "")));
+            if (!hasWorkflow) return "当前项目没有可删除的工作流，未做任何修改。";
+        }
+        if (!containsAny(goal, "总行数", "多少行", "匹配上的", "没匹配", "未匹配")) return null;
+        var results = effects.get("latestDataResults") instanceof List<?> values
+                ? values.stream().filter(Map.class::isInstance).map(item -> (Map<String, Object>) item).toList()
+                : List.<Map<String, Object>>of();
+        if (results.isEmpty()) return null;
+        var latest = results.getFirst();
+        var quality = latest.get("qualityReport") instanceof Map<?, ?> raw
+                ? raw.entrySet().stream().collect(LinkedHashMap<String, Object>::new,
+                (map, entry) -> map.put(String.valueOf(entry.getKey()), entry.getValue()), Map::putAll)
+                : Map.<String, Object>of();
+        var rowCount = quality.get("rowCount") instanceof Number number ? number.longValue() : null;
+        Map<String, Object> join = null;
+        if (latest.get("sampleReport") instanceof Map<?, ?> sampleRaw
+                && sampleRaw.get("stepReports") instanceof List<?> steps) {
+            join = steps.stream().filter(Map.class::isInstance).map(item -> (Map<String, Object>) item)
+                    .map(item -> item.get("join"))
+                    .filter(Map.class::isInstance).map(item -> (Map<String, Object>) item)
+                    .reduce((left, right) -> right).orElse(null);
+        }
+        var name = Objects.toString(latest.get("name"), "最新数据加工结果");
+        if (join != null && join.get("leftRowCount") instanceof Number left
+                && join.get("matchRate") instanceof Number rate) {
+            var matched = Math.round(left.longValue() * rate.doubleValue());
+            var unmatched = Math.max(0, left.longValue() - matched);
+            return "已读取“" + name + "”的真实加工质量结果：总行数 "
+                    + (rowCount == null ? left.longValue() : rowCount) + "，匹配 " + matched
+                    + "，未匹配 " + unmatched + "。";
+        }
+        return rowCount == null ? "已找到最新数据加工结果“" + name + "”，质量详情已载入当前任务。"
+                : "已读取最新数据加工结果“" + name + "”，总行数 " + rowCount + "；当前质量报告没有单独记录匹配/未匹配数量。";
+    }
+
+    private boolean requestsWorkflowRun(String goal) {
+        var text = Objects.toString(goal, "").toLowerCase(Locale.ROOT);
+        if (text.matches(".*(?:不要|别|先别|暂不|无需|不用).{0,4}(?:运行|执行|重跑|跑一遍).*") ) return false;
+        if (containsAny(text, "不运行", "不要运行", "先不要运行", "不要再运行", "别再运行", "不用运行", "无需运行", "暂不运行", "先别运行",
+                "不执行", "不要执行", "先别执行", "无需执行", "只创建", "仅创建", "只保存", "仅保存",
+                "不要再跑", "别再跑", "不要跑", "先别跑", "不要重跑",
+                "do not run", "don't run")) return false;
+        if (containsAny(text, "运行", "执行", "重跑", "跑一下", "跑一遍", "试运行", "run")) return true;
+        return explicitlyRequestsDeliverable(text);
+    }
+
+    private boolean explicitlyRequestsDeliverable(String goal) {
+        if (containsAny(goal, "不要生成", "先不要生成", "不要又生成", "别再生成", "不用再生成", "不生成", "不要输出件", "不要生成新文件")) return false;
+        var namesFormat = containsAny(goal, "ppt", "powerpoint", "html", "pdf", "word", "docx", "演示文稿", "网页报告", "交互报告");
+        var asksForOutput = containsAny(goal, "生成", "制作", "做成", "输出", "产出", "给我", "成果", "汇报", "报告", "总结");
+        return namesFormat && asksForOutput;
     }
 
     private Set<String> requestedFormats(String goal) {
@@ -892,15 +1325,16 @@ public class AssistantExecutionService {
     }
 
     public RunResponse get(String id) {
-        var response = jdbc.sql("select * from assistant_run where id = :id")
+        return jdbc.sql("""
+                select r.* from assistant_run r
+                join assistant_session s on s.id = r.session_id
+                where r.id = :id and s.default_user_id = :actor
+                """)
                 .param("id", id)
+                .param("actor", ActorContext.current())
                 .query(this::mapRun)
                 .optional()
                 .orElseThrow(() -> new IllegalArgumentException("助手任务不存在"));
-        var projectId = jdbc.sql("select project_id from assistant_session where id = :id")
-                .param("id", response.sessionId()).query(String.class).single();
-        projects.get(projectId);
-        return response;
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -921,7 +1355,15 @@ public class AssistantExecutionService {
         jdbc.sql("update assistant_plan set status = 'CANCELED' where id = :id").param("id", run.planId()).update();
         jdbc.sql("update assistant_plan_step set status = 'CANCELED' where plan_id = :id and status = 'PENDING'")
                 .param("id", run.planId()).update();
-        // Interrupt model decisions only; a tool already committing a write must settle normally.
+        var effects = readEffects(id);
+        var workflowRunId = Objects.toString(effects.get("workflowRunId"), "");
+        if (!workflowRunId.isBlank()) {
+            try {
+                workflowRuns.cancel(workflowRunId);
+            } catch (RuntimeException ignored) {
+                // The workflow may have reached a terminal state just before cancellation.
+            }
+        }
         interruptions.token("run", id).cancel();
         saveAssistantMessage(run.sessionId(), message, id);
         events.publish(run.sessionId(), id, "assistant.run.canceled", Map.of("runId", id));
@@ -933,11 +1375,14 @@ public class AssistantExecutionService {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void cancelPlan(String planId) {
-        var sessionId = jdbc.sql("select session_id from assistant_plan where id = :id for update")
-                .param("id", planId).query(String.class).single();
-        var projectId = jdbc.sql("select project_id from assistant_session where id = :id")
-                .param("id", sessionId).query(String.class).single();
-        projects.get(projectId);
+        var sessionId = jdbc.sql("""
+                select p.session_id from assistant_plan p
+                join assistant_session s on s.id = p.session_id
+                where p.id = :id and s.default_user_id = :actor
+                for update
+                """).param("id", planId).param("actor", ActorContext.current())
+                .query(String.class).optional()
+                .orElseThrow(() -> new IllegalArgumentException("助手计划不存在"));
         var runId = jdbc.sql("select id from assistant_run where plan_id = :id order by created_at desc limit 1")
                 .param("id", planId).query(String.class).optional();
         if (runId.isPresent()) {
@@ -992,6 +1437,26 @@ public class AssistantExecutionService {
     String executeStep(PlanStep step, Map<String, Object> effects) {
         AssistantToolContracts.validate(step.tool(), step.arguments());
         return switch (step.tool()) {
+            case "browser.open" -> {
+                var result = browserAuthorizations.execute(step.tool(), step.arguments(), step.id(), () -> {
+                    var args = new LinkedHashMap<String, Object>(step.arguments());
+                    args.put("url", browserAuthorizations.entryUrl(step.arguments()));
+                    args.put("user_authorized", true);
+                    args.putIfAbsent("human_login", true);
+                    return browserSession("open", args);
+                });
+                effects.put("browserResult", result);
+                yield "网站已连接，浏览器会话已建立";
+            }
+            case "browser.login", "browser.resume" -> {
+                effects.put("browserResult", browserSession(step.tool().substring("browser.".length()), step.arguments()));
+                yield "浏览器控制权已更新，请查看当前状态";
+            }
+            case "browser.commit" -> {
+                var result = browserAuthorizations.execute(step.tool(), step.arguments(), step.id(), () -> browserSession("commit", step.arguments()));
+                effects.put("browserResult", result);
+                yield "已执行批准的浏览器动作；请查看并校验业务结果";
+            }
             case "workspace.inspect" -> inspectWorkspace(step, effects);
             case "workspace.navigate" -> navigate(step, effects);
             case "assistant.respond" -> respond(step, effects);
@@ -1013,12 +1478,33 @@ public class AssistantExecutionService {
 
     static Set<String> supportedTools() {
         var tools = new java.util.LinkedHashSet<>(AssistantWorkspaceToolGateway.supportedTools());
+        // These tools are dispatched by callContinuousToolAsActor, not executeStep.
+        tools.addAll(Set.of("work.update", "work.publish_implementation", "work.implementation_status",
+                "work.execute_implementation", "browser.sites", "browser.inspect", "browser.explore"));
+        tools.addAll(Set.of("browser.open", "browser.observe", "browser.act", "browser.commit", "browser.close", "browser.login", "browser.resume"));
         tools.addAll(Set.of(
                 "workspace.inspect", "workspace.navigate", "assistant.respond", "assistant.analyze_context",
                 "project.create_workspace", "knowledge.discover_external_sources", "knowledge.search", "knowledge.add",
                 "workflow.initialize", "workflow.prepare", "workflow.add_selected_resource",
                 "workflow.add_data_transform", "workflow.add_outputs", "workflow.run", "deliverable.create"));
         return Set.copyOf(tools);
+    }
+
+    private Map<String, Object> browserSession(String operation, Map<String, Object> arguments) {
+        if (arguments.containsKey("session") && !"close".equals(operation))
+            browserAuthorizations.checkSession(arguments.get("session").toString());
+        var body = new LinkedHashMap<String, Object>(arguments);
+        body.put("owner", ActorContext.current());
+        try {
+            var result = new LinkedHashMap<String, Object>(worker.browser("session/" + operation, body));
+            if (arguments.containsKey("session")) result.put("session", arguments.get("session"));
+            if ("open".equals(operation)) browserAuthorizations.registerSession(arguments, Objects.toString(result.get("session"), ""));
+            browserAuthorizations.recordOperation(operation, Objects.toString(result.get("session"), ""), true);
+            return result;
+        } catch (RuntimeException ex) {
+            browserAuthorizations.recordOperation(operation, Objects.toString(arguments.get("session"), ""), false);
+            throw ex;
+        }
     }
 
     private Map<String, Object> provenance(PlanStep step, Map<String, Object> effects) {
@@ -1078,6 +1564,20 @@ public class AssistantExecutionService {
                 "id", resource.id(), "name", resource.name(), "type", resource.resourceType(),
                 "group", resource.group(), "status", resource.status())));
         effects.put("workspaceItems", items);
+        var latestDataResults = jdbc.sql("""
+                        select n.node_name, n.output_json
+                        from workflow_node_run n join workflow_run r on r.id = n.run_id
+                        where r.project_id = :projectId and r.status = 'SUCCEEDED'
+                          and n.status in ('SUCCEEDED', 'REUSED') and n.node_type = 'DATA_TRANSFORM'
+                        order by r.finished_at desc, n.step_order desc limit 3
+                        """)
+                .param("projectId", projectId)
+                .query((rs, rowNum) -> {
+                    var value = new LinkedHashMap<String, Object>(readMap(rs.getString("output_json")));
+                    value.put("nodeName", rs.getString("node_name"));
+                    return value;
+                }).list();
+        if (!latestDataResults.isEmpty()) effects.put("latestDataResults", latestDataResults);
         effects.put("sourceProjectId", projectId);
         return "已读取当前项目“" + snapshot.project().name() + "”：数据 " + data
                 + " 项、资料 " + knowledge + " 项、输出 " + outputs + " 项";
@@ -1194,11 +1694,9 @@ public class AssistantExecutionService {
         try {
             research = worker.discoverResearchSources(topic, Math.max(3, Math.min(maxSources, 20)));
         } catch (RuntimeException exception) {
-            research = Map.of(
-                    "mode", "search-plan-fallback",
-                    "summary", "资料服务暂时不可用，已保留可继续执行的检索入口",
-                    "sources", fallbackSources(topic)
-            );
+            var detail = Objects.toString(exception.getMessage(), "搜索服务没有返回错误详情").strip();
+            throw new IllegalStateException("联网搜索服务当前不可用："
+                    + detail.substring(0, Math.min(detail.length(), 500)), exception);
         }
         var sources = research.get("sources") instanceof List<?> values
                 ? values.stream().filter(Map.class::isInstance).map(item -> (Map<String, Object>) item).toList()
@@ -1206,8 +1704,16 @@ public class AssistantExecutionService {
         effects.put("researchSources", sources);
         effects.put("researchMode", Objects.toString(research.get("mode"), ""));
         effects.put("researchSummary", Objects.toString(research.get("summary"), ""));
-        return "已整理 " + sources.size() + " 个资料入口" +
-                ("search-plan-fallback".equals(effects.get("researchMode")) ? "（待进一步核实）" : "");
+        effects.put("researchProvider", Objects.toString(research.get("provider"), ""));
+        var status = Objects.toString(research.get("status"), sources.isEmpty() ? "empty" : "ready");
+        if ("unavailable".equals(status) || "failed".equals(status)) {
+            throw new IllegalStateException(("unavailable".equals(status)
+                    ? "联网搜索服务当前不可用：" : "联网搜索执行失败：")
+                    + Objects.toString(research.get("summary"), "请稍后重试"));
+        }
+        return sources.isEmpty()
+                ? "联网搜索已完成，但没有找到匹配的资料入口"
+                : "已找到 " + sources.size() + " 个候选资料入口，下一步将逐项读取核验";
     }
 
     private String searchKnowledge(PlanStep step, Map<String, Object> effects) {
@@ -1523,11 +2029,34 @@ public class AssistantExecutionService {
             }
         }
         var goal = argument(step, "goal", "整理并分析当前项目内容");
+        if (step.arguments().get("workflow_spec") instanceof Map<?, ?> rawSpec && !rawSpec.isEmpty()) {
+            return preparePlannedWorkflow(projectId, step, effects, nodes, goal, stringObjectMap(rawSpec));
+        }
+        if (isDataPreparationGoal(goal)) {
+            var dataInputs = nodes.stream().filter(this::isStructuredDataInput).toList();
+            if (!dataInputs.isEmpty()) {
+                var transformId = "transform_" + shortId();
+                var config = generatedTransformConfig(projectId, goal, dataInputs);
+                var x = dataInputs.stream().mapToDouble(NodeDefinition::x).max().orElse(80) + 340;
+                var transform = new NodeDefinition(transformId, NodeType.DATA_TRANSFORM, "数据加工", x, 180, config);
+                nodes.add(transform);
+                dataInputs.forEach(node -> edges.add(new EdgeDefinition("edge_" + shortId(), node.id(), transformId)));
+                var formats = requestedFormats(step);
+                addOutputNodes(nodes, edges, formats, transformId, "工作成果", goal);
+                var created = workflows.create(projectId, new SaveRequest(workflowName(step), goal,
+                        nodes, edges, ExecutionMode.MANUAL, null, null));
+                effects.put("workflowId", created.id());
+                effects.put("workflow", created);
+                effects.put("uiAction", Map.of("type", "OPEN_WORKFLOW", "projectId", projectId,
+                        "workflowId", created.id(), "refreshWorkspace", true));
+                return "已创建可运行的数据准备工作流“" + created.name() + "”，加工方案、输入和质量规则均可在画布中查看";
+            }
+        }
         var analysisId = "analysis_" + shortId();
         if (nodes.isEmpty()) {
             var researchId = "refs_" + shortId();
             nodes.add(new NodeDefinition(researchId, NodeType.REF_SEARCH, "查找相关资料", 80, 170,
-                    Map.of("query", goal, "maxSources", 12)));
+                    Map.of("query", goal, "limit", 5, "includeWeb", true)));
         }
         nodes.add(new NodeDefinition(analysisId, NodeType.AI_ANALYSIS, "分析与整理", 430, 180,
                 Map.of("prompt", goal, "externalResearch", "ON", "transparent", true)));
@@ -1535,7 +2064,7 @@ public class AssistantExecutionService {
                 edges.add(new EdgeDefinition("edge_" + shortId(), node.id(), analysisId)));
         var formats = requestedFormats(step);
         addOutputNodes(nodes, edges, formats, analysisId, "工作成果", goal);
-        var created = workflows.create(projectId, new SaveRequest(workflowName(step), "由 AI 助手按当前目标创建，可继续在画布中编排",
+        var created = workflows.create(projectId, new SaveRequest(workflowName(step), goal,
                 nodes, edges, ExecutionMode.MANUAL, null, null));
         if (created.nodes().isEmpty()) throw new IllegalStateException("工作流没有生成可执行步骤，请重新描述目标");
         effects.put("workflowId", created.id());
@@ -1545,11 +2074,249 @@ public class AssistantExecutionService {
         return "已创建工作流“" + created.name() + "”，包含 " + created.nodes().size() + " 个可见步骤";
     }
 
+    private String preparePlannedWorkflow(String projectId, PlanStep step, Map<String, Object> effects,
+                                          List<NodeDefinition> inputNodes, String goal,
+                                          Map<String, Object> spec) {
+        var version = Objects.toString(spec.get("version"), "");
+        if (!"1.0".equals(version)) throw new IllegalArgumentException("工作流规划协议只支持 version=1.0");
+        if (!(spec.get("nodes") instanceof List<?> rawNodes) || rawNodes.isEmpty()) {
+            throw new IllegalArgumentException("工作流规划至少需要一个业务节点");
+        }
+        if (rawNodes.size() > 12) throw new IllegalArgumentException("工作流规划最多包含 12 个业务节点，请合并重复步骤");
+
+        var referencesProjectInputs = rawNodes.stream().filter(Map.class::isInstance).map(Map.class::cast)
+                .map(item -> item.get("depends_on")).filter(List.class::isInstance).map(List.class::cast)
+                .anyMatch(values -> values.stream().anyMatch("$inputs"::equals));
+        var availableInputs = referencesProjectInputs ? List.copyOf(inputNodes) : List.<NodeDefinition>of();
+        var allowedTypes = Set.of(NodeType.REF_SEARCH, NodeType.DATA_TRANSFORM, NodeType.AI_ANALYSIS,
+                NodeType.AGENT_TASK, NodeType.REVIEW, NodeType.DELIVERABLE);
+        var nodes = new ArrayList<>(availableInputs);
+        var edges = new ArrayList<EdgeDefinition>();
+        var idByKey = new LinkedHashMap<String, String>();
+        var plannedNodes = new ArrayList<Map<String, Object>>();
+        var structuredInputs = availableInputs.stream().filter(this::isStructuredDataInput).toList();
+
+        for (var rawNode : rawNodes) {
+            if (!(rawNode instanceof Map<?, ?> rawMap)) throw new IllegalArgumentException("工作流节点必须是对象");
+            var planned = stringObjectMap(rawMap);
+            var key = Objects.toString(planned.get("key"), "").trim();
+            if (!key.matches("[a-zA-Z][a-zA-Z0-9_-]{0,49}")) {
+                throw new IllegalArgumentException("工作流节点 key 必须以字母开头，仅包含字母、数字、下划线或短横线：" + key);
+            }
+            if (idByKey.containsKey(key)) throw new IllegalArgumentException("工作流节点 key 重复：" + key);
+            NodeType type;
+            try { type = NodeType.valueOf(Objects.toString(planned.get("type"), "")); }
+            catch (IllegalArgumentException exception) { throw new IllegalArgumentException("不支持的工作流节点类型：" + planned.get("type")); }
+            if (!allowedTypes.contains(type)) throw new IllegalArgumentException("动态工作流不允许使用节点类型：" + type);
+            var name = Objects.toString(planned.get("name"), "").trim();
+            var purpose = Objects.toString(planned.get("purpose"), "").trim();
+            if (name.isBlank() || purpose.isBlank()) throw new IllegalArgumentException("节点 " + key + " 缺少业务名称或职责说明");
+            var config = planned.get("config") instanceof Map<?, ?> rawConfig
+                    ? new LinkedHashMap<>(stringObjectMap(rawConfig)) : new LinkedHashMap<String, Object>();
+            completePlannedNodeConfig(projectId, goal, type, purpose, config, structuredInputs);
+            var id = "planned_" + key + "_" + shortId();
+            idByKey.put(key, id);
+            nodes.add(new NodeDefinition(id, type, name, 0, 0, Map.copyOf(config)));
+            plannedNodes.add(planned);
+        }
+
+        for (var index = 0; index < plannedNodes.size(); index++) {
+            var planned = plannedNodes.get(index);
+            var key = Objects.toString(planned.get("key"), "");
+            var target = idByKey.get(key);
+            var type = nodes.stream().filter(node -> node.id().equals(target)).findFirst().orElseThrow().type();
+            var dependencies = stringList(planned.get("depends_on"));
+            if (dependencies.isEmpty() && requiresPlannedInput(type)) {
+                throw new IllegalArgumentException("节点 " + key + " 必须通过 depends_on 声明上游；项目输入请使用 $inputs");
+            }
+            for (var dependency : dependencies) {
+                if ("$inputs".equals(dependency)) {
+                    if (availableInputs.isEmpty()) throw new IllegalArgumentException("节点 " + key + " 引用了 $inputs，但当前项目没有可用输入");
+                    availableInputs.forEach(input -> edges.add(new EdgeDefinition(
+                            "edge_" + shortId(), input.id(), target)));
+                    continue;
+                }
+                var source = idByKey.get(dependency);
+                if (source == null) throw new IllegalArgumentException("节点 " + key + " 引用了不存在的上游：" + dependency);
+                edges.add(new EdgeDefinition("edge_" + shortId(), source, target));
+            }
+        }
+
+        var formats = requestedFormats(step);
+        var existingFormats = nodes.stream().filter(node -> node.type() == NodeType.DELIVERABLE)
+                .map(NodeDefinition::config).map(this::configuredOutputFormat).collect(java.util.stream.Collectors.toSet());
+        var missingFormats = formats.stream().filter(format -> !existingFormats.contains(format)).toList();
+        if (!missingFormats.isEmpty()) {
+            var upstream = nodes.stream().filter(node -> node.type() != NodeType.DELIVERABLE)
+                    .reduce((left, right) -> right).map(NodeDefinition::id).orElse(null);
+            addOutputNodes(nodes, edges, missingFormats, upstream, "工作成果", goal);
+        }
+        var laidOut = layoutPlannedWorkflow(nodes, edges);
+        var specName = Objects.toString(spec.get("name"), "").trim();
+        var name = argument(step, "name", specName);
+        if (name.isBlank()) name = workflowName(step);
+        var description = Objects.toString(spec.get("description"), "").trim();
+        if (description.isBlank()) description = goal;
+        var created = workflows.create(projectId, new SaveRequest(name, description,
+                laidOut, edges, ExecutionMode.MANUAL, null, null));
+        effects.put("workflowId", created.id());
+        effects.put("workflow", created);
+        effects.put("workflowPlanningMode", "deep-agent-spec");
+        effects.put("uiAction", Map.of("type", "OPEN_WORKFLOW", "projectId", projectId,
+                "workflowId", created.id(), "refreshWorkspace", true));
+        return "已按任务动态规划并创建工作流“" + created.name() + "”，包含 "
+                + created.nodes().size() + " 个可见步骤";
+    }
+
+    private void completePlannedNodeConfig(String projectId, String goal, NodeType type, String purpose,
+                                           LinkedHashMap<String, Object> config,
+                                           List<NodeDefinition> structuredInputs) {
+        config.put("purpose", purpose);
+        switch (type) {
+            case REF_SEARCH -> {
+                config.putIfAbsent("query", goal);
+                config.putIfAbsent("limit", 5);
+                config.putIfAbsent("includeWeb", true);
+            }
+            case DATA_TRANSFORM -> {
+                if (structuredInputs.isEmpty()) throw new IllegalArgumentException("数据加工节点需要项目中的结构化数据输入");
+                var generated = new LinkedHashMap<>(generatedTransformConfig(projectId, goal, structuredInputs));
+                generated.putAll(config);
+                config.clear();
+                config.putAll(generated);
+                config.putIfAbsent("requirements", goal);
+                config.putIfAbsent("outputName", "processed_data.parquet");
+            }
+            case AI_ANALYSIS -> {
+                config.putIfAbsent("prompt", goal);
+                config.putIfAbsent("externalResearch", "ON");
+                config.putIfAbsent("transparent", true);
+            }
+            case AGENT_TASK -> config.putIfAbsent("instruction", goal);
+            case REVIEW -> config.putIfAbsent("instructions", "检查事实依据、计算口径、遗漏项和结论边界，输出需要修正的问题");
+            case DELIVERABLE -> {
+                config.putIfAbsent("generationPrompt", goal);
+                config.putIfAbsent("format", "PPTX");
+                config.putIfAbsent("includeCitations", true);
+                config.putIfAbsent("citationStyle", "IEEE");
+                if ("PPTX".equalsIgnoreCase(Objects.toString(config.get("format"), ""))) {
+                    config.putIfAbsent("pptSkill", "studio-professional-native");
+                }
+            }
+            default -> throw new IllegalArgumentException("不支持的动态节点类型：" + type);
+        }
+    }
+
+    private boolean requiresPlannedInput(NodeType type) {
+        return Set.of(NodeType.DATA_TRANSFORM, NodeType.AI_ANALYSIS, NodeType.REVIEW, NodeType.DELIVERABLE).contains(type);
+    }
+
+    private List<NodeDefinition> layoutPlannedWorkflow(List<NodeDefinition> nodes, List<EdgeDefinition> edges) {
+        var indegree = new LinkedHashMap<String, Integer>();
+        var outgoing = new LinkedHashMap<String, List<String>>();
+        var layer = new LinkedHashMap<String, Integer>();
+        nodes.forEach(node -> { indegree.put(node.id(), 0); layer.put(node.id(), 0); });
+        for (var edge : edges) {
+            if (!indegree.containsKey(edge.source()) || !indegree.containsKey(edge.target())) continue;
+            indegree.put(edge.target(), indegree.get(edge.target()) + 1);
+            outgoing.computeIfAbsent(edge.source(), ignored -> new ArrayList<>()).add(edge.target());
+        }
+        var queue = new java.util.ArrayDeque<String>();
+        indegree.forEach((id, count) -> { if (count == 0) queue.add(id); });
+        var visited = 0;
+        while (!queue.isEmpty()) {
+            var source = queue.removeFirst();
+            visited++;
+            for (var target : outgoing.getOrDefault(source, List.of())) {
+                layer.put(target, Math.max(layer.get(target), layer.get(source) + 1));
+                var remaining = indegree.get(target) - 1;
+                indegree.put(target, remaining);
+                if (remaining == 0) queue.addLast(target);
+            }
+        }
+        if (visited != nodes.size()) throw new IllegalArgumentException("工作流规划中存在循环依赖");
+        var rowByLayer = new LinkedHashMap<Integer, Integer>();
+        return nodes.stream().map(node -> {
+            var column = layer.get(node.id());
+            var row = rowByLayer.merge(column, 1, Integer::sum) - 1;
+            return new NodeDefinition(node.id(), node.type(), node.name(), 80 + column * 350.0,
+                    90 + row * 160.0, node.config());
+        }).toList();
+    }
+
+    private Map<String, Object> stringObjectMap(Map<?, ?> raw) {
+        var result = new LinkedHashMap<String, Object>();
+        raw.forEach((key, value) -> result.put(Objects.toString(key), value));
+        return result;
+    }
+
+    private boolean isDataPreparationGoal(String goal) {
+        var value = Objects.toString(goal, "").toLowerCase(Locale.ROOT);
+        return containsAny(value, "数据准备", "数据加工", "扩维", "关联", "合并", "补上", "补录", "补充字段", "清洗", "转换",
+                "偏差", "对账", "匹配", "比较", "毛利", "销毛");
+    }
+
+    private boolean isStructuredDataInput(NodeDefinition node) {
+        if (Set.of(NodeType.DATASET_INPUT, NodeType.DATA_EXTRACT).contains(node.type())) return true;
+        if (node.type() != NodeType.FILE_INPUT || node.config() == null) return false;
+        var resourceId = Objects.toString(node.config().get("resourceId"), "");
+        if (resourceId.isBlank()) return false;
+        try {
+            var file = knowledge.get(resourceId);
+            var name = file.name().toLowerCase(Locale.ROOT);
+            var mediaType = Objects.toString(file.mediaType(), "").toLowerCase(Locale.ROOT);
+            return List.of(".csv", ".tsv", ".parquet", ".xlsx", ".xls", ".xlsm", ".json")
+                    .stream().anyMatch(name::endsWith)
+                    || Set.of("text/csv", "text/tab-separated-values", "application/json",
+                    "application/vnd.apache.parquet").contains(mediaType);
+        } catch (IllegalArgumentException ignored) {
+            return false;
+        }
+    }
+
+    private Map<String, Object> generatedTransformConfig(String projectId, String goal, List<NodeDefinition> inputs) {
+        var sourceRequests = new ArrayList<DataTransformService.SourceRequest>();
+        var aliases = new LinkedHashMap<String, String>();
+        for (var index = 0; index < inputs.size(); index++) {
+            var node = inputs.get(index);
+            var config = node.config() == null ? Map.<String, Object>of() : node.config();
+            var alias = "data_" + (index + 1);
+            aliases.put(node.id(), alias);
+            switch (node.type()) {
+                case FILE_INPUT -> sourceRequests.add(new DataTransformService.SourceRequest("FILE",
+                        Objects.toString(config.get("resourceId"), ""), alias, node.name(), null,
+                        Objects.toString(config.get("sheetName"), "")));
+                case DATASET_INPUT -> sourceRequests.add(new DataTransformService.SourceRequest("EXTRACT",
+                        Objects.toString(config.get("extractJobId"), ""), alias, node.name(), null, null));
+                case DATA_EXTRACT -> sourceRequests.add(new DataTransformService.SourceRequest("CONNECTION",
+                        Objects.toString(config.get("connectionId"), ""), alias, node.name(),
+                        Objects.toString(config.get("sql"), ""), null));
+                default -> { }
+            }
+        }
+        var generated = dataTransforms.generate(projectId, new DataTransformService.GenerateRequest(goal, sourceRequests));
+        var config = new LinkedHashMap<String, Object>();
+        config.put("requirements", goal);
+        config.put("transformPlan", generated.get("plan"));
+        config.put("script", Objects.toString(generated.get("script"), ""));
+        config.put("scriptSummary", Objects.toString(generated.get("summary"), "已根据输入字段生成可复核加工方案"));
+        config.put("scriptMode", "GENERATED");
+        config.put("inputAliases", aliases);
+        config.put("outputFormat", "parquet");
+        config.put("outputName", "数据加工结果.parquet");
+        config.put("transparent", true);
+        if (generated.get("assumptions") != null) config.put("assumptions", generated.get("assumptions"));
+        if (generated.get("quality_rules") != null) config.put("qualityRules", generated.get("quality_rules"));
+        if (generated.get("warnings") != null) config.put("warnings", generated.get("warnings"));
+        return Map.copyOf(config);
+    }
+
     private NodeDefinition workspaceInputNode(com.finflow.studio.workspace.WorkspaceModels.Resource resource, double x, double y) {
         var id = "input_" + shortId();
         return switch (resource.resourceType()) {
             case "DATABASE_CONNECTION", "API_CONNECTION" -> new NodeDefinition(id, NodeType.DATA_EXTRACT, resource.name(), x, y,
-                    Map.of("connectionId", resource.id(), "sql", "API_CONNECTION".equals(resource.resourceType()) ? "GET /" : "select * from your_table",
+                    Map.of("connectionId", resource.id(), "tableCatalog", "", "tableSchema", "", "tableName", "",
+                            "sql", "API_CONNECTION".equals(resource.resourceType()) ? "GET /" : "",
                             "outputName", resource.name() + ".csv", "fetchSize", 5000));
             case "DATASET" -> new NodeDefinition(id, NodeType.DATASET_INPUT, resource.name(), x, y,
                     Map.of("extractJobId", resource.id()));
@@ -1563,7 +2330,7 @@ public class AssistantExecutionService {
 
     private String addSelectedResource(PlanStep step, Map<String, Object> effects) {
         var projectId = argument(step, "project_id", "");
-        var current = workflows.getProjectWorkflow(projectId);
+        var current = workflows.ensureProjectWorkflow(projectId);
         var resourceId = argument(step, "resource_id", "");
         if (current.nodes().stream().anyMatch(node -> node.config() != null && node.config().containsValue(resourceId))) {
             effects.put("uiAction", Map.of("type", "OPEN_WORKFLOW", "projectId", projectId,
@@ -1582,7 +2349,7 @@ public class AssistantExecutionService {
 
     private String addOutputs(PlanStep step, Map<String, Object> effects) {
         var projectId = argument(step, "project_id", "");
-        var current = workflows.getProjectWorkflow(projectId);
+        var current = workflows.ensureProjectWorkflow(projectId);
         var nodes = new ArrayList<>(current.nodes());
         var edges = new ArrayList<>(current.edges());
         var existingFormats = nodes.stream()
@@ -1620,47 +2387,32 @@ public class AssistantExecutionService {
         var run = workflowRuns.start(workflowId);
         effects.put("workflowId", workflowId);
         effects.put("workflowRunId", run.id());
+        effects.put("workflowRunStatus", run.status());
+        effects.put("workflowRunArguments", new LinkedHashMap<>(step.arguments()));
         effects.put("uiAction", Map.of("type", "OPEN_WORKFLOW", "workflowId", workflowId,
                 "runId", run.id(), "refreshWorkspace", true));
+        return "工作流已启动，正在按节点执行";
+    }
 
-        var deadline = System.nanoTime() + java.util.concurrent.TimeUnit.MINUTES.toNanos(15);
-        while (List.of("QUEUED", "RUNNING", "CANCEL_REQUESTED").contains(run.status())
-                && System.nanoTime() < deadline) {
-            try {
-                Thread.sleep(250);
-            } catch (InterruptedException exception) {
-                Thread.currentThread().interrupt();
-                throw new IllegalStateException("等待工作流完成时任务被中断", exception);
-            }
-            run = workflowRuns.get(run.id());
+    @SuppressWarnings("unchecked")
+    private int collectWorkflowDeliverables(com.finflow.studio.workflow.WorkflowModels.RunResponse run,
+                                            Map<String, Object> effects) {
+        var outputsById = new LinkedHashMap<String, Map<String, Object>>();
+        if (effects.get("deliverables") instanceof List<?> values) {
+            values.stream().filter(Map.class::isInstance).map(value -> (Map<String, Object>) value).forEach(output -> {
+                var id = Objects.toString(output.get("deliverableId"), Objects.toString(output.get("id"), ""));
+                if (!id.isBlank()) outputsById.put(id, output);
+            });
         }
-        effects.put("workflowRunStatus", run.status());
-        effects.put("workflowRunOutput", run.output());
-        if ("FAILED".equals(run.status())) {
-            throw new IllegalStateException("工作流执行失败：" + Objects.toString(run.errorMessage(), "未知错误"));
-        }
-        if ("CANCELED".equals(run.status()) || "REJECTED".equals(run.status())) {
-            throw new IllegalStateException("工作流未完成：" + run.status());
-        }
-        if ("WAITING_REVIEW".equals(run.status())) {
-            effects.put("waitingReview", true);
-            return "工作流已运行到人工复核节点，正在等待确认";
-        }
-        if (!"SUCCEEDED".equals(run.status())) {
-            return "工作流已启动并继续在后台执行，运行编号 " + run.id();
-        }
-
-        var outputs = effects.get("deliverables") instanceof List<?> values
-                ? new ArrayList<>(values.stream().filter(Map.class::isInstance)
-                    .map(value -> (Map<String, Object>) value).toList())
-                : new ArrayList<Map<String, Object>>();
+        int generatedCount = 0;
         for (var node : run.nodes()) {
             var deliverableId = Objects.toString(node.output().get("deliverableId"), "");
             if (deliverableId.isBlank()) continue;
-            outputs.add(new LinkedHashMap<>(node.output()));
+            outputsById.put(deliverableId, new LinkedHashMap<>(node.output()));
+            generatedCount++;
         }
-        if (!outputs.isEmpty()) effects.put("deliverables", outputs);
-        return outputs.isEmpty() ? "工作流已执行完成" : "工作流已执行完成并生成 " + outputs.size() + " 个交付件";
+        if (!outputsById.isEmpty()) effects.put("deliverables", new ArrayList<>(outputsById.values()));
+        return generatedCount;
     }
 
     private void ensureWorkflowOutputs(String workflowId, PlanStep step) {
@@ -1687,7 +2439,7 @@ public class AssistantExecutionService {
 
     private String addDataTransform(PlanStep step, Map<String, Object> effects) {
         var projectId = argument(step, "project_id", "");
-        var current = workflows.getProjectWorkflow(projectId);
+        var current = workflows.ensureProjectWorkflow(projectId);
         var nodes = new ArrayList<>(current.nodes());
         var edges = new ArrayList<>(current.edges());
         var resourceId = argument(step, "resource_id", "");
@@ -1721,7 +2473,8 @@ public class AssistantExecutionService {
         var id = "input_" + shortId();
         return switch (type) {
             case "DATABASE_CONNECTION", "API_CONNECTION" -> new NodeDefinition(id, NodeType.DATA_EXTRACT, name, x, y,
-                    Map.of("connectionId", resourceId, "sql", "API_CONNECTION".equals(type) ? "GET /" : "select * from your_table",
+                    Map.of("connectionId", resourceId, "tableCatalog", "", "tableSchema", "", "tableName", "",
+                            "sql", "API_CONNECTION".equals(type) ? "GET /" : "",
                             "outputName", name + ".csv", "fetchSize", 5000));
             case "DATASET" -> new NodeDefinition(id, NodeType.DATASET_INPUT, name, x, y, Map.of("extractJobId", resourceId));
             case "WEB_URL" -> new NodeDefinition(id, NodeType.LINK_INPUT, name, x, y,
@@ -1741,6 +2494,7 @@ public class AssistantExecutionService {
             config.put("format", format);
             config.put("includeCitations", true);
             config.put("citationStyle", "IEEE");
+            config.put("fastPlanning", true);
             config.put("pptSkill", "PPTX".equals(format) ? "guizang-huawei-style-c"
                     : "HTML_SLIDES".equals(format) ? "frontend-slides" : "");
             nodes.add(new NodeDefinition(id, NodeType.DELIVERABLE, outputLabel(format), 900, 100 + index * 180, config));
@@ -1784,6 +2538,7 @@ public class AssistantExecutionService {
         var goal = argument(step, "goal", "").toLowerCase(Locale.ROOT);
         if (goal.contains("ppt") || goal.contains("演示文稿")) requested.add("PPTX");
         if (goal.contains("html") || goal.contains("网页报告") || goal.contains("网页幻灯")) requested.add("HTML_SLIDES");
+        if (requested.isEmpty()) requested.addAll(requestedFormats(goal));
         return requested.stream().map(this::normalizeDeliverableFormat).filter(item -> !item.isBlank()).distinct().toList();
     }
 
@@ -1794,21 +2549,20 @@ public class AssistantExecutionService {
     }
 
     private String workflowName(PlanStep step) {
-        var goal = argument(step, "goal", "新工作流")
-                .replaceAll("^(请|帮我|给我|新建|新增|创建|搭建|建立)+", "")
-                .replaceAll("[，,。！？].*$", "").trim();
-        if (goal.isBlank()) return "新工作流";
-        if (!goal.contains("工作流")) goal += "工作流";
-        return goal.substring(0, Math.min(goal.length(), 40));
-    }
-
-    private List<Map<String, Object>> fallbackSources(String topic) {
-        var encoded = java.net.URLEncoder.encode(topic, java.nio.charset.StandardCharsets.UTF_8);
-        return List.of(
-                Map.of("title", topic + " 官方与监管资料检索", "url", "https://www.bing.com/search?q=" + encoded + "+官网+监管+财报", "source_type", "待核实检索", "why_relevant", "优先定位官方披露和监管文件"),
-                Map.of("title", topic + " 行业与政策资料检索", "url", "https://www.bing.com/search?q=" + encoded + "+行业+政策+研究报告", "source_type", "待核实检索", "why_relevant", "补充行业环境、政策和研究资料"),
-                Map.of("title", topic + " 财经媒体与重大事件检索", "url", "https://www.bing.com/search?q=" + encoded + "+财经+重大事件+风险", "source_type", "待核实检索", "why_relevant", "补充事件脉络和风险线索")
-        );
+        var name = argument(step, "name", "");
+        if (!name.isBlank()) return name.trim();
+        if (name.isBlank()) {
+            name = argument(step, "goal", "新工作流")
+                    .replaceAll("^(请|帮我|给我|把|将|一个|新建|新增|创建|搭建|建立)+", "")
+                    .replaceAll("(可复用|本次不运行|这次不运行|先不运行)", "")
+                    .replaceAll("[:：，,。！？；;].*$", "").trim();
+        }
+        name = name.replaceAll("[《》“”\"']", "")
+                .replaceAll("(请|帮我|给我)$", "")
+                .trim();
+        if (name.isBlank() || "的工作流".equals(name)) return "新工作流";
+        if (!name.endsWith("工作流")) name += "工作流";
+        return name.substring(0, Math.min(name.length(), 24));
     }
 
     private String finalSummary(List<PlanStep> steps, Map<String, Object> effects) {

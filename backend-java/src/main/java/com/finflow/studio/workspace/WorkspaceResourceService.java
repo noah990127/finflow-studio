@@ -28,11 +28,12 @@ public class WorkspaceResourceService {
     private final DeliverableService deliverables;
     private final WorkflowDefinitionService workflows;
     private final WorkspaceFolderService folders;
+    private final ResourceVisibilityService visibility;
 
     public WorkspaceResourceService(ProjectService projects, DataConnectionService connections,
                                     ExtractJobService extracts, KnowledgeService files,
                                     DeliverableService deliverables, WorkflowDefinitionService workflows,
-                                    WorkspaceFolderService folders) {
+                                    WorkspaceFolderService folders, ResourceVisibilityService visibility) {
         this.projects = projects;
         this.connections = connections;
         this.extracts = extracts;
@@ -40,12 +41,12 @@ public class WorkspaceResourceService {
         this.deliverables = deliverables;
         this.workflows = workflows;
         this.folders = folders;
+        this.visibility = visibility;
     }
 
     public Response get(String projectId) {
         var project = projects.get(projectId);
         var projectWorkflows = workflows.list(projectId);
-        if (projectWorkflows.isEmpty()) projectWorkflows = java.util.List.of(workflows.getProjectWorkflow(projectId));
         var usedIds = new HashSet<String>();
         projectWorkflows.forEach(workflow -> usedIds.addAll(referencedResourceIds(workflow.nodes())));
         var resources = new ArrayList<Resource>();
@@ -64,9 +65,10 @@ public class WorkspaceResourceService {
                 usedIds.contains(item.id()), locations.get(resourceKey("DATASET", item.id())), "FILES", latest(item.finishedAt(), item.createdAt()), null)));
 
         files.list(projectId).forEach(item -> resources.add(new Resource(
-                item.id(), projectId, fileType(item.name(), item.mediaType()), fileGroup(item.name(), item.mediaType()),
+                item.id(), projectId, WorkspaceFileClassifier.resourceType(item.name(), item.mediaType()),
+                WorkspaceFileClassifier.group(item.name(), item.mediaType()),
                 item.name(), item.mediaType(), item.status(), item.currentVersion(), item.sizeBytes(),
-                usedIds.contains(item.id()), locations.get(resourceKey(fileType(item.name(), item.mediaType()), item.id())), "FILES", item.updatedAt(), null)));
+                usedIds.contains(item.id()), locations.get(resourceKey(WorkspaceFileClassifier.resourceType(item.name(), item.mediaType()), item.id())), "FILES", item.updatedAt(), null)));
 
         deliverables.list(projectId).forEach(item -> resources.add(new Resource(
                 item.id(), projectId, "DELIVERABLE", "OUTPUT", item.name(), item.format(), item.status(),
@@ -89,7 +91,7 @@ public class WorkspaceResourceService {
         var summaries = projectWorkflows.stream().map(workflow -> new WorkflowSummary(workflow.id(), workflow.name(),
                 workflow.status(), workflow.currentVersion(), workflow.updatedAt())).toList();
         var latest = summaries.isEmpty() ? null : summaries.getFirst();
-        return new Response(project, latest, summaries, folders.list(projectId), resources);
+        return new Response(project, latest, summaries, folders.list(projectId), resources, visibility.internalIds(projectId));
     }
 
     private Set<String> referencedResourceIds(java.util.List<NodeDefinition> nodes) {
@@ -102,22 +104,6 @@ public class WorkspaceResourceService {
             }
         }
         return ids;
-    }
-
-    private String fileType(String name, String mediaType) {
-        var lower = name.toLowerCase();
-        if (lower.endsWith(".csv") || lower.endsWith(".tsv") || lower.endsWith(".json")
-                || lower.endsWith(".xlsx") || lower.endsWith(".xls") || lower.endsWith(".xlsm")) {
-            return "DATA_FILE";
-        }
-        if (lower.endsWith(".doc") || lower.endsWith(".docx") || lower.endsWith(".ppt") || lower.endsWith(".pptx")) {
-            return "OFFICE_FILE";
-        }
-        return "KNOWLEDGE_FILE";
-    }
-
-    private String fileGroup(String name, String mediaType) {
-        return fileType(name, mediaType).equals("DATA_FILE") ? "DATA" : "KNOWLEDGE";
     }
 
     private Instant latest(Instant preferred, Instant fallback) {

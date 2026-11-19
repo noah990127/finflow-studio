@@ -19,6 +19,16 @@ async def prepare_for_format(
     complete: Optional[Complete] = None,
 ) -> tuple[DeliverableRequest, EvidencePack]:
     evidence = build_evidence_pack(request)
+    if request.ppt_skill == "blue-professional-v2":
+        from ..semantic_presentation import prepare, validate_design
+        if output_format != "pptx":
+            raise ValueError("blue-professional-v2 当前仅支持PPTX")
+        if request.plan_mode == "fixed":
+            validate_design(request)
+            return request, evidence
+        return await prepare(request, complete or llm.complete), evidence
+    if request.plan_mode == "fixed":
+        return request, evidence
     if output_format in {"pptx", "html_slides"}:
         return await prepare_presentation(request, complete=complete), evidence
     if output_format in {"docx", "pdf"}:

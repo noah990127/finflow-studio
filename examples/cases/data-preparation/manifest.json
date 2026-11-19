@@ -1,0 +1,39 @@
+{
+  "name": "多源经营数据加工样板",
+  "description": "将 CSV 订单明细、Excel 门店维表、HTTP API 汇率和 PostgreSQL 经营目标编排成可追溯、可验证的 DuckDB 数据加工工作流。",
+  "files": [
+    {"key": "orders", "path": "assets/经营订单明细_样例.csv"},
+    {"key": "stores", "path": "assets/门店维表_样例.xlsx"},
+    {"key": "benchmark", "path": "assets/百万行宽表验证记录.json"}
+  ],
+  "connections": [
+    {
+      "key": "targets-db",
+      "name": "区域经营目标 PostgreSQL",
+      "sourceType": "POSTGRESQL",
+      "jdbcUrlEnv": "FINFLOW_DEMO_DATABASE_URL",
+      "jdbcUrlDefault": "jdbc:postgresql://postgres:5432/finflow",
+      "usernameEnv": "FINFLOW_DEMO_DATABASE_USERNAME",
+      "usernameDefault": "finflow",
+      "secretRefEnv": "FINFLOW_DEMO_DATABASE_SECRET_REF",
+      "secretRefDefault": "env:FINFLOW_DEMO_DATABASE_PASSWORD",
+      "options": {"ApplicationName": "FinBTPDataPreparationDemo"}
+    },
+    {
+      "key": "rates-api",
+      "name": "模拟汇率数据服务",
+      "sourceType": "HTTP_API",
+      "jdbcUrlEnv": "FINFLOW_DATA_PREPARATION_API_URL",
+      "jdbcUrlDefault": "http://demo-api:8011/api/v1/data-preparation/exchange-rates",
+      "options": {"format": "jsonl"}
+    }
+  ],
+  "workflow": "workflow.json",
+  "postgresInit": "postgres-init.sql",
+  "legacyRefs": {
+    "40000000-0000-4000-8000-000000000001": "connection:targets-db",
+    "40000000-0000-4000-8000-000000000002": "connection:rates-api",
+    "40000000-0000-4000-8000-000000000011": "file:orders",
+    "40000000-0000-4000-8000-000000000012": "file:stores"
+  }
+}

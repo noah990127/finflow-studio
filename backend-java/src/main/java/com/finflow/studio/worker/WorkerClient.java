@@ -25,6 +25,26 @@ public class WorkerClient {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private final WebClient client;
+    @Value("${BROWSER_RUNNER_URL:http://127.0.0.1:8002}")
+    private String browserRunnerUrl;
+    @Value("${BROWSER_RUNNER_TOKEN:}")
+    private String browserRunnerToken;
+
+    public Map<String, Object> browser(String operation, Object request) {
+        if (!List.of("inspect", "run", "explore", "sites", "session/open", "session/observe", "session/act", "session/commit", "session/preview", "session/close", "session/login", "session/restart_login", "session/resume", "session/status").contains(operation)) throw new IllegalArgumentException("Invalid browser operation");
+        if (browserRunnerToken == null || browserRunnerToken.length() < 32) throw new IllegalStateException("浏览器执行服务未配置授权凭证");
+        var result = WebClient.builder().baseUrl(browserRunnerUrl).codecs(c -> c.defaultCodecs().maxInMemorySize(20 * 1024 * 1024)).build()
+                .post().uri("/" + operation).header("Authorization", "Bearer " + browserRunnerToken)
+                .contentType(MediaType.APPLICATION_JSON).bodyValue(request).retrieve()
+                .onStatus(status -> status.isError(), response -> response.bodyToMono(String.class).defaultIfEmpty("")
+                        .map(body -> new IllegalStateException(response.statusCode().value() == 401 || response.statusCode().value() == 403
+                                ? "浏览器服务鉴权失败：请确认后端与 Browser Runner 使用相同的 BROWSER_RUNNER_TOKEN，并重启两个服务"
+                                : workerError(response.statusCode().value(), body))))
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {})
+                .timeout(Duration.ofSeconds(140)).block();
+        if (result == null) throw new IllegalStateException("浏览器执行没有返回结果");
+        return result;
+    }
 
     public WorkerClient(@Value("${finflow.worker.base-url}") String baseUrl) {
         this.client = WebClient.builder().baseUrl(baseUrl).codecs(configurer ->
@@ -42,6 +62,18 @@ public class WorkerClient {
         } catch (RuntimeException ex) {
             return Map.of("status", "offline", "message", "Python 资料服务尚未启动");
         }
+    }
+
+    public Map<String, Object> fixedWorkModel(String operation, Object request) {
+        if (!List.of("snapshot", "execute").contains(operation)) throw new IllegalArgumentException("Invalid operation");
+        var result = client.post().uri("/v1/fixed-work/model-" + operation)
+                .contentType(MediaType.APPLICATION_JSON).bodyValue(request).retrieve()
+                .onStatus(status -> status.isError(), response -> response.bodyToMono(String.class)
+                        .map(body -> new IllegalStateException(workerError(response.statusCode().value(), body))))
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {})
+                .timeout(Duration.ofMinutes(10)).block();
+        if (result == null) throw new IllegalStateException("固定模型执行无返回结果");
+        return result;
     }
 
     public ParsedDocument parse(Path path, String originalName) {
@@ -101,6 +133,9 @@ public class WorkerClient {
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(request)
                 .retrieve()
+                .onStatus(status -> status.isError(), errorResponse -> errorResponse.bodyToMono(String.class)
+                        .defaultIfEmpty("")
+                        .map(body -> new IllegalStateException(workerError(errorResponse.statusCode().value(), body))))
                 .toEntity(byte[].class)
                 .timeout(Duration.ofMinutes(5))
                 .block();
@@ -108,9 +143,9 @@ public class WorkerClient {
         if (content == null || content.length == 0) throw new IllegalStateException("输出文件生成失败");
         var quality = new LinkedHashMap<String, Object>();
         quality.put("passed", Boolean.parseBoolean(response.getHeaders().getFirst("X-FinFlow-Quality-Passed")));
-        quality.put("score", parseHeaderInt(response.getHeaders().getFirst("X-FinFlow-Quality-Score")));
         quality.put("issueCount", parseHeaderInt(response.getHeaders().getFirst("X-FinFlow-Quality-Issues")));
         quality.put("validatorVersion", String.valueOf(response.getHeaders().getFirst("X-FinFlow-Validator-Version")));
+        quality.put("visualReview", String.valueOf(response.getHeaders().getFirst("X-FinFlow-Visual-Review")));
         return new DeliverableArtifact(content, Map.copyOf(quality));
     }
 
@@ -145,8 +180,11 @@ public class WorkerClient {
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(Map.of("topic", topic, "max_sources", maxSources))
                 .retrieve()
+                .onStatus(status -> status.isError(), response -> response.bodyToMono(String.class)
+                        .defaultIfEmpty("")
+                        .map(body -> new IllegalStateException(workerError(response.statusCode().value(), body))))
                 .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {})
-                .timeout(Duration.ofMinutes(5))
+                .timeout(Duration.ofSeconds(55))
                 .block();
         if (result == null) throw new IllegalStateException("资料搜索没有返回结果");
         return result;
@@ -263,12 +301,24 @@ public class WorkerClient {
 
     public Map<String, Object> generateContentStreaming(String format, String requirements, String sourceText,
                                                         Consumer<Map<String, Object>> eventConsumer) {
+        return generateContentStreaming(format, requirements, sourceText, "", "", eventConsumer);
+    }
+
+    public Map<String, Object> generateContentStreaming(String format, String requirements, String sourceText,
+                                                        String skillName, String skillInstructions,
+                                                        Consumer<Map<String, Object>> eventConsumer) {
         var finalContent = new AtomicReference<String>();
         var mode = new AtomicReference<String>();
+        var requestBody = new LinkedHashMap<String, Object>();
+        requestBody.put("format", format);
+        requestBody.put("requirements", requirements);
+        requestBody.put("source_text", sourceText);
+        if (skillName != null && !skillName.isBlank()) requestBody.put("skill_name", skillName);
+        if (skillInstructions != null && !skillInstructions.isBlank()) requestBody.put("skill_instructions", skillInstructions);
         client.post().uri("/v1/knowledge/generate/stream")
                 .contentType(MediaType.APPLICATION_JSON)
                 .accept(MediaType.APPLICATION_NDJSON)
-                .bodyValue(Map.of("format", format, "requirements", requirements, "source_text", sourceText))
+                .bodyValue(requestBody)
                 .retrieve()
                 .onStatus(status -> status.isError(), response -> response.bodyToMono(String.class)
                         .defaultIfEmpty("")
@@ -339,14 +389,22 @@ public class WorkerClient {
     public Map<String, Object> generateDataTransform(Object request) {
         var result = client.post().uri("/v1/data-transforms/generate")
                 .contentType(MediaType.APPLICATION_JSON).bodyValue(request).retrieve()
+                .onStatus(status -> status.isError(), response -> response.bodyToMono(String.class)
+                        .defaultIfEmpty("")
+                        .map(body -> new IllegalStateException(workerError(response.statusCode().value(), body))))
                 .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {})
-                .timeout(Duration.ofMinutes(10)).block();
+                .timeout(Duration.ofSeconds(165)).block();
         if (result == null) throw new IllegalStateException("加工脚本生成失败");
         return result;
     }
 
     public Map<String, Object> sampleDataTransform(List<DataTransformInput> inputs, String metadataJson, String script) {
-        var parts = transformParts(inputs, metadataJson, script);
+        return sampleDataTransform(inputs, metadataJson, script, "");
+    }
+
+    public Map<String, Object> sampleDataTransform(List<DataTransformInput> inputs, String metadataJson,
+                                                    String script, String planJson) {
+        var parts = transformParts(inputs, metadataJson, script, planJson, "parquet");
         var result = client.post().uri("/v1/data-transforms/sample")
                 .contentType(MediaType.MULTIPART_FORM_DATA)
                 .body(BodyInserters.fromMultipartData(parts.build())).retrieve()
@@ -360,10 +418,19 @@ public class WorkerClient {
     }
 
     public void runDataTransform(List<DataTransformInput> inputs, String metadataJson, String script, Path target) {
-        var parts = transformParts(inputs, metadataJson, script);
+        runDataTransform(inputs, metadataJson, script, "", "csv", target);
+    }
+
+    public void runDataTransform(List<DataTransformInput> inputs, String metadataJson, String script,
+                                 String planJson, String outputFormat, Path target) {
+        var parts = transformParts(inputs, metadataJson, script, planJson, outputFormat);
         var body = client.post().uri("/v1/data-transforms/run")
                 .contentType(MediaType.MULTIPART_FORM_DATA)
                 .body(BodyInserters.fromMultipartData(parts.build())).retrieve()
+                .onStatus(status -> status.isError(), response -> response.bodyToMono(String.class)
+                        .defaultIfEmpty("")
+                        .map(errorBody -> new IllegalStateException(
+                                workerError(response.statusCode().value(), errorBody))))
                 .bodyToFlux(org.springframework.core.io.buffer.DataBuffer.class);
         DataBufferUtils.write(body, target, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)
                 .timeout(Duration.ofHours(6)).block();
@@ -376,13 +443,16 @@ public class WorkerClient {
         }
     }
 
-    private MultipartBodyBuilder transformParts(List<DataTransformInput> inputs, String metadataJson, String script) {
+    private MultipartBodyBuilder transformParts(List<DataTransformInput> inputs, String metadataJson, String script,
+                                                String planJson, String outputFormat) {
         var parts = new MultipartBodyBuilder();
         for (var input : inputs) {
             parts.part("files", new FileSystemResource(input.path())).filename(input.name());
         }
         parts.part("metadata", metadataJson);
         parts.part("script", script);
+        parts.part("plan", planJson == null ? "" : planJson);
+        parts.part("output_format", outputFormat == null ? "parquet" : outputFormat);
         return parts;
     }
 

@@ -6,7 +6,7 @@ import FilePreview from '../components/FilePreview.vue'
 const props = defineProps<{ project: Project | null }>(); const files = ref<FileResource[]>([]); const refs = ref<KnowledgeRef[]>([]); const query = ref(''); const busy = ref(false); const message = ref('')
 const previewing = ref<FileResource | null>(null)
 function previewFormat(file: FileResource) { return file.name.split('.').pop()?.toLowerCase() || (file.mediaType === 'application/pdf' ? 'pdf' : '') }
-function canPreview(file: FileResource) { return ['pdf', 'pptx', 'docx', 'csv', 'tsv', 'txt', 'md', 'mmd', 'mermaid'].includes(previewFormat(file)) }
+function canPreview(file: FileResource) { return ['pdf', 'pptx', 'docx', 'csv', 'tsv', 'parquet', 'txt', 'md', 'mmd', 'mermaid'].includes(previewFormat(file)) }
 async function load() { if (props.project) files.value = await api.listFiles(props.project.id) }
 async function upload(event: Event) { const input = event.target as HTMLInputElement; const file = input.files?.[0]; if (!file || !props.project) return; busy.value = true; try { await api.uploadFile(props.project.id, file); message.value = '文件已上传，正在生成可引用的 Ref'; await load() } catch (e) { message.value = e instanceof Error ? e.message : '上传失败' } finally { busy.value = false; input.value = '' } }
 async function search() { if (!props.project || !query.value.trim()) return; busy.value = true; try { refs.value = await api.searchRefs(props.project.id, query.value) } catch (e) { message.value = e instanceof Error ? e.message : '搜索失败' } finally { busy.value = false } }

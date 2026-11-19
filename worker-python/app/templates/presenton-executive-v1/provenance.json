@@ -1,0 +1,7 @@
+{
+  "source": "https://github.com/presenton/presenton/tree/main/templates/executive",
+  "upstream_sha256": "4eb78699c88c3f1bb79ab965d5f204470ffeea365bd11c380f1271d7c9fbfd82",
+  "license": "Apache-2.0",
+  "adapter_version": 1,
+  "modifications": "Selected layouts; native text/chart export, CJK typography, no remote images, no placeholder copy."
+}

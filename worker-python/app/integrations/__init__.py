@@ -1,5 +1,19 @@
-"""External system adapters."""
+"""External system adapters with no eager runtime imports."""
 
-from .codex_cli_chat_model import CodexCliChatModel
+from .search_provider import (
+    SearchCandidate,
+    SearchProviderError,
+    SearchProviderUnavailable,
+    SearxngSearchProvider,
+    build_search_provider,
+    provider_info,
+)
 
-__all__ = ["CodexCliChatModel"]
+__all__ = [
+    "SearchCandidate",
+    "SearchProviderError",
+    "SearchProviderUnavailable",
+    "SearxngSearchProvider",
+    "build_search_provider",
+    "provider_info",
+]

@@ -34,6 +34,24 @@ class AssistantToolContractsTest {
     }
 
     @Test
+    void workflowPrepareExposesAStrictModelPlannedWorkflowSpec() {
+        var schema = AssistantCapabilityRegistry.find("workflow.prepare").orElseThrow().inputSchema();
+        var properties = (Map<?, ?>) schema.get("properties");
+        var spec = (Map<?, ?>) properties.get("workflow_spec");
+        var specProperties = (Map<?, ?>) spec.get("properties");
+        var node = (Map<?, ?>) ((Map<?, ?>) specProperties.get("nodes")).get("items");
+        var nodeProperties = (Map<?, ?>) node.get("properties");
+
+        assertThat(spec.get("additionalProperties")).isEqualTo(false);
+        assertThat(spec.get("required")).isEqualTo(List.of("version", "name", "description", "nodes"));
+        assertThat(node.get("required")).isEqualTo(List.of("key", "type", "name", "purpose", "config", "depends_on"));
+        assertThat(((List<?>) ((Map<?, ?>) nodeProperties.get("type")).get("enum"))
+                .stream().map(Object::toString).toList())
+                .contains("REF_SEARCH", "AI_ANALYSIS", "DATA_TRANSFORM", "DELIVERABLE")
+                .doesNotContain("TOOL", "CONTROL", "SUB_WORKFLOW");
+    }
+
+    @Test
     void rejectsMissingUnknownAndWronglyTypedArgumentsWithRepairAdvice() {
         assertThatThrownBy(() -> AssistantToolContracts.validate("project.rename", Map.of("project_id", "p-1")))
                 .isInstanceOf(IllegalArgumentException.class)

@@ -1,0 +1,30 @@
+/* Local CJK typography and fixed export canvas; original layout CSS is bundled. */
+:root { --bg: #ffffff; --primary: #2458c6; --text: #182227; --text-muted: #47545a; --card-bg: #f2f6fa; --border: #ccd7e7; }
+html, body { width:1920px; height:1080px; font-family:"PingFang SC","Noto Sans CJK SC",sans-serif; }
+.slide { width:1920px; height:1080px; padding:76px 92px; transform:none; transition:none; background:var(--bg); }
+.deck { width:1920px; height:1080px; }
+h1,h2,h3,h4,.step-title,.step-circle { font-family:"PingFang SC","Noto Sans CJK SC",sans-serif; letter-spacing:0; }
+h2 { font-size:64px; line-height:1.2; margin:24px 0; }
+.slide-header { margin-bottom:24px; }
+.slide-header h4,.slide-header .tag { font-size:24px; }
+.slide-header h4 { width:75%; }
+.slide-header .tag { width:150px; text-align:center; white-space:nowrap; }
+.page-message { font-size:34px; line-height:1.4; margin-bottom:40px; color:var(--text-muted); }
+.layout-timeline .timeline-track { gap:40px; align-items:flex-start; padding-top:70px; }
+.timeline-step { min-width:0; }
+.step-circle { width:90px; height:90px; font-size:38px; margin-bottom:32px; }
+.timeline-step:not(:last-child)::after { top:44px; right:-40px; width:40px; height:3px; }
+.step-title { width:100%; font-size:34px; margin-bottom:22px; }
+.step-desc { width:100%; max-width:320px; font-size:30px; line-height:1.55; }
+.step-owner { width:100%; font-size:28px; color:#177d76; margin-top:32px; }
+.step-outcome { width:100%; font-size:27px; margin-top:20px; color:var(--text-muted); }
+.layout-detail .detail-body { gap:32px; align-content:start; grid-template-columns:repeat(2,minmax(0,1fr)); }
+.detail-block { padding:30px; border-radius:6px; }
+.detail-block h3 { font-size:36px; margin-bottom:22px; }
+.detail-block p { font-size:30px; line-height:1.55; }
+.relationship-table table { width:100%; border-collapse:collapse; table-layout:fixed; }
+.relationship-table th,.relationship-table td { padding:22px 18px; font-size:28px; line-height:1.45; border:1px solid #ccd7e7; text-align:left; vertical-align:top; overflow-wrap:anywhere; }
+.relationship-table tr:first-child { background:#2458c6; color:#ffffff; }
+.relationship-table th:first-child { width:220px; }
+.relationship-table tr:not(:first-child) th { background:#eaf2f7; color:#176c67; }
+.relationship-table tr:nth-child(odd):not(:first-child) td { background:#f5f7fa; }

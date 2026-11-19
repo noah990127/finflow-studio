@@ -15,6 +15,16 @@ class AssistantWorkflowEditingTest {
     @Autowired ProjectService projects;
     @Autowired WorkflowDefinitionService workflows;
     @Autowired AssistantWorkspaceToolGateway gateway;
+    @Autowired AssistantExecutionService execution;
+
+    @Test void preservesIntentTitleAndExplicitLongNameWithoutSuffixOrTruncation() {
+        for (var name : List.of("进口冻干产品安全证据核验", "2026年度华东与华南区域经营数据加工核验及月度报告生成")) {
+            var step = new PlanStep(UUID.randomUUID().toString(), 1, "workflow.prepare", "WRITE", "创建", "创建",
+                    Map.of("name", name, "goal", "帮我做一下相关分析"), RiskLevel.CREATE_VERSION, false, "PENDING");
+            String actual = org.springframework.test.util.ReflectionTestUtils.invokeMethod(execution, "workflowName", step);
+            assertThat(actual).isEqualTo(name);
+        }
+    }
 
     WorkflowResponse create() {
         return workflows.create(projects.create("批量编辑回归", "").id(), new SaveRequest("原名称", "原描述",
@@ -22,6 +32,21 @@ class AssistantWorkflowEditingTest {
     }
     PlanStep edit(String id, Object patch, int version) {
         return new PlanStep(UUID.randomUUID().toString(), 1, "workflow.edit", "WRITE", "编辑", "编辑", Map.of("workflow_id", id, "patch", patch, "expected_version", version), RiskLevel.CREATE_VERSION, false, "PENDING");
+    }
+
+    @Test void resourceDeleteAcceptsWorkflowFromWorkspaceCatalogButRejectsAnotherProject() {
+        var current = create();
+        var other = projects.create("其他项目", "");
+        var effects = new HashMap<String, Object>();
+        var wrong = new PlanStep(UUID.randomUUID().toString(), 1, "resource.delete", "WRITE", "删除", "删除",
+                Map.of("project_id", other.id(), "resource_id", current.id()), RiskLevel.DESTRUCTIVE_OR_EXTERNAL, true, "PENDING");
+        assertThatThrownBy(() -> gateway.execute(wrong, effects)).isInstanceOf(IllegalArgumentException.class);
+        assertThat(workflows.get(current.id()).id()).isEqualTo(current.id());
+        var correct = new PlanStep(UUID.randomUUID().toString(), 1, "resource.delete", "WRITE", "删除", "删除",
+                Map.of("project_id", current.projectId(), "resource_id", current.id()), RiskLevel.DESTRUCTIVE_OR_EXTERNAL, true, "PENDING");
+        assertThat(gateway.execute(correct, effects)).contains("已删除工作流");
+        assertThat(workflows.list(current.projectId())).isEmpty();
+        assertThat(effects).containsKey("uiAction");
     }
 
     @Test void savesFourBranchesMergeAndOutputInOneVersionWithFullPrompts() {
@@ -62,5 +87,35 @@ class AssistantWorkflowEditingTest {
             assertThatThrownBy(() -> gateway.execute(edit(current.id(), patch, 1), new HashMap<>())).isInstanceOf(IllegalArgumentException.class);
             assertThat(workflows.get(current.id()).currentVersion()).isEqualTo(1);
         }
+    }
+
+    @Test void treatsRedundantNodeIdAsBatchPatchWhenNodesArePresent() {
+        var current = create();
+        var patch = Map.of(
+                "node_id", "input",
+                "nodes", List.of(Map.of("id", "input", "name", "经营明细")),
+                "edges", List.of());
+
+        gateway.execute(edit(current.id(), patch, current.currentVersion()), new HashMap<>());
+
+        assertThat(workflows.get(current.id()).nodes().getFirst().name()).isEqualTo("经营明细");
+    }
+
+    @Test void duplicatesDefinitionWithoutRunsOrSchedule() {
+        var source = create();
+        var effects = new LinkedHashMap<String, Object>();
+        var step = new PlanStep(UUID.randomUUID().toString(), 1, "workflow.duplicate", "WRITE", "复制", "复制",
+                Map.of("project_id", source.projectId(), "workflow_id", source.id(), "name", "月度产品经营复盘"),
+                RiskLevel.CREATE_VERSION, false, "PENDING");
+
+        gateway.execute(step, effects);
+
+        var copy = workflows.get(String.valueOf(effects.get("workflowId")));
+        assertThat(copy.id()).isNotEqualTo(source.id());
+        assertThat(copy.name()).isEqualTo("月度产品经营复盘");
+        assertThat(copy.nodes()).isEqualTo(source.nodes());
+        assertThat(copy.edges()).isEqualTo(source.edges());
+        assertThat(copy.executionMode()).isEqualTo(ExecutionMode.MANUAL);
+        assertThat(copy.schedule()).isNull();
     }
 }

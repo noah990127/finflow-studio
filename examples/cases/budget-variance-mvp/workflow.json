@@ -1,0 +1,36 @@
+{
+  "name": "月度预算预测偏差分析标准流程",
+  "description": "并行读取预测、实际、补录和维表，统一四项指标口径，按区域和产品层级计算偏差，结合已确认外部线索分析并输出 HTML 报告。",
+  "executionMode": "MANUAL",
+  "schedule": null,
+  "nodes": [
+    {"id":"forecast_input","type":"FILE_INPUT","name":"读取预算预测终稿","x":40,"y":60,"config":{"resourceId":"50000000-0000-4000-8000-000000000001"}},
+    {"id":"actual_input","type":"FILE_INPUT","name":"刷新实际经营数据","x":40,"y":190,"config":{"resourceId":"50000000-0000-4000-8000-000000000002"}},
+    {"id":"adjustment_input","type":"FILE_INPUT","name":"读取未入账补录","x":40,"y":320,"config":{"resourceId":"50000000-0000-4000-8000-000000000003"}},
+    {"id":"region_input","type":"FILE_INPUT","name":"读取区域维表","x":40,"y":450,"config":{"resourceId":"50000000-0000-4000-8000-000000000004"}},
+    {"id":"product_input","type":"FILE_INPUT","name":"读取产品层级维表","x":40,"y":580,"config":{"resourceId":"50000000-0000-4000-8000-000000000005"}},
+    {"id":"agent_signal_input","type":"FILE_INPUT","name":"读取已确认外部助手线索","x":430,"y":690,"config":{"resourceId":"50000000-0000-4000-8000-000000000006"}},
+    {"id":"policy_input","type":"FILE_INPUT","name":"读取分析口径与复核清单","x":430,"y":820,"config":{"resourceId":"50000000-0000-4000-8000-000000000007"}},
+    {
+      "id":"variance_transform","type":"DATA_TRANSFORM","name":"统一口径并计算偏差","x":430,"y":300,
+      "config":{
+        "requirements":"仅纳入已复核补录，将实际快照与补录相加后和预测终稿比较；按期间、区域、产品末级形成收入、销毛额、奖金-成本、销毛额（不含奖金）四项指标的预测、调整后实际、偏差额和偏差率，并补齐区域及产品三级名称。",
+        "inputAliases":{"forecast_input":"forecast_data","actual_input":"actual_data","adjustment_input":"adjustments","region_input":"regions","product_input":"products"},
+        "script":"WITH f AS (SELECT period, region_code, product_code, SUM(revenue) forecast_revenue, SUM(gross_margin_amount) forecast_gross_margin, SUM(bonus_cost) forecast_bonus_cost, SUM(gross_margin_ex_bonus) forecast_margin_ex_bonus FROM forecast_data GROUP BY ALL), a AS (SELECT period, region_code, product_code, SUM(revenue) actual_revenue, SUM(gross_margin_amount) actual_gross_margin, SUM(bonus_cost) actual_bonus_cost, SUM(gross_margin_ex_bonus) actual_margin_ex_bonus FROM actual_data GROUP BY ALL), adj AS (SELECT period, region_code, product_code, SUM(revenue) adjustment_revenue, SUM(gross_margin_amount) adjustment_gross_margin, SUM(bonus_cost) adjustment_bonus_cost, SUM(gross_margin_ex_bonus) adjustment_margin_ex_bonus FROM adjustments WHERE review_status = '已复核' GROUP BY ALL), k AS (SELECT period, region_code, product_code FROM f UNION SELECT period, region_code, product_code FROM a), m AS (SELECT k.*, COALESCE(f.forecast_revenue,0) forecast_revenue, COALESCE(f.forecast_gross_margin,0) forecast_gross_margin, COALESCE(f.forecast_bonus_cost,0) forecast_bonus_cost, COALESCE(f.forecast_margin_ex_bonus,0) forecast_margin_ex_bonus, COALESCE(a.actual_revenue,0)+COALESCE(adj.adjustment_revenue,0) adjusted_actual_revenue, COALESCE(a.actual_gross_margin,0)+COALESCE(adj.adjustment_gross_margin,0) adjusted_actual_gross_margin, COALESCE(a.actual_bonus_cost,0)+COALESCE(adj.adjustment_bonus_cost,0) adjusted_actual_bonus_cost, COALESCE(a.actual_margin_ex_bonus,0)+COALESCE(adj.adjustment_margin_ex_bonus,0) adjusted_actual_margin_ex_bonus, COALESCE(adj.adjustment_revenue,0) adjustment_revenue FROM k LEFT JOIN f USING(period,region_code,product_code) LEFT JOIN a USING(period,region_code,product_code) LEFT JOIN adj USING(period,region_code,product_code)) SELECT m.period, m.region_code, r.region_name, r.team, m.product_code, p.product_l1, p.product_l2, p.product_l3, ROUND(m.forecast_revenue,2) forecast_revenue, ROUND(m.adjusted_actual_revenue,2) adjusted_actual_revenue, ROUND(m.adjusted_actual_revenue-m.forecast_revenue,2) revenue_variance, ROUND((m.adjusted_actual_revenue-m.forecast_revenue)/NULLIF(m.forecast_revenue,0)*100,2) revenue_variance_pct, ROUND(m.forecast_gross_margin,2) forecast_gross_margin, ROUND(m.adjusted_actual_gross_margin,2) adjusted_actual_gross_margin, ROUND(m.adjusted_actual_gross_margin-m.forecast_gross_margin,2) gross_margin_variance, ROUND((m.adjusted_actual_gross_margin-m.forecast_gross_margin)/NULLIF(m.forecast_gross_margin,0)*100,2) gross_margin_variance_pct, ROUND(m.forecast_bonus_cost,2) forecast_bonus_cost, ROUND(m.adjusted_actual_bonus_cost,2) adjusted_actual_bonus_cost, ROUND(m.adjusted_actual_bonus_cost-m.forecast_bonus_cost,2) bonus_cost_variance, ROUND((m.adjusted_actual_bonus_cost-m.forecast_bonus_cost)/NULLIF(m.forecast_bonus_cost,0)*100,2) bonus_cost_variance_pct, ROUND(m.forecast_margin_ex_bonus,2) forecast_margin_ex_bonus, ROUND(m.adjusted_actual_margin_ex_bonus,2) adjusted_actual_margin_ex_bonus, ROUND(m.adjusted_actual_margin_ex_bonus-m.forecast_margin_ex_bonus,2) margin_ex_bonus_variance, ROUND((m.adjusted_actual_margin_ex_bonus-m.forecast_margin_ex_bonus)/NULLIF(m.forecast_margin_ex_bonus,0)*100,2) margin_ex_bonus_variance_pct, ROUND(m.adjustment_revenue,2) adjustment_revenue FROM m LEFT JOIN regions r USING(region_code) LEFT JOIN products p USING(product_code) ORDER BY ABS(revenue_variance) DESC",
+        "outputFormat":"parquet","outputName":"月度预算预测偏差明细.parquet"
+      }
+    },
+    {
+      "id":"variance_analysis","type":"AI_ANALYSIS","name":"解释偏差并识别待确认事项","x":820,"y":390,
+      "config":{"prompt":"你是预算预测团队的经营分析负责人。基于偏差明细、分析口径和已确认的外部助手线索，分析 2026 年 8 月收入、销毛额、奖金-成本、销毛额（不含奖金）四项指标。先给集团总览，再按区域识别贡献最大的正负偏差，最后沿产品一级、二级、末级下钻。严格区分可复算数据、已确认业务解释和待复核线索；禁止把待复核补录计入正式实际数，禁止把外部助手推断写成事实。每个结论说明数据来源、影响金额、影响比例、责任团队和下一步核实动作。","maxPoints":24}
+    },
+    {
+      "id":"html_report","type":"DELIVERABLE","name":"生成可下钻 HTML 管理报告","x":1190,"y":390,
+      "config":{"title":"月度预算预测偏差分析","subtitle":"收入、销毛额、奖金-成本与销毛额（不含奖金）","format":"HTML_SLIDES","pptSkill":"frontend-slides","includeCitations":true,"citationStyle":"GB_T_7714","generationPrompt":"生成单文件 HTML 管理报告。首屏展示四项核心指标的预测、调整后实际、偏差额和偏差率；支持区域到产品一级、二级、末级下钻；分别展示已复核补录、待复核事项和外部助手线索；每个结论可定位到来源。布局适合 10 人预算预测团队在月结第 3-6 日协作复核，浅蓝蓝白、信息密集但层级清晰，不能用长段文字代替图表。"}
+    }
+  ],
+  "edges": [
+    {"id":"e1","source":"forecast_input","target":"variance_transform"},{"id":"e2","source":"actual_input","target":"variance_transform"},{"id":"e3","source":"adjustment_input","target":"variance_transform"},{"id":"e4","source":"region_input","target":"variance_transform"},{"id":"e5","source":"product_input","target":"variance_transform"},
+    {"id":"e6","source":"variance_transform","target":"variance_analysis"},{"id":"e7","source":"agent_signal_input","target":"variance_analysis"},{"id":"e8","source":"policy_input","target":"variance_analysis"},{"id":"e9","source":"variance_analysis","target":"html_report"}
+  ]
+}

@@ -10,14 +10,18 @@ import { useAssistantStore } from '../stores/assistant'
 import type { AssistantMessage, Project } from '../api/client'
 import { businessError, businessText } from '../domain/workProgress'
 import AssistantModelSettings from './AssistantModelSettings.vue'
+import BrowserAuthorizations from './BrowserAuthorizations.vue'
+import BrowserTaskHandoff from './BrowserTaskHandoff.vue'
+import AssistantRichText from './AssistantRichText.vue'
 import { createComposerKeyboard } from '../domain/composerKeyboard'
+import { assistantElapsed } from '../domain/assistantElapsed'
 
 const props = defineProps<{ project: Project | null }>()
 const assistant = useAssistantStore()
 const conversation = ref<HTMLElement | null>(null)
 const composer = ref<HTMLTextAreaElement | null>(null)
-const showSteps = ref(false)
 const showEvents = ref(false)
+const historyExpanded = ref(false)
 const followingLatest = ref(true)
 const unseenActivityCount = ref(0)
 const now = ref(Date.now())
@@ -28,60 +32,37 @@ type HistoryTurn = { id: string; user?: AssistantMessage; assistant: AssistantMe
 
 const contextLabel = computed(() => assistant.selection?.range.join('、') || assistant.contextTitle || '项目概览')
 const running = computed(() => !assistant.interrupted && (['QUEUED', 'RUNNING'].includes(assistant.run?.status ?? '') || assistant.streaming))
-const controlsLocked = computed(() => assistant.busy || ['QUEUED', 'RUNNING'].includes(assistant.run?.status ?? ''))
 const waitingConfirmation = computed(() => assistant.needsConfirmation && (!assistant.run || assistant.run.status === 'WAITING_CONFIRMATION'))
+const pendingApprovalSteps = computed(() => assistant.plan?.steps.filter(step => step.requiresConfirmation && step.status === 'PENDING') ?? [])
+const rememberBrowserAuthorization = ref(true)
+const hasBrowserAuthorization = computed(() => pendingApprovalSteps.value.some(step => ['browser.open', 'browser.commit'].includes(step.tool)))
+watch(() => assistant.plan?.planHash, () => { rememberBrowserAuthorization.value = true })
+const controlsLocked = computed(() => assistant.busy || waitingConfirmation.value
+  || ['QUEUED', 'RUNNING'].includes(assistant.run?.status ?? ''))
+const displayedExecutionMode = computed(() => running.value || waitingConfirmation.value
+  ? assistant.activeExecutionMode || assistant.executionMode
+  : assistant.executionMode)
 const taskState = computed(() => {
   if (assistant.stopping) return { code: 'running', label: '正在中断', detail: '正在停止后续处理' }
   if (assistant.interrupted) return { code: 'canceled', label: '已中断', detail: assistant.progressLabel || '已停止本次处理，可以继续发送新的要求' }
   if (assistant.error || assistant.run?.status === 'FAILED') return { code: 'failed', label: '未完成', detail: businessError(assistant.error || assistant.run?.resultSummary || '执行遇到问题') }
   if (assistant.run?.status === 'CANCELED') return { code: 'canceled', label: '已停止', detail: '后续步骤没有继续执行' }
   if (assistant.run?.status === 'ROLLED_BACK') return { code: 'completed', label: '已撤销', detail: '已恢复到执行前状态' }
-  if (assistant.run?.status === 'SUCCEEDED') return { code: 'completed', label: '已完成', detail: '' }
+  if (assistant.run?.status === 'SUCCEEDED' && assistant.run.result?.workStatus === 'WAITING_INPUT') return { code: 'waiting', label: '需要你的输入', detail: assistant.run.resultSummary }
+  if (assistant.run?.status === 'SUCCEEDED') return { code: 'completed', label: '本轮已完成', detail: '' }
   if (waitingConfirmation.value) return { code: 'waiting', label: '等待确认', detail: assistant.run?.resultSummary || '确认后会继续修改工作台' }
   if (assistant.run?.status === 'QUEUED') return { code: 'running', label: '准备执行', detail: assistant.progressLabel }
   if (assistant.streaming || assistant.busy) return { code: 'running', label: assistant.plan ? '正在执行' : '正在分析', detail: assistant.progressLabel }
   if (assistant.plan) return { code: 'ready', label: '计划就绪', detail: assistant.plan.summary }
   return { code: 'idle', label: '就绪', detail: '' }
 })
-const processedSteps = computed(() => assistant.plan?.steps.filter(step =>
-  ['SUCCEEDED', 'FAILED', 'CANCELED', 'SKIPPED'].includes(step.status)).length ?? 0)
-const successfulSteps = computed(() => assistant.plan?.steps.filter(step => step.status === 'SUCCEEDED').length ?? 0)
-const stepProgressLabel = computed(() => {
-  const total = assistant.plan?.steps.length ?? 0
-  if (assistant.run?.status === 'SUCCEEDED') return `${total}/${total} 已处理`
-  if (['FAILED', 'CANCELED', 'ROLLED_BACK'].includes(assistant.run?.status ?? '')) return `${processedSteps.value}/${total} 已处理`
-  return `${successfulSteps.value}/${total} 已完成`
-})
-const directReply = computed(() => assistant.plan?.steps.length === 1
-  && assistant.plan.steps[0]?.tool === 'assistant.respond'
-  && typeof assistant.plan.steps[0]?.arguments.prepared_answer === 'string')
 const latestActivity = computed(() => assistant.timeline.at(-1))
-const visibleActivities = computed(() => {
-  if (showEvents.value) return assistant.timeline
-  const summary = assistant.timeline.findLast(item => item.eventType === 'agent.thinking_summary' && item.status === 'completed')
-  const latest = assistant.run?.status === 'SUCCEEDED' ? undefined : latestActivity.value
-  return [summary, latest].filter((item, index, items) => item && items.indexOf(item) === index)
-})
+const liveReply = computed(() => assistant.timeline.findLast(item => item.eventType === 'agent.message')?.detail || '')
 const showJumpToLatest = computed(() => !followingLatest.value && (running.value || unseenActivityCount.value > 0))
 const activeStep = computed(() => assistant.plan?.steps.find(step => stepState(step.order) === 'running'))
 const streamHealthLabel = computed(() => assistant.eventConnection === 'live' ? '实时' : assistant.eventConnection === 'reconnecting' ? '正在重连' : '连接中')
 const elapsedLabel = computed(() => {
-  const starts = [assistant.timeline[0]?.time, assistant.run?.createdAt, assistant.run?.startedAt]
-    .filter((value): value is string => Boolean(value))
-    .map(value => new Date(value).getTime())
-    .filter(value => Number.isFinite(value))
-  if (!starts.length) return '刚刚开始'
-  const started = Math.min(...starts)
-  const terminalActivity = assistant.timeline.findLast(item =>
-    ['agent.completed', 'agent.failed', 'agent.cancelled'].includes(item.eventType ?? ''))
-  const finished = assistant.interruptedAt || assistant.run?.finishedAt || terminalActivity?.time
-  const end = finished ? new Date(finished).getTime() : now.value
-  const seconds = Math.max(0, Math.floor((end - started) / 1000))
-  const prefix = finished ? '耗时' : '已处理'
-  if (seconds < 60) return `${prefix} ${seconds} 秒`
-  const minutes = Math.floor(seconds / 60)
-  const remainder = seconds % 60
-  return remainder ? `${prefix} ${minutes} 分 ${remainder} 秒` : `${prefix} ${minutes} 分钟`
+  return assistantElapsed(now.value, assistant.run, assistant.timeline, assistant.interruptedAt, waitingConfirmation.value)
 })
 const historyTurns = computed<HistoryTurn[]>(() => {
   const turns: HistoryTurn[] = []
@@ -112,9 +93,6 @@ function stepState(order: number) {
   if (order === current && ['QUEUED', 'RUNNING'].includes(status ?? '')) return 'running'
   return 'pending'
 }
-function stepLabel(order: number) {
-  return { completed: '完成', running: '进行中', failed: '失败', canceled: '停止', pending: '等待' }[stepState(order)]
-}
 function activityIcon(kind: string) {
   if (kind === 'planning') return ListChecks
   if (kind === 'skill') return History
@@ -134,11 +112,18 @@ function activityStatus(item: (typeof assistant.timeline)[number]) {
 function lastAssistant(turn: HistoryTurn) { return turn.assistant.at(-1) }
 function earlierAssistant(turn: HistoryTurn) { return turn.assistant.slice(0, -1) }
 function send() {
-  if (!props.project) return
+  if (!props.project || controlsLocked.value || assistant.stopping) return
   const text = assistant.input.trim()
   if (!text) return
-  assistant.input = ''
   void assistant.send(props.project.id, text)
+}
+async function continueBrowserTask(conversationId: string, browserSession: string) {
+  if (!props.project || assistant.sessionId !== conversationId || controlsLocked.value || assistant.stopping) return
+  const draft = assistant.input
+  const pending = assistant.send(props.project.id,
+    `我已完成网站中的人工操作，并通过平台按钮交还了浏览器控制权。请使用原浏览器会话 ${browserSession}，先观察并核验当前页面，再继续本对话的原任务；不要重新登录或重新打开网站，不要重复提交已执行的操作，对外提交仍按原授权规则确认。`)
+  assistant.input = draft
+  await pending
 }
 function switchSession(event: Event) { void assistant.switchSession((event.target as HTMLSelectElement).value) }
 function clock(value: string) {
@@ -182,6 +167,7 @@ function toggleActivities() {
 }
 
 watch(() => assistant.input, () => nextTick(resizeComposer))
+watch(() => assistant.open, open => { if (open) void scrollToLatest(true) })
 watch(() => assistant.timeline.at(-1)?.id, (id, previous) => {
   if (id && previous && !followingLatest.value) unseenActivityCount.value += 1
 })
@@ -189,7 +175,6 @@ watch(() => [assistant.timeline.at(-1)?.id, assistant.timeline.at(-1)?.detail, a
   assistant.history.length, assistant.run?.status, assistant.run?.currentStep,
   assistant.plan?.steps.length], () => scrollToLatest(), { flush: 'post' })
 watch(() => assistant.currentRequest, (request, previous) => {
-  showSteps.value = false
   showEvents.value = false
   unseenActivityCount.value = 0
   if (request && request !== previous) {
@@ -205,9 +190,6 @@ watch(() => assistant.sessionId, () => {
 watch(() => props.project?.id, projectId => {
   if (projectId) void assistant.ensureSession(projectId)
 }, { immediate: true })
-watch(() => assistant.run?.status, status => {
-  if (status && ['SUCCEEDED', 'FAILED', 'CANCELED', 'ROLLED_BACK'].includes(status)) showSteps.value = false
-})
 onMounted(() => {
   clockTimer = window.setInterval(() => { now.value = Date.now() }, 1000)
   if (conversation.value) {
@@ -235,7 +217,13 @@ onBeforeUnmount(() => {
           <div class="assistant-title"><Bot :size="18" /> Agent</div>
           <p><span></span>{{ props.project?.name ?? '个人工作台' }}<i>/</i>{{ contextLabel }}</p>
         </div>
-        <button class="icon-button" type="button" title="收起助手" @click="assistant.open = false"><PanelRightClose :size="18" /></button>
+        <div class="assistant-header-actions">
+          <div class="assistant-mode-switch" role="group" aria-label="Agent 执行模式">
+            <button type="button" :class="{ active: displayedExecutionMode === 'AUTO' }" :disabled="controlsLocked" title="自动执行 LLM 选择的工具" @click="assistant.setExecutionMode('AUTO')"><Zap :size="13" />自动执行</button>
+            <button type="button" :class="{ active: displayedExecutionMode === 'APPROVAL' }" :disabled="controlsLocked" title="修改前需要确认" @click="assistant.setExecutionMode('APPROVAL')"><ShieldCheck :size="13" />逐步确认</button>
+          </div>
+          <button class="icon-button assistant-collapse-button" type="button" title="收起助手" @click="assistant.open = false"><PanelRightClose :size="18" /></button>
+        </div>
       </div>
       <div class="assistant-control-row">
         <label class="assistant-session-switcher">
@@ -243,14 +231,11 @@ onBeforeUnmount(() => {
           <select :value="assistant.sessionId" :disabled="controlsLocked" aria-label="历史对话" @change="switchSession">
             <option v-for="session in assistant.sessions" :key="session.id" :value="session.id">{{ session.title }} · {{ clock(session.updatedAt) }}</option>
           </select>
-          <button type="button" :title="props.project ? `在“${props.project.name}”中新建对话` : '新建对话'" :aria-label="props.project ? `在“${props.project.name}”中新建对话` : '新建对话'" :disabled="controlsLocked || !props.project" @click="props.project && assistant.createNewSession(props.project.id)"><MessageSquarePlus :size="15" /></button>
+          <button type="button" title="新建对话（当前项目作为初始上下文）" aria-label="新建对话" :disabled="controlsLocked || !props.project" @click="props.project && assistant.createNewSession(props.project.id)"><MessageSquarePlus :size="15" /></button>
         </label>
-        <div class="assistant-mode-switch" role="group" aria-label="Agent 执行模式">
-          <button type="button" :class="{ active: assistant.executionMode === 'AUTO' }" :disabled="controlsLocked" title="自动执行 LLM 选择的工具" @click="assistant.setExecutionMode('AUTO')"><Zap :size="13" />Auto</button>
-          <button type="button" :class="{ active: assistant.executionMode === 'APPROVAL' }" :disabled="controlsLocked" title="修改前需要确认" @click="assistant.setExecutionMode('APPROVAL')"><ShieldCheck :size="13" />审批</button>
-        </div>
+        <AssistantModelSettings :session-id="assistant.sessionId" :disabled="controlsLocked || waitingConfirmation || assistant.stopping" />
+        <BrowserAuthorizations />
       </div>
-      <AssistantModelSettings :session-id="assistant.sessionId" :disabled="controlsLocked || waitingConfirmation || assistant.stopping" />
     </header>
 
     <div ref="conversation" class="assistant-body assistant-conversation" @scroll.passive="handleConversationScroll" @wheel.passive="handleConversationWheel">
@@ -265,7 +250,8 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
-      <section v-for="turn in historyTurns" :key="turn.id" class="assistant-history-group">
+      <button v-if="historyTurns.length > 2" class="text-button" @click="historyExpanded = !historyExpanded">{{ historyExpanded ? '收起较早对话' : `查看较早的 ${historyTurns.length - 2} 轮对话` }}</button>
+      <section v-for="turn in (historyExpanded ? historyTurns : historyTurns.slice(-2))" :key="turn.id" class="assistant-history-group">
         <article v-if="turn.user" class="assistant-history-turn" data-role="user">
           <div class="assistant-turn-label">你 <time>{{ clock(turn.user.createdAt) }}</time></div>
           <p>{{ turn.user.content }}</p>
@@ -275,9 +261,9 @@ onBeforeUnmount(() => {
           <div class="assistant-turn-label">Agent <time>{{ clock(lastAssistant(turn)!.createdAt) }}</time></div>
           <details v-if="earlierAssistant(turn).length" class="assistant-history-plan">
             <summary>查看当时计划</summary>
-            <p v-for="message in earlierAssistant(turn)" :key="message.id">{{ message.content }}</p>
+            <AssistantRichText v-for="message in earlierAssistant(turn)" :key="message.id" :content="message.content" />
           </details>
-          <p>{{ lastAssistant(turn)!.content }}</p>
+          <AssistantRichText :content="lastAssistant(turn)!.content" />
         </article>
       </section>
 
@@ -301,20 +287,22 @@ onBeforeUnmount(() => {
             <AlertCircle v-else-if="taskState.code === 'failed' || taskState.code === 'canceled'" :size="16" />
             <Circle v-else :size="14" />
             <strong>{{ taskState.label }}</strong>
-            <span v-if="taskState.detail">{{ businessText(taskState.detail) }}</span>
+            <span v-if="taskState.detail && !liveReply">{{ businessText(taskState.detail) }}</span>
           </div>
 
-          <div v-if="assistant.plan && !directReply" class="assistant-inline-progress">
-            <i><span :style="{ width: `${assistant.progress}%` }"></span></i><small>{{ stepProgressLabel }}</small>
+          <div v-if="running && liveReply" class="assistant-live-reply" aria-live="polite" aria-atomic="false">
+            <AssistantRichText :content="liveReply" />
+            <span class="assistant-live-cursor" aria-hidden="true"></span>
           </div>
 
           <section v-if="assistant.timeline.length || running || waitingConfirmation" class="assistant-work-process" aria-label="工作过程">
             <button type="button" class="assistant-process-toggle" :aria-expanded="showEvents" aria-controls="assistant-process-entries" @click="toggleActivities">
               <span><Activity :size="14" />工作过程 <small>{{ assistant.timeline.length }} 条进展</small></span>
+              <span v-if="!showEvents && running" class="assistant-process-current" :title="latestActivity?.title || taskState.label">{{ latestActivity?.title || taskState.label }}</span>
               <ChevronDown v-if="showEvents" :size="15" /><ChevronRight v-else :size="15" />
             </button>
-            <div id="assistant-process-entries" class="assistant-process-entries" :aria-live="showEvents ? 'off' : 'polite'">
-              <template v-for="item in visibleActivities" :key="item?.id">
+            <div v-show="showEvents" id="assistant-process-entries" class="assistant-process-entries">
+              <template v-for="item in assistant.timeline" :key="item.id">
                 <article v-if="item" class="assistant-activity-item" :data-tone="item.tone">
                   <span class="assistant-activity-icon"><component :is="activityIcon(item.kind)" :size="13" /></span>
                   <div>
@@ -327,35 +315,13 @@ onBeforeUnmount(() => {
                   </div>
                 </article>
               </template>
-              <p v-if="!visibleActivities.length && (running || waitingConfirmation)">{{ businessText(activeStep?.description || taskState.detail) }}</p>
+              <p v-if="!assistant.timeline.length && (running || waitingConfirmation)">{{ businessText(activeStep?.description || taskState.detail) }}</p>
             </div>
           </section>
 
-          <p v-if="assistant.assistantMessage && assistant.run?.status === 'SUCCEEDED'" class="assistant-final-answer">{{ assistant.assistantMessage }}</p>
+          <AssistantRichText v-if="assistant.assistantMessage && assistant.run?.status === 'SUCCEEDED'" class="assistant-final-answer" :content="assistant.assistantMessage" />
           <div v-if="assistant.error" class="assistant-error"><AlertCircle :size="15" /><span>{{ businessError(assistant.error) }}</span><details><summary>问题详情</summary><pre>{{ assistant.error }}</pre></details></div>
 
-          <section v-if="assistant.plan && !directReply" class="assistant-tool-group">
-            <button type="button" @click="showSteps = !showSteps">
-              <span><ListChecks :size="15" /><strong>执行步骤</strong><small>{{ stepProgressLabel }}</small></span>
-              <ChevronDown v-if="showSteps" :size="16" /><ChevronRight v-else :size="16" />
-            </button>
-            <div v-if="showSteps" class="assistant-tool-list">
-              <div v-for="step in assistant.plan.steps" :key="step.id" class="assistant-tool-row" :data-state="stepState(step.order)">
-                <span class="assistant-tool-status">
-                  <Check v-if="stepState(step.order) === 'completed'" :size="13" />
-                  <LoaderCircle v-else-if="stepState(step.order) === 'running'" :size="14" class="assistant-spinner" />
-                  <AlertCircle v-else-if="stepState(step.order) === 'failed' || stepState(step.order) === 'canceled'" :size="14" />
-                  <Circle v-else :size="10" />
-                </span>
-                <div><strong>{{ businessText(step.title, '处理当前步骤') }}</strong><p>{{ businessText(step.description) }}</p><details><summary>技术详情</summary><code>{{ step.tool }}</code><pre>{{ step.description }}</pre></details></div><small>{{ stepLabel(step.order) }}</small>
-              </div>
-            </div>
-          </section>
-
-          <div v-if="waitingConfirmation" class="assistant-confirm-inline">
-            <ShieldCheck :size="18" /><p><strong>需要你的确认</strong><span>将执行上方列出的工作台修改。</span></p>
-            <button class="primary-button" type="button" :disabled="assistant.busy" @click="assistant.confirm">确认执行</button>
-          </div>
 
           <div v-if="assistant.run?.status === 'SUCCEEDED' && assistant.run.result?.createdProjectId" class="result-actions">
             <button class="secondary-button" type="button" @click="assistant.rollback"><RotateCcw :size="15" />撤销本次操作</button>
@@ -369,13 +335,24 @@ onBeforeUnmount(() => {
     </button>
 
     <footer class="assistant-composer">
+      <BrowserTaskHandoff :session-id="assistant.sessionId || ''" :locked="controlsLocked || assistant.stopping" @continue="continueBrowserTask" />
+      <div v-if="waitingConfirmation" class="assistant-confirm-inline" role="region" aria-label="待确认操作">
+        <ShieldCheck :size="18" /><p><strong>需要你的确认</strong><span>{{ businessText(taskState.detail, '确认后执行待授权操作') }}</span></p>
+        <button class="primary-button" type="button" :disabled="assistant.busy" @click="assistant.confirm(hasBrowserAuthorization && rememberBrowserAuthorization)">{{ assistant.busy ? '正在确认…' : '确认执行' }}</button>
+        <p v-if="assistant.error" class="assistant-confirm-error">{{ businessError(assistant.error) }}</p>
+        <details v-if="pendingApprovalSteps.length" class="assistant-approval-scope" open>
+          <summary>本次确认范围</summary>
+          <label v-if="hasBrowserAuthorization"><input v-model="rememberBrowserAuthorization" type="checkbox" /> 记住此授权范围，30天内有效，可随时撤销</label>
+          <pre v-for="step in pendingApprovalSteps" :key="step.id">{{ step.description }}</pre>
+        </details>
+      </div>
       <div class="assistant-context-chip"><span></span>{{ contextLabel }}</div>
       <div class="assistant-composer-box">
         <textarea ref="composer" v-model="assistant.input" rows="1" placeholder="向 Agent 交代任务或继续追问" @keydown="composerKeyboard.keydown" @compositionstart="composerKeyboard.compositionStart" @compositionend="composerKeyboard.compositionEnd" @blur="composerKeyboard.blur"></textarea>
         <button v-if="assistant.canInterrupt || assistant.stopping" class="send-button stop" type="button" :title="assistant.stopping ? '正在中断' : '中断当前任务'" :disabled="assistant.stopping" @click="assistant.cancel"><LoaderCircle v-if="assistant.stopping" :size="14" class="assistant-spinner" /><Square v-else :size="14" /></button>
-        <button v-else class="send-button" type="button" title="发送" :disabled="assistant.busy || assistant.stopping || !assistant.input.trim()" @click="send"><ArrowUp :size="18" /></button>
+        <button v-else class="send-button" type="button" title="发送" :disabled="controlsLocked || assistant.stopping || !assistant.input.trim()" @click="send"><ArrowUp :size="18" /></button>
       </div>
-      <p><span>{{ assistant.executionMode === 'AUTO' ? 'Auto 执行' : '审批执行' }}</span><i>·</i> Enter 发送 <i>·</i> Shift+Enter 换行</p>
+      <p><span>{{ displayedExecutionMode === 'AUTO' ? '自动执行 · 高风险操作仍需授权' : '逐步确认后执行' }}</span><i>·</i> Enter 发送 <i>·</i> Shift+Enter 换行</p>
     </footer>
   </aside>
 </template>

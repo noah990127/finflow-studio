@@ -12,6 +12,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.web.servlet.MockMvc;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -39,6 +40,7 @@ class DynamicAssistantFlowTest {
     @Autowired ObjectMapper objectMapper;
     @Autowired ProjectService projects;
     @Autowired WorkspaceFolderService folders;
+    @Autowired JdbcClient jdbc;
 
     @Test
     void autoModeExecutesMultipleToolsAndReplansFromFreshWorkspaceState() throws Exception {
@@ -113,6 +115,31 @@ class DynamicAssistantFlowTest {
     }
 
     @Test
+    void pausedApprovalRemainsConfirmableAfterThePreviewExpiry() throws Exception {
+        var project = projects.create("过期审批", "等待用户时仍可继续");
+        var session = json(postJson("/api/projects/" + project.id() + "/assistant/sessions", Map.of("title", "审批")));
+        var response = json(postJson("/api/assistant/sessions/" + session.get("id").asText() + "/messages", Map.of(
+                "projectId", project.id(), "text", "审批场景：检查项目后创建审批目录", "page", "project-home",
+                "clientContextVersion", 1, "executionMode", "APPROVAL")));
+        var runId = response.get("run").get("id").asText();
+        awaitStatus(runId, "WAITING_CONFIRMATION");
+        var planId = response.get("plan").get("id").asText();
+        jdbc.sql("update assistant_plan set expires_at = :expired where id = :id")
+                .param("expired", Instant.now().minus(Duration.ofHours(1)))
+                .param("id", planId)
+                .update();
+        var plan = json(getJson("/api/assistant/plans/" + planId));
+
+        var resumed = json(postJson("/api/assistant/plans/" + planId + "/confirm", Map.of(
+                "planVersion", plan.get("version").asInt(), "planHash", plan.get("planHash").asText(),
+                "idempotencyKey", "expired-dynamic-resume", "expectedResourceVersions", Map.of())));
+
+        assertThat(resumed.get("id").asText()).isEqualTo(runId);
+        assertThat(awaitStatus(runId, "SUCCEEDED").get("status").asText()).isEqualTo("SUCCEEDED");
+        assertThat(folders.list(project.id())).extracting(item -> item.name()).contains("审批目录");
+    }
+
+    @Test
     void longDynamicTaskCanContinuePastTheFormerTwelveActionLimit() throws Exception {
         var project = projects.create("动态长任务", "验证执行预算不会过早终止");
         var session = json(postJson("/api/projects/" + project.id() + "/assistant/sessions", Map.of("title", "长任务")));
@@ -129,7 +156,7 @@ class DynamicAssistantFlowTest {
     }
 
     @Test
-    void creatingAProjectKeepsRunningAndMovesTheConversationToTheNewProject() throws Exception {
+    void creatingAProjectKeepsTheGlobalConversationAndReturnsNavigationTarget() throws Exception {
         var source = projects.create("创建项目入口", "验证会话跟随");
         var session = json(postJson("/api/projects/" + source.id() + "/assistant/sessions", Map.of("title", "深圳活动调研")));
 
@@ -141,9 +168,10 @@ class DynamicAssistantFlowTest {
 
         assertThat(createdProjectId).isNotBlank().isNotEqualTo(source.id());
         assertThat(run.path("status").asText()).isEqualTo("SUCCEEDED");
-        assertThat(json(getJson("/api/projects/" + createdProjectId + "/assistant/sessions")))
+        assertThat(json(getJson("/api/assistant/sessions")))
                 .anySatisfy(item -> assertThat(item.path("id").asText()).isEqualTo(session.path("id").asText()));
-        assertThat(json(getJson("/api/projects/" + source.id() + "/assistant/sessions"))).isEmpty();
+        assertThat(json(getJson("/api/assistant/sessions/" + session.path("id").asText())).path("projectId").asText())
+                .isEqualTo(createdProjectId);
     }
 
     private JsonNode awaitStatus(String runId, String expected) throws Exception {

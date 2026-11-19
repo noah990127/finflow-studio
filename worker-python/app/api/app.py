@@ -1,3 +1,4 @@
+import asyncio
 import tempfile
 import shutil
 import subprocess
@@ -14,6 +15,7 @@ from starlette.background import BackgroundTask
 
 from ..config import settings
 from ..deepseek import deepseek
+from ..integrations.search_provider import provider_info
 from ..llm import llm
 from ..models import (
     DatasetProfileRequest,
@@ -62,12 +64,30 @@ import json
 
 logger = logging.getLogger(__name__)
 
+from ..fixed_work import FixedModelRequest, model_snapshot, execute_model
+
 
 app = FastAPI(
     title="FinBTP Studio Worker",
     version="0.1.0",
     description="Document, knowledge Ref and file analysis worker",
 )
+
+
+@app.post("/v1/fixed-work/model-snapshot")
+async def fixed_model_snapshot(body: FixedModelRequest):
+    try:
+        return model_snapshot(body.configuration)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/v1/fixed-work/model-execute")
+async def fixed_model_execute(body: FixedModelRequest, request: Request):
+    try:
+        return await until_disconnected(execute_model(body), request.is_disconnected)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @app.post("/v1/files/render-office-pdf")
@@ -92,7 +112,7 @@ async def render_office_preview(file: UploadFile = File(...), original_name: str
 @app.get("/health")
 async def health() -> dict:
     skills = load_skills(settings.agent_skills_dir)
-    runtime_mode = "deep-agents" if settings.llm_provider.strip().lower() in {"codex", "codex-cli", "deepseek"} else "fallback"
+    runtime_mode = settings.agent_runtime
     return {
         "status": "online",
         "service": settings.service_name,
@@ -100,12 +120,13 @@ async def health() -> dict:
         "llmProvider": llm.provider,
         "llmModel": llm.model,
         "agentEnabled": settings.agent_enabled,
-        "agentFramework": "deep-agents",
+        "agentFramework": settings.agent_runtime,
         "agentRuntimeMode": runtime_mode,
         "continuousAgent": True,
         "agentSkillCount": len(skills),
         "agentMcpConfigured": True,
         "agentGateway": "studio-mcp",
+        "searchProvider": provider_info(settings.research_search_provider, settings.research_searxng_url),
     }
 
 
@@ -131,11 +152,11 @@ async def llm_status() -> LlmStatus:
 @app.get("/v1/agent/status")
 async def agent_status() -> dict:
     skills = load_skills(settings.agent_skills_dir)
-    runtime_mode = "deep-agents" if settings.llm_provider.strip().lower() in {"codex", "deepseek"} else "model-gateway"
+    runtime_mode = settings.agent_runtime
     return {
         "enabled": settings.agent_enabled,
         "modelConfigured": llm.configured,
-        "framework": "deep-agents",
+        "framework": settings.agent_runtime,
         "runtimeMode": runtime_mode,
         "skills": [{"name": item.name, "description": item.description} for item in skills],
         "mcpConfigured": True,
@@ -180,7 +201,11 @@ async def run_agent_task(request: OpenTaskRequest) -> StreamingResponse:
 async def run_continuous_agent(request: ContinuousAgentRequest) -> StreamingResponse:
     async def stream():
         try:
-            async for event in run_continuous_agent_stream(request):
+            from ..agent.opencode_runtime import run_opencode_stream
+            from ..agent.codex_runtime import run_codex_stream
+            runtime = {"opencode": run_opencode_stream, "codex-cli": run_codex_stream,
+                       "deep-agents": run_continuous_agent_stream}[settings.agent_runtime]
+            async for event in runtime(request):
                 yield json.dumps(event, ensure_ascii=False) + "\n"
         except Exception as exception:
             logger.exception("Continuous Agent failed for run %s", request.run_id)
@@ -218,7 +243,13 @@ async def search_knowledge(request: SearchRequest) -> list[SearchHit]:
 
 @app.post("/v1/research/discover", response_model=ResearchResponse)
 async def discover_research_sources(request: ResearchRequest) -> ResearchResponse:
-    result = await llm.discover_sources(request.topic, request.max_sources)
+    try:
+        result = await asyncio.wait_for(
+            llm.discover_sources(request.topic, request.max_sources),
+            timeout=settings.research_discover_timeout_seconds,
+        )
+    except asyncio.TimeoutError as exception:
+        raise HTTPException(status_code=504, detail="联网搜索等待超时，请稍后重试或关闭联网搜索") from exception
     return ResearchResponse.model_validate(result)
 
 
@@ -354,12 +385,13 @@ async def data_transform_generate(request: TransformGenerateRequest) -> Transfor
 
 @app.post("/v1/data-transforms/sample")
 async def data_transform_sample(files: list[UploadFile] = File(...), metadata: str = Form(...),
-                                script: str = Form(...)) -> dict:
+                                script: str = Form(default=""), plan: str = Form(default="")) -> dict:
     try:
         items = json.loads(metadata)
         directory, inputs = await _save_transform_files(files, items)
         try:
-            return sample_transform(inputs, script)
+            parsed_plan = json.loads(plan) if plan else None
+            return sample_transform(inputs, script, plan=parsed_plan)
         finally:
             shutil.rmtree(directory, ignore_errors=True)
     except (ValueError, json.JSONDecodeError) as exception:
@@ -368,13 +400,15 @@ async def data_transform_sample(files: list[UploadFile] = File(...), metadata: s
 
 @app.post("/v1/data-transforms/run")
 async def data_transform_run(files: list[UploadFile] = File(...), metadata: str = Form(...),
-                             script: str = Form(...)) -> FileResponse:
+                             script: str = Form(default=""), plan: str = Form(default=""),
+                             output_format: str = Form(default="parquet")) -> FileResponse:
     directory: Optional[Path] = None
     try:
         items = json.loads(metadata)
         directory, inputs = await _save_transform_files(files, items)
         output = directory / "result.zip"
-        run_transform(inputs, script, output)
+        parsed_plan = json.loads(plan) if plan else None
+        run_transform(inputs, script, output, plan=parsed_plan, output_format=output_format)
         return FileResponse(output, media_type="application/zip", filename="result.zip",
                             background=BackgroundTask(shutil.rmtree, directory, ignore_errors=True))
     except (ValueError, json.JSONDecodeError) as exception:
@@ -430,7 +464,7 @@ async def _artifact_response(output_format: str, request: DeliverableRequest, me
         raise HTTPException(status_code=422, detail=str(exception)) from exception
     return Response(result.content, media_type=media_type, headers={
         "X-FinFlow-Quality-Passed": str(result.quality.passed).lower(),
-        "X-FinFlow-Quality-Score": str(result.quality.score),
         "X-FinFlow-Quality-Issues": str(len(result.quality.issues)),
         "X-FinFlow-Validator-Version": result.quality.validator_version,
+        "X-FinFlow-Visual-Review": str(result.quality.metrics.get("visual_review_status", "not_applicable")),
     })

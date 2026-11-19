@@ -16,10 +16,12 @@ import com.finflow.studio.project.ProjectService;
 import com.finflow.studio.worker.WorkerClient;
 import com.finflow.studio.workflow.WorkflowDefinitionService;
 import com.finflow.studio.workflow.WorkflowModels.EdgeDefinition;
+import com.finflow.studio.workflow.WorkflowModels.ExecutionMode;
 import com.finflow.studio.workflow.WorkflowModels.NodeDefinition;
 import com.finflow.studio.workflow.WorkflowModels.NodeType;
 import com.finflow.studio.workflow.WorkflowModels.SaveRequest;
 import com.finflow.studio.workspace.WorkspaceFolderService;
+import com.finflow.studio.workspace.WorkspaceFileClassifier;
 import com.finflow.studio.workspace.WorkspaceModels.FolderRequest;
 import com.finflow.studio.workspace.WorkspaceModels.Resource;
 import com.finflow.studio.workspace.WorkspaceResourceService;
@@ -37,6 +39,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executors;
 
 @Service
 public class AssistantWorkspaceToolGateway {
@@ -46,12 +50,13 @@ public class AssistantWorkspaceToolGateway {
             "folder.create", "folder.rename", "folder.move", "folder.delete",
             "resource.upload", "resource.add", "resource.open", "resource.read", "resource.edit",
             "resource.rename", "resource.move", "resource.delete",
+            "resource.prepare_delete", "resource.delete_batch",
             "source.verify", "source.add_verified",
             "knowledge.read", "knowledge.parse", "knowledge.extract_table",
             "dataset.add_source", "dataset.connect", "dataset.import", "dataset.query", "dataset.extract",
             "dataset.create", "dataset.transform", "dataset.open", "dataset.delete", "dataset.profile",
             "workflow.open", "workflow.edit", "workflow.add_node", "workflow.remove_node", "workflow.connect",
-            "workflow.save_version", "workflow.delete",
+            "workflow.duplicate", "workflow.save_version", "workflow.delete",
             "deliverable.open", "deliverable.edit", "deliverable.export", "deliverable.delete"
     );
 
@@ -67,6 +72,7 @@ public class AssistantWorkspaceToolGateway {
     private final DeliverableService deliverables;
     private final WorkerClient worker;
     private final tools.jackson.databind.ObjectMapper objectMapper;
+    private final org.springframework.transaction.support.TransactionTemplate deletionTransaction;
 
     public AssistantWorkspaceToolGateway(JdbcClient jdbc, ProjectService projects, WorkspaceResourceService workspace,
                                          WorkspaceFolderService folders, KnowledgeService knowledge,
@@ -74,7 +80,8 @@ public class AssistantWorkspaceToolGateway {
                                          com.finflow.studio.data.ExtractJobService extracts,
                                          DataTransformService transforms, WorkflowDefinitionService workflows,
                                          DeliverableService deliverables, WorkerClient worker,
-                                         tools.jackson.databind.ObjectMapper objectMapper) {
+                                         tools.jackson.databind.ObjectMapper objectMapper,
+                                         org.springframework.transaction.PlatformTransactionManager transactionManager) {
         this.jdbc = jdbc;
         this.projects = projects;
         this.workspace = workspace;
@@ -87,6 +94,8 @@ public class AssistantWorkspaceToolGateway {
         this.deliverables = deliverables;
         this.worker = worker;
         this.objectMapper = objectMapper;
+        this.deletionTransaction = new org.springframework.transaction.support.TransactionTemplate(transactionManager);
+        this.deletionTransaction.setIsolationLevel(org.springframework.transaction.TransactionDefinition.ISOLATION_SERIALIZABLE);
     }
 
     public static boolean supports(String tool) {
@@ -118,6 +127,8 @@ public class AssistantWorkspaceToolGateway {
             case "resource.rename" -> renameResource(step, effects);
             case "resource.move" -> moveResource(step, effects);
             case "resource.delete" -> deleteResource(step, effects);
+            case "resource.prepare_delete" -> prepareDeletion(step, effects);
+            case "resource.delete_batch" -> deleteBatch(step, effects);
             case "knowledge.read" -> readKnowledge(step, effects);
             case "knowledge.parse" -> parseKnowledge(step, effects);
             case "knowledge.extract_table" -> extractTable(step, effects);
@@ -132,6 +143,7 @@ public class AssistantWorkspaceToolGateway {
             case "dataset.profile" -> profileDataset(step, effects);
             case "workflow.open" -> openWorkflow(step, effects);
             case "workflow.edit" -> editWorkflow(step, effects);
+            case "workflow.duplicate" -> duplicateWorkflow(step, effects);
             case "workflow.add_node" -> addWorkflowNode(step, effects);
             case "workflow.remove_node" -> removeWorkflowNode(step, effects);
             case "workflow.connect" -> connectWorkflow(step, effects);
@@ -168,7 +180,10 @@ public class AssistantWorkspaceToolGateway {
 
     private String openProject(PlanStep step, Map<String, Object> effects) {
         var project = projects.get(required(step, "project_id", "项目"));
-        effects.put("uiAction", Map.of("type", "OPEN_PROJECT", "projectId", project.id()));
+        effects.put("currentProjectId", project.id());
+        effects.put("currentProjectName", project.name());
+        effects.put("uiAction", Map.of("type", "OPEN_PROJECT", "projectId", project.id(),
+                "refreshWorkspace", true));
         return "已打开项目“" + project.name() + "”";
     }
 
@@ -240,27 +255,17 @@ public class AssistantWorkspaceToolGateway {
     private String addResource(PlanStep step, Map<String, Object> effects) {
         var url = argument(step, "url", "");
         if (url.isBlank()) return uploadResource(step, effects);
-        return addVerifiedSource(step, effects);
+        return addVerifiedLinkSource(step, effects);
     }
 
-    private String verifySource(PlanStep step, Map<String, Object> effects) {
-        var url = required(step, "url", "资料地址");
-        if (!url.startsWith("http://") && !url.startsWith("https://"))
-            throw new IllegalArgumentException("资源地址必须使用 HTTP 或 HTTPS");
-        var fetched = fetchWebUrl(url, argument(step, "name", url));
-        var verified = verifiedSource("", 0, url, fetched, null);
-        effects.put("verifiedSourceCandidate", verified);
-        return "来源已验证，可读取“" + Objects.toString(fetched.get("title"), argument(step, "name", url)) + "”";
-    }
-
-    private String addVerifiedSource(PlanStep step, Map<String, Object> effects) {
-        var url = required(step, "url", "资料地址");
-        if (!url.startsWith("http://") && !url.startsWith("https://"))
-            throw new IllegalArgumentException("资源地址必须使用 HTTP 或 HTTPS");
+    private String addVerifiedLinkSource(PlanStep step, Map<String, Object> effects) {
         var projectId = required(step, "project_id", "项目");
+        var url = required(step, "url", "资料地址");
+        if (!url.startsWith("http://") && !url.startsWith("https://"))
+            throw new IllegalArgumentException("资源地址必须使用 HTTP 或 HTTPS");
         var name = argument(step, "name", url);
         var fetched = fetchWebUrl(url, name);
-        var current = workflows.getProjectWorkflow(projectId);
+        var current = workflows.ensureProjectWorkflow(projectId);
         var nodes = new ArrayList<>(current.nodes());
         var id = "link_" + shortId();
         nodes.add(new NodeDefinition(id, NodeType.LINK_INPUT, name, 80, 80 + nodes.size() * 90,
@@ -289,6 +294,91 @@ public class AssistantWorkspaceToolGateway {
                 "resourceId", id, "refreshWorkspace", true));
         return "已验证并添加网页来源“" + name + "”，同时保存了可追溯快照";
     }
+
+    private String verifySource(PlanStep step, Map<String, Object> effects) {
+        var url = required(step, "url", "资料地址");
+        if (!url.startsWith("http://") && !url.startsWith("https://"))
+            throw new IllegalArgumentException("资源地址必须使用 HTTP 或 HTTPS");
+        var fetched = fetchWebUrl(url, argument(step, "name", url));
+        var verified = verifiedSource("", 0, url, fetched, null);
+        effects.put("verifiedSourceCandidate", verified);
+        return "来源已验证，可读取“" + Objects.toString(fetched.get("title"), argument(step, "name", url)) + "”";
+    }
+
+    private String addVerifiedSource(PlanStep step, Map<String, Object> effects) {
+        var projectId = required(step, "project_id", "项目");
+        projects.get(projectId);
+        var candidates = sourceCandidates(step);
+        List<SourceFetch> fetchedSources;
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            var tasks = candidates.stream().map(candidate -> CompletableFuture.supplyAsync(() -> {
+                try {
+                    return new SourceFetch(candidate.url(), candidate.name(),
+                            fetchWebUrl(candidate.url(), candidate.name()), null);
+                } catch (RuntimeException exception) {
+                    return new SourceFetch(candidate.url(), candidate.name(), Map.of(), exception.getMessage());
+                }
+            }, executor)).toList();
+            fetchedSources = tasks.stream().map(CompletableFuture::join).toList();
+        }
+        var successful = fetchedSources.stream().filter(item -> item.error() == null).toList();
+        if (successful.isEmpty()) {
+            var reasons = fetchedSources.stream().map(item -> item.name() + "：" + item.error()).toList();
+            throw new IllegalStateException("来源验证失败，未加入工作区：" + String.join("；", reasons));
+        }
+        var sourceIds = new ArrayList<String>();
+        var snapshotIds = new ArrayList<String>();
+        for (var index = 0; index < successful.size(); index++) {
+            var item = successful.get(index);
+            var snapshotBody = "来源标题：" + Objects.toString(item.fetched().get("title"), item.name())
+                    + "\n原始地址：" + item.url()
+                    + "\n最终地址：" + Objects.toString(item.fetched().get("final_url"), item.url())
+                    + "\n验证时间：" + Instant.now()
+                    + "\n内容类型：" + Objects.toString(item.fetched().get("content_type"), "")
+                    + "\n内容哈希：" + Objects.toString(item.fetched().get("content_hash"), "")
+                    + "\n\n" + Objects.toString(item.fetched().get("text"), "");
+            var snapshot = knowledge.importBytes(projectId, item.name() + "-网页快照.md", "text/markdown",
+                    snapshotBody.getBytes(StandardCharsets.UTF_8));
+            sourceIds.add(snapshot.id());
+            snapshotIds.add(snapshot.id());
+            moveIfRequested(projectId, snapshot.id(), fileResourceType(snapshot.name()), "FILES", nullable(step, "folder_id"));
+            var verified = verifiedSource(snapshot.id(), snapshot.currentVersion(), item.url(), item.fetched(), snapshot.id());
+            appendVerifiedSource(effects, verified);
+            appendCitation(effects, citationFromVerified(verified));
+        }
+        effects.put("resourceId", sourceIds.getLast());
+        effects.put("resourceIds", sourceIds);
+        effects.put("snapshotResourceId", snapshotIds.getLast());
+        effects.put("snapshotResourceIds", snapshotIds);
+        effects.put("uiAction", Map.of("type", "REFRESH_WORKSPACE", "projectId", projectId,
+                "resourceId", sourceIds.getLast(), "refreshWorkspace", true));
+        var failed = fetchedSources.size() - successful.size();
+        return "已验证并添加 " + successful.size() + " 个网页来源，同时保存可追溯快照"
+                + (failed == 0 ? "" : "；另有 " + failed + " 个候选无法读取，未加入工作区");
+    }
+
+    private List<SourceCandidate> sourceCandidates(PlanStep step) {
+        var result = new ArrayList<SourceCandidate>();
+        var rawSources = step.arguments().get("sources");
+        if (rawSources instanceof List<?> values) {
+            for (var value : values) {
+                var source = map(value);
+                var url = Objects.toString(source.get("url"), "").trim();
+                if (url.isBlank()) continue;
+                result.add(new SourceCandidate(url, Objects.toString(source.get("name"), url)));
+            }
+        }
+        var url = argument(step, "url", "").trim();
+        if (!url.isBlank()) result.add(new SourceCandidate(url, argument(step, "name", url)));
+        if (result.isEmpty()) throw new IllegalArgumentException("请至少提供一个资料地址");
+        if (result.size() > 8) throw new IllegalArgumentException("一次最多验证 8 个资料地址");
+        for (var item : result) if (!item.url().startsWith("http://") && !item.url().startsWith("https://"))
+            throw new IllegalArgumentException("资源地址必须使用 HTTP 或 HTTPS：" + item.url());
+        return result.stream().distinct().toList();
+    }
+
+    private record SourceCandidate(String url, String name) { }
+    private record SourceFetch(String url, String name, Map<String, Object> fetched, String error) { }
 
     private String openResource(PlanStep step, Map<String, Object> effects) {
         var projectId = required(step, "project_id", "项目");
@@ -379,9 +469,82 @@ public class AssistantWorkspaceToolGateway {
         return "已移动资源“" + item.name() + "”";
     }
 
+    private List<Map<String, Object>> deletionInventory(String projectId) {
+        var result = new ArrayList<Map<String, Object>>();
+        var current = workspace.get(projectId);
+        for (var item : current.resources()) result.add(Map.of("resource_id", item.id(), "name", item.name(),
+                "type", item.resourceType(), "version", Math.max(1, item.currentVersion()), "revision", Objects.toString(item.updatedAt(), "unknown")));
+        for (var item : workflows.list(projectId)) result.add(Map.of("resource_id", item.id(), "name", item.name(),
+                "type", "WORKFLOW", "version", item.currentVersion(), "revision", Objects.toString(item.updatedAt(), "unknown")));
+        return result;
+    }
+
+    private String prepareDeletion(PlanStep step, Map<String, Object> effects) {
+        var inventory = deletionInventory(required(step, "project_id", "项目"));
+        var ids = list(step.arguments().get("resource_ids")).stream().map(String::valueOf).toList();
+        var scope = Objects.toString(step.arguments().get("scope"), "");
+        if ("selected".equalsIgnoreCase(scope)) {
+            if (ids.isEmpty()) throw new IllegalArgumentException("指定删除范围需要 resource_ids");
+            var available = inventory.stream().map(i -> i.get("resource_id")).toList();
+            if (!available.containsAll(ids)) throw new IllegalArgumentException("删除清单包含不属于当前项目的资源");
+            inventory = inventory.stream().filter(i -> ids.contains(i.get("resource_id"))).toList();
+        } else {
+            if (!"project_contents".equalsIgnoreCase(scope)) throw new IllegalArgumentException("请明确指定删除范围");
+            if (!ids.isEmpty()) throw new IllegalArgumentException("全项目范围不能同时提供 resource_ids");
+        }
+        if (inventory.size() > 500) throw new IllegalArgumentException("单批最多500项，请使用 selected 范围分批处理");
+        effects.put("deletionPreview", Map.of("projectId", required(step, "project_id", "项目"), "items", inventory));
+        return "已整理 " + inventory.size() + " 项删除清单，尚未删除；请一次调用 resource.delete_batch";
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> validateDeletion(Map<String, Object> arguments) {
+        AssistantToolContracts.validate("resource.delete_batch", arguments);
+        var items = (List<Map<String, Object>>) arguments.get("items");
+        if (items.isEmpty() || items.size() > 500) throw new IllegalArgumentException("删除清单必须包含1至500项");
+        var ids = items.stream().map(i -> i.get("resource_id")).toList();
+        if (ids.stream().distinct().count() != ids.size()) throw new IllegalArgumentException("删除清单包含重复对象");
+        var inventory = deletionInventory(arguments.get("project_id").toString());
+        for (var item : items) {
+            var actual = inventory.stream().filter(i -> i.get("resource_id").equals(item.get("resource_id"))).findFirst()
+                    .orElseThrow(() -> new IllegalArgumentException("删除对象不存在或不属于当前项目：" + item.get("name")));
+            if (!actual.equals(item)) throw new IllegalStateException("删除对象已变化，请重新生成清单并确认：" + actual.get("name"));
+        }
+        return items;
+    }
+
+    public String deletionDescription(Map<String, Object> arguments) {
+        var items = validateDeletion(arguments);
+        return "将永久删除以下 " + items.size() + " 项（工作流含其历史运行记录），保留项目与目录：\n" + items.stream()
+                .map(i -> i.get("name") + " · " + i.get("type") + " · 第" + i.get("version") + "版")
+                .collect(java.util.stream.Collectors.joining("\n"));
+    }
+
+    private String deleteBatch(PlanStep step, Map<String, Object> effects) {
+        var deleted = deletionTransaction.execute(status -> {
+            var items = validateDeletion(step.arguments());
+            var projectId = required(step, "project_id", "项目");
+            // URL nodes must be removed before their owning workflows disappear.
+            var ordered = items.stream().sorted(java.util.Comparator.comparing(i -> "WORKFLOW".equals(i.get("type")))).toList();
+            var localEffects = new LinkedHashMap<String, Object>();
+            for (var item : ordered) deleteResource(remap(step, Map.of("resource_id", item.get("resource_id"))), localEffects);
+            var remaining = deletionInventory(projectId).stream().map(i -> i.get("resource_id")).toList();
+            if (items.stream().anyMatch(i -> remaining.contains(i.get("resource_id"))))
+                throw new IllegalStateException("批量删除校验失败，已回滚");
+            return items;
+        });
+        effects.put("deletionResult", Map.of("deleted", deleted, "count", deleted.size(), "verified", true));
+        effects.put("uiAction", Map.of("type", "REFRESH_WORKSPACE", "projectId", required(step, "project_id", "项目")));
+        return "已批量删除并验证 " + deleted.size() + " 项；未删除清单之外的任何内容";
+    }
+
     private String deleteResource(PlanStep step, Map<String, Object> effects) {
         var projectId = required(step, "project_id", "项目");
         var id = required(step, "resource_id", "资源");
+        // workspace.inspect also exposes workflows; keep deletion consistent with that catalog.
+        if (workflows.list(projectId).stream().anyMatch(workflow -> workflow.id().equals(id))) {
+            return deleteWorkflow(remap(step, Map.of("workflow_id", id)), effects);
+        }
         var item = resource(projectId, id);
         switch (item.resourceType()) {
             case "DELIVERABLE" -> deliverables.delete(id);
@@ -600,7 +763,8 @@ public class AssistantWorkspaceToolGateway {
         for (var node : workflow.nodes()) schema.put(node.id(), Map.of("name", node.name(), "outputs",
                 com.finflow.studio.workflow.WorkflowVariables.outputs(node.type())));
         effects.put("nodeOutputs", schema);
-        return "已打开工作流";
+        return "已打开工作流“" + workflow.name() + "”，共 " + workflow.nodes().size()
+                + " 个节点、" + workflow.edges().size() + " 条连线";
     }
 
     private String editWorkflow(PlanStep step, Map<String, Object> effects) {
@@ -609,6 +773,7 @@ public class AssistantWorkspaceToolGateway {
         var expected = integer(step, "expected_version", current.currentVersion());
         if (expected != current.currentVersion()) throw new IllegalStateException("工作流版本已变化，请读取最新版本再修改");
         var request = WorkflowAgentPatch.apply(current, step.arguments().get("patch"), expected);
+        request = normalizeAgentWorkflow(current.projectId(), request);
         boolean changed = !request.name().equals(current.name()) || !request.description().equals(current.description())
                 || !request.nodes().equals(current.nodes()) || !request.edges().equals(current.edges());
         var updated = changed ? workflows.update(id, request) : current;
@@ -617,6 +782,105 @@ public class AssistantWorkspaceToolGateway {
         effects.put("changed", changed);
         effects.put("uiAction", Map.of("type", "OPEN_WORKFLOW", "projectId", current.projectId(), "workflowId", id, "refreshWorkspace", true));
         return changed ? "已保存节点配置和连线，工作流版本 v" + updated.currentVersion() : "配置与当前版本一致，没有产生修改，请基于已返回的工作流继续或结束任务";
+    }
+
+    private String duplicateWorkflow(PlanStep step, Map<String, Object> effects) {
+        var projectId = required(step, "project_id", "项目");
+        var source = workflows.get(required(step, "workflow_id", "工作流"));
+        if (!projectId.equals(source.projectId())) throw new IllegalArgumentException("工作流不属于当前项目");
+        var copy = workflows.create(projectId, new SaveRequest(required(step, "name", "新工作流名称"),
+                source.description(), source.nodes(), source.edges(), ExecutionMode.MANUAL, null, null));
+        effects.put("workflowId", copy.id());
+        effects.put("workflow", copy);
+        effects.put("changed", true);
+        effects.put("uiAction", Map.of("type", "OPEN_WORKFLOW", "projectId", projectId,
+                "workflowId", copy.id(), "refreshWorkspace", true));
+        return "已复制工作流为“" + copy.name() + "”，保留节点、连线和分析口径，未携带历史运行结果";
+    }
+
+    private SaveRequest normalizeAgentWorkflow(String projectId, SaveRequest request) {
+        var normalizedNodes = request.nodes().stream().map(node -> normalizeAgentInput(projectId, node)).toList();
+        var byId = new LinkedHashMap<String, NodeDefinition>();
+        normalizedNodes.forEach(node -> byId.put(node.id(), node));
+        var result = new ArrayList<NodeDefinition>();
+        for (var node : normalizedNodes) {
+            if (node.type() != NodeType.DATA_TRANSFORM || node.config() == null
+                    || node.config().get("transformPlan") instanceof Map<?, ?> plan && !plan.isEmpty()) {
+                result.add(node);
+                continue;
+            }
+            var upstreamIds = request.edges().stream().filter(edge -> edge.target().equals(node.id()))
+                    .map(EdgeDefinition::source).toList();
+            var upstream = upstreamIds.stream().map(byId::get).filter(Objects::nonNull)
+                    .filter(item -> Set.of(NodeType.FILE_INPUT, NodeType.DATASET_INPUT, NodeType.DATA_EXTRACT).contains(item.type()))
+                    .toList();
+            if (upstream.isEmpty()) {
+                result.add(node);
+                continue;
+            }
+            result.add(withGeneratedTransformPlan(projectId, node, upstream));
+        }
+        return new SaveRequest(request.name(), request.description(), result, request.edges(),
+                request.executionMode(), request.schedule(), request.expectedVersion());
+    }
+
+    private NodeDefinition normalizeAgentInput(String projectId, NodeDefinition node) {
+        if (node.type() == NodeType.DELIVERABLE && node.config() != null) {
+            var config = new LinkedHashMap<>(node.config());
+            config.put("fastPlanning", true);
+            return new NodeDefinition(node.id(), node.type(), node.name(), node.x(), node.y(), Map.copyOf(config));
+        }
+        if (node.type() != NodeType.DATASET_INPUT || node.config() == null) return node;
+        var resourceId = Objects.toString(node.config().get("extractJobId"),
+                Objects.toString(node.config().get("resourceId"), ""));
+        if (resourceId.isBlank()) return node;
+        try {
+            var item = resource(projectId, resourceId);
+            if ("DATASET".equals(item.resourceType())) return node;
+            if (Set.of("DATA_FILE", "OFFICE_FILE", "KNOWLEDGE_FILE").contains(item.resourceType())) {
+                return new NodeDefinition(node.id(), NodeType.FILE_INPUT, node.name(), node.x(), node.y(),
+                        Map.of("resourceId", resourceId));
+            }
+        } catch (IllegalArgumentException ignored) { }
+        return node;
+    }
+
+    private NodeDefinition withGeneratedTransformPlan(String projectId, NodeDefinition transform,
+                                                      List<NodeDefinition> upstream) {
+        var sources = new ArrayList<DataTransformService.SourceRequest>();
+        var aliases = new LinkedHashMap<String, String>();
+        for (var index = 0; index < upstream.size(); index++) {
+            var input = upstream.get(index);
+            var config = input.config() == null ? Map.<String, Object>of() : input.config();
+            var alias = "data_" + (index + 1);
+            aliases.put(input.id(), alias);
+            switch (input.type()) {
+                case FILE_INPUT -> sources.add(new DataTransformService.SourceRequest("FILE",
+                        Objects.toString(config.get("resourceId"), ""), alias, input.name(), null,
+                        Objects.toString(config.get("sheetName"), "")));
+                case DATASET_INPUT -> sources.add(new DataTransformService.SourceRequest("EXTRACT",
+                        Objects.toString(config.get("extractJobId"), ""), alias, input.name(), null, null));
+                case DATA_EXTRACT -> sources.add(new DataTransformService.SourceRequest("CONNECTION",
+                        Objects.toString(config.get("connectionId"), ""), alias, input.name(),
+                        Objects.toString(config.get("sql"), ""), null));
+                default -> { }
+            }
+        }
+        var config = new LinkedHashMap<>(transform.config());
+        var requirements = Objects.toString(config.get("requirements"), "整理并关联输入数据");
+        var generated = transforms.generate(projectId, new DataTransformService.GenerateRequest(requirements, sources));
+        config.put("transformPlan", generated.get("plan"));
+        config.put("script", Objects.toString(generated.get("script"), ""));
+        config.put("scriptSummary", Objects.toString(generated.get("summary"), "已生成可复核加工方案"));
+        config.put("scriptMode", "GENERATED");
+        config.put("inputAliases", aliases);
+        config.putIfAbsent("outputFormat", "parquet");
+        config.putIfAbsent("outputName", "数据加工结果.parquet");
+        config.put("transparent", true);
+        if (generated.get("assumptions") != null) config.put("assumptions", generated.get("assumptions"));
+        if (generated.get("quality_rules") != null) config.put("qualityRules", generated.get("quality_rules"));
+        if (generated.get("warnings") != null) config.put("warnings", generated.get("warnings"));
+        return new NodeDefinition(transform.id(), transform.type(), transform.name(), transform.x(), transform.y(), Map.copyOf(config));
     }
 
     private String addWorkflowNode(PlanStep step, Map<String, Object> effects) {
@@ -721,6 +985,9 @@ public class AssistantWorkspaceToolGateway {
 
     private String exportDeliverable(PlanStep step, Map<String, Object> effects) {
         var item = deliverables.get(required(step, "deliverable_id", "交付件"));
+        var requested = argument(step, "format", item.format());
+        if (!requested.equalsIgnoreCase(item.format()))
+            throw new IllegalArgumentException("导出只下载现有格式 " + item.format() + "，不能转换为 " + requested + "；请用document.render生成目标格式");
         deliverables.path(item.id(), null);
         var export = Map.of("deliverableId", item.id(), "format", item.format(),
                 "downloadUrl", "/api/deliverables/" + item.id() + "/download");
@@ -747,7 +1014,10 @@ public class AssistantWorkspaceToolGateway {
         if (!id.isBlank()) return workflows.get(id).id();
         var name = argument(step, "workflow_name", "");
         return workflows.list(projectId).stream().filter(item -> name.isBlank() || item.name().contains(name)).findFirst()
-                .orElseGet(() -> workflows.getProjectWorkflow(projectId)).id();
+                .orElseThrow(() -> new IllegalArgumentException(name.isBlank()
+                        ? "项目还没有工作流"
+                        : "没有找到名称包含“" + name + "”的工作流"))
+                .id();
     }
 
     private Resource resource(String projectId, String id) {
@@ -961,6 +1231,7 @@ public class AssistantWorkspaceToolGateway {
     private String mediaType(String name) {
         var lower = name.toLowerCase(Locale.ROOT);
         if (lower.endsWith(".csv")) return "text/csv";
+        if (lower.endsWith(".parquet")) return "application/vnd.apache.parquet";
         if (lower.endsWith(".json")) return "application/json";
         if (lower.endsWith(".html")) return "text/html";
         if (lower.endsWith(".md")) return "text/markdown";
@@ -968,9 +1239,7 @@ public class AssistantWorkspaceToolGateway {
     }
 
     private String fileResourceType(String name) {
-        var lower = name.toLowerCase(Locale.ROOT);
-        return lower.endsWith(".csv") || lower.endsWith(".tsv") || lower.endsWith(".json")
-                || lower.endsWith(".xlsx") || lower.endsWith(".xls") ? "DATA_FILE" : "KNOWLEDGE_FILE";
+        return WorkspaceFileClassifier.resourceType(name, mediaType(name));
     }
 
     private byte[] writeBytes(Object value) {

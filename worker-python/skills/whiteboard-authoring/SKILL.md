@@ -29,7 +29,7 @@ Repair overlap or broken bindings through relayout. Keep stable semantic ids dur
 Follow the active Auto or Approval mode. Layout preview is read-only; creating, replacing, or exporting the whiteboard follows tool policy.
 
 ## Output Contract
-Return Excalidraw JSON, region and element counts, binding status, canvas bounds, overlap findings, render status, and quality score.
+Return Excalidraw JSON, region and element counts, binding status, canvas bounds, overlap findings, render status.
 
 ## Example Tasks
 - Turn this workshop transcript into an editable opportunity map.

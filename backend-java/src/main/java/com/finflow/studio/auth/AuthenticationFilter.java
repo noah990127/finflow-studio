@@ -31,7 +31,7 @@ public class AuthenticationFilter extends OncePerRequestFilter {
         var uri = request.getRequestURI();
         return !enabled || !uri.startsWith("/api/") || "OPTIONS".equals(request.getMethod()) || uri.startsWith("/actuator/")
                 || uri.startsWith("/internal/") || uri.equals("/api/auth/login")
-                || uri.equals("/api/auth/logout") || isOfficeCallback(uri);
+                || uri.equals("/api/auth/logout") || isOfficeCallback(uri) || isOfficeContent(uri);
     }
 
     @Override
@@ -58,6 +58,10 @@ public class AuthenticationFilter extends OncePerRequestFilter {
 
     private boolean isOfficeCallback(String uri) {
         return uri.matches("/api/office/(files|deliverables)/[^/]+/callback");
+    }
+
+    private boolean isOfficeContent(String uri) {
+        return uri.matches("/api/office/(files|deliverables)/[^/]+/content");
     }
 
     private void unauthorized(HttpServletResponse response) throws IOException {

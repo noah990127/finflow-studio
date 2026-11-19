@@ -5,9 +5,9 @@ description: Use to create, edit, connect, run, version, or explain deterministi
 # Workflow Authoring
 
 ## Load When
-Use this skill when the user asks to create, edit, add nodes, remove nodes, connect, run, save a version, schedule, or reuse a workflow.
+Use this skill when the user asks to create, edit, add nodes, remove nodes, connect, run, save a version, schedule, or reuse a workflow. Also load it for research, analysis, data processing, and deliverable tasks because FinFlow performs those tasks through visible, reusable workflows.
 
-Do not load it when the user only wants a one-off answer and has not asked to save or automate the process.
+Do not load it only when the user wants a conversational answer that does not analyze project materials, transform data, or create an artifact.
 
 ## Input Context
 Identify project id, existing workflow id/name, goal, inputs, desired nodes, outputs, execution mode, schedule, version expectations, and selected resources.
@@ -15,9 +15,28 @@ Identify project id, existing workflow id/name, goal, inputs, desired nodes, out
 ## Tool Strategy
 Use:
 
-`search_tools -> describe_tool -> workflow.create/open/edit/add_node/remove_node/connect/run/save_version`.
+`search_tools -> describe_tool -> workflow.open/prepare/edit/add_node/remove_node/connect/run/save_version`.
 
 Workflow is a tool the Agent can call, not the Agent runtime. Use workflows to make a proven process repeatable.
+
+Before creating anything, inspect the project's READY workflows. Reuse one only when its actual inputs,
+processing objective, and output formats cover the current goal. Otherwise call `workflow.prepare` with
+the complete goal, requested output formats, and a model-authored `workflow_spec`, then run the returned workflow ID. Never bypass this
+sequence with `deliverable.create`; output artifacts are created by deliverable nodes during `workflow.run`.
+
+`workflow_spec` is the dynamic business plan, not a fixed template. Use version `1.0` and provide a short
+name, description, and 3-8 single-purpose nodes (maximum 12). Every node must include a unique `key`,
+supported `type`, business-readable `name`, `purpose`, complete `config`, and `depends_on`. Use `$inputs`
+only when the node should consume the current project's available inputs. Represent independent research
+or analysis as parallel nodes and converge them explicitly before a deliverable. Do not add a node merely
+to make the canvas look more complete.
+
+For `REF_SEARCH`, write a focused query rather than copying the full user message. For `AI_ANALYSIS`,
+include dimensions, evidence rules, uncertainty handling, and output structure in `config.prompt`.
+For `DATA_TRANSFORM`, describe the business transformation and output name; use it only with structured
+inputs. For `DELIVERABLE`, specify generation requirements, format, citation settings, and the selected
+PPT skill when applicable. The Java gateway validates the graph, compiles dependencies, lays out the
+canvas, and rejects invalid or cyclic plans.
 
 For a known graph, use one structured `workflow.edit` patch to upsert nodes and connect them together.
 Supply stable IDs for new nodes; reuse returned IDs for existing nodes. `nodes` merges by ID,
@@ -29,12 +48,13 @@ Use the workflow and version returned by a mutation to check the result without 
 If `changed` is false, do not repeat the same edit. Correct invalid parameters or explain the blocker.
 
 ## Steps And Checkpoints
-1. Inspect the project and current workflow.
-2. Map real inputs before creating processing nodes.
-3. Keep each node single-purpose and visibly connected.
-4. Insert confirmation or review points before risky writes.
-5. Save a version after meaningful changes.
-6. Run only when inputs and parameters are sufficiently clear.
+1. Inspect the project and list candidate READY workflows.
+2. Open likely candidates and compare actual inputs, objective, and outputs with the current goal.
+3. Reuse a matching workflow; otherwise prepare a new complete workflow from real project inputs.
+4. Keep each node single-purpose and visibly connected.
+5. Add a content-review node only when it improves the stated business result; do not model organizational approval inside Studio.
+6. Save a version after meaningful changes.
+7. Run only when inputs and parameters are sufficiently clear, then verify node results and artifacts.
 
 ## Citation And Provenance
 Workflow run outputs must preserve upstream resource, dataset, tool, node, run id, and artifact provenance.
@@ -59,7 +79,7 @@ The Java gateway enforces permissions and the session's AUTO or approval mode. H
 response; do not invent a second confirmation requirement in AUTO mode or bypass a required approval.
 
 ## Output Contract
-Return workflow id, changed nodes, connection summary, version/run id, pending confirmations, and provenance impact.
+Return workflow id, whether it was reused or created, changed nodes, connection summary, version/run id, generated artifacts, pending confirmations, and provenance impact.
 
 ## Example Tasks
 - Build a monthly operating analysis workflow.

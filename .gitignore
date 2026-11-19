@@ -34,9 +34,13 @@ docs/*
 *.pid
 .run/
 scripts/__pycache__/
+examples/**/__pycache__/
+examples/**/*.pyc
 
 **/.env
 !.env.example
 
 .env
 .finflow-test-accounts
+.local-runtime/
+artifacts/

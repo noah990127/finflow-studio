@@ -19,6 +19,12 @@ import java.util.regex.Pattern;
 public class AssistantPlanner {
     private final WorkerClient worker;
     private final AssistantModelSettings models;
+    @org.springframework.beans.factory.annotation.Value("${finflow.agent.total-timeout-seconds:1800}")
+    private int continuousTimeoutSeconds = 1800;
+    @org.springframework.beans.factory.annotation.Value("${finflow.agent.idle-timeout-seconds:180}")
+    private int continuousIdleSeconds = 180;
+    @org.springframework.beans.factory.annotation.Value("${finflow.agent.tool-timeout-seconds:600}")
+    private int continuousToolSeconds = 600;
 
     public AssistantPlanner(WorkerClient worker) { this(worker, null); }
 
@@ -216,7 +222,7 @@ public class AssistantPlanner {
                 "type", selection.type(), "resource_id", selection.resourceId(), "range", selection.range()));
         request.put("resources", context.resources());
         request.put("recent_messages", context.recentMessages());
-        request.put("capabilities", AssistantCapabilityRegistry.catalog());
+        request.put("capabilities", AssistantCapabilityRegistry.agentCatalog());
         request.put("continuation", continuation);
         request.put("observation", observation == null ? Map.of() : observation);
         request.put("completed_actions", completedActions);
@@ -238,8 +244,26 @@ public class AssistantPlanner {
         request.put("gateway_token", gatewayToken);
         request.put("resume", resume);
         request.put("approval_count", approvalCount);
+        var budget = continuousBudget(goal);
+        request.put("max_tool_calls", budget.maxToolCalls());
+        request.put("timeout_seconds", continuousTimeoutSeconds);
+        request.put("idle_timeout_seconds", continuousIdleSeconds);
+        request.put("tool_timeout_seconds", continuousToolSeconds);
         return request;
     }
+
+    private AgentBudget continuousBudget(String goal) {
+        var text = Objects.toString(goal, "").toLowerCase(Locale.ROOT);
+        if (containsAny(text, "调研", "研究", "联网", "搜索", "ppt", "html", "报告", "成果"))
+            return new AgentBudget(24);
+        if (containsAny(text, "工作流", "数据加工", "扩维", "合并", "转换", "分析"))
+            return new AgentBudget(18);
+        if (containsAny(text, "新建项目", "创建项目", "打开项目", "重命名", "删除", "查看", "列出", "有哪些"))
+            return new AgentBudget(8);
+        return new AgentBudget(12);
+    }
+
+    private record AgentBudget(int maxToolCalls) { }
 
     private ArrayList<PlanStep> parseAgentSteps(Map<String, Object> response, String goal, String page,
                                                  WorkspaceContext context) {
@@ -299,7 +323,8 @@ public class AssistantPlanner {
         if ("project.create_workspace".equals(tool)) {
             var rawName = Objects.toString(arguments.get("project_name"), Objects.toString(arguments.get("topic"), "新的工作"));
             var topic = inferProjectTopic(rawName);
-            arguments.put("project_name", projectName(topic));
+            if (Objects.toString(arguments.get("project_name"), "").isBlank())
+                arguments.put("project_name", projectName(topic));
             arguments.putIfAbsent("topic", topic);
         }
     }

@@ -28,7 +28,7 @@ Repair the identified page or block only. If tagged PDF support is unavailable, 
 Follow the active Auto or Approval mode. Publishing or exporting the final PDF uses the configured write/export confirmation policy; preflight does not require confirmation.
 
 ## Output Contract
-Return the PDF, page count, searchable-text status, bookmark/accessibility status, citation coverage, visual preflight result, and quality score.
+Return the PDF, page count, searchable-text status, bookmark/accessibility status, citation coverage, visual preflight result.
 
 ## Example Tasks
 - Publish this research report as a searchable PDF.

@@ -7,32 +7,42 @@ export const useProjectsStore = defineStore('projects', {
     current: null as Project | null,
     loading: false,
     error: '',
+    loadSequence: 0,
   }),
   actions: {
     async initialize() {
+      const sequence = ++this.loadSequence
       this.loading = true
       this.error = ''
       try {
-        this.projects = await api.listProjects()
+        const projects = await api.listProjects()
+        if (sequence !== this.loadSequence) return
+        this.projects = projects
         this.current = this.projects[0] ?? null
       } catch (error) {
+        if (sequence !== this.loadSequence) return
         this.error = error instanceof Error ? error.message : '暂时无法打开工作空间'
       } finally {
-        this.loading = false
+        if (sequence === this.loadSequence) this.loading = false
       }
     },
     reset() {
+      this.loadSequence += 1
       this.projects = []
       this.current = null
       this.loading = false
       this.error = ''
     },
     async refresh(selectId?: string) {
-      this.projects = await api.listProjects()
-      const target = selectId ? this.projects.find(item => item.id === selectId) : this.projects.find(item => item.id === this.current?.id)
-      this.current = target ?? this.projects[0] ?? null
+      const sequence = ++this.loadSequence
+      const projects = await api.listProjects()
+      if (sequence !== this.loadSequence) return
+      const target = selectId ? projects.find(item => item.id === selectId) : projects.find(item => item.id === this.current?.id)
+      this.projects = projects
+      this.current = target ?? projects[0] ?? null
     },
     select(project: Project) {
+      this.loadSequence += 1
       this.current = project
     },
     async create(name: string, description = '') {

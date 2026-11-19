@@ -1,0 +1,2593 @@
+{
+  "centered_title_metadata_6418": {
+    "id": "centered_title_metadata_6418",
+    "description": "A centered title and subtitle layout with soft corner accents and small metadata blocks anchored along the bottom edge.",
+    "components": [
+      {
+        "id": "background_accents",
+        "description": "Decorative image accents positioned beyond the slide edges to create subtle washed corner gradients.",
+        "position": {
+          "x": 0,
+          "y": 0
+        },
+        "elements": [
+          {
+            "type": "image",
+            "position": {
+              "x": -162.44,
+              "y": 354.59
+            },
+            "size": {
+              "width": 1017.57,
+              "height": 997.22
+            },
+            "data": "static/image1-7f30c6c93dd1.png",
+            "fit": "fill",
+            "clip_path": "path('M 0 0 L 1017.57 0 L 1017.57 997.22 L 0 997.22 L 0 0 Z')",
+            "decorative": true,
+            "name": "decorative_corner_accent",
+            "is_icon": false
+          },
+          {
+            "type": "image",
+            "position": {
+              "x": -217.91,
+              "y": 311.37
+            },
+            "size": {
+              "width": 1017.57,
+              "height": 997.22
+            },
+            "data": "static/image2-f9ab39ea57ed.png",
+            "fit": "fill",
+            "clip_path": "path('M 0 0 L 1017.57 0 L 1017.57 997.22 L 0 997.22 L 0 0 Z')",
+            "decorative": true,
+            "name": "decorative_corner_overlay",
+            "is_icon": false
+          },
+          {
+            "type": "image",
+            "position": {
+              "x": 638.13,
+              "y": -796.38
+            },
+            "size": {
+              "width": 1017.57,
+              "height": 997.22
+            },
+            "data": "static/image1-7f30c6c93dd1.png",
+            "fit": "fill",
+            "clip_path": "path('M 0 0 L 1017.57 0 L 1017.57 997.22 L 0 997.22 L 0 0 Z')",
+            "decorative": true,
+            "name": "decorative_upper_accent",
+            "is_icon": false
+          },
+          {
+            "type": "image",
+            "position": {
+              "x": 582.65,
+              "y": -839.6
+            },
+            "size": {
+              "width": 1017.57,
+              "height": 997.22
+            },
+            "data": "static/image2-f9ab39ea57ed.png",
+            "fit": "fill",
+            "clip_path": "path('M 0 0 L 1017.57 0 L 1017.57 997.22 L 0 997.22 L 0 0 Z')",
+            "decorative": true,
+            "name": "decorative_upper_overlay",
+            "is_icon": false
+          }
+        ]
+      },
+      {
+        "id": "center_title_block",
+        "description": "Primary headline and supporting line centered in the upper middle with strong typographic hierarchy.",
+        "position": {
+          "x": 0,
+          "y": 217.42
+        },
+        "elements": [
+          {
+            "type": "text",
+            "position": {
+              "x": 0,
+              "y": 0
+            },
+            "size": {
+              "width": 1280,
+              "height": 219.33
+            },
+            "font": {
+              "size": 106.67,
+              "family": "Anton",
+              "color": "#000000",
+              "bold": true,
+              "line_height": 1
+            },
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "top"
+            },
+            "runs": [
+              {
+                "text": "SMART TASK \nMANAGEMENT PLATFORM",
+                "font": {
+                  "size": 106.67,
+                  "family": "Anton",
+                  "color": "#000000",
+                  "bold": true,
+                  "line_height": 1
+                }
+              }
+            ],
+            "decorative": false,
+            "name": "main_headline",
+            "max_length": 46,
+            "min_length": 4
+          },
+          {
+            "type": "text",
+            "position": {
+              "x": 284.13,
+              "y": 227.69
+            },
+            "size": {
+              "width": 711.74,
+              "height": 72.77
+            },
+            "rotation": 0,
+            "font": {
+              "size": 24,
+              "family": "Montserrat Semi-Bold",
+              "color": "#000000",
+              "bold": true,
+              "line_height": 1.4,
+              "letter_spacing": 0.14
+            },
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "top"
+            },
+            "runs": [
+              {
+                "text": "Organize Work. Improve Collaboration. Achieve More.",
+                "font": {
+                  "size": 24,
+                  "family": "Montserrat Semi-Bold",
+                  "color": "#000000",
+                  "bold": true,
+                  "line_height": 1.4,
+                  "letter_spacing": 0.14
+                }
+              }
+            ],
+            "decorative": false,
+            "name": "supporting_tagline",
+            "max_length": 109,
+            "min_length": 26
+          }
+        ]
+      },
+      {
+        "id": "bottom_presenter_block",
+        "description": "Small presenter label and emphasized name aligned near the lower left margin.",
+        "position": {
+          "x": 59.79,
+          "y": 629.51
+        },
+        "elements": [
+          {
+            "type": "text",
+            "position": {
+              "x": 0,
+              "y": 0
+            },
+            "size": {
+              "width": 227.68,
+              "height": 18.49
+            },
+            "rotation": 0,
+            "font": {
+              "size": 14.22,
+              "family": "Montserrat",
+              "color": "#000000",
+              "line_height": 1.4,
+              "letter_spacing": 0.36
+            },
+            "alignment": {
+              "horizontal": "left",
+              "vertical": "top"
+            },
+            "runs": [
+              {
+                "text": "Presented by",
+                "font": {
+                  "size": 14.22,
+                  "family": "Montserrat",
+                  "color": "#000000",
+                  "line_height": 1.4,
+                  "letter_spacing": 0.36
+                }
+              }
+            ],
+            "decorative": false,
+            "name": "presenter_label",
+            "max_length": 30,
+            "min_length": 6
+          },
+          {
+            "type": "text",
+            "position": {
+              "x": 0,
+              "y": 20.7
+            },
+            "size": {
+              "width": 103.77,
+              "height": 23.78
+            },
+            "font": {
+              "size": 17.78,
+              "family": "Montserrat Bold",
+              "color": "#000000",
+              "bold": true,
+              "line_height": 1.4,
+              "letter_spacing": 0.11
+            },
+            "alignment": {
+              "horizontal": "left",
+              "vertical": "top"
+            },
+            "runs": [
+              {
+                "text": "Your Name",
+                "font": {
+                  "size": 17.78,
+                  "family": "Montserrat Bold",
+                  "color": "#000000",
+                  "bold": true,
+                  "line_height": 1.4,
+                  "letter_spacing": 0.11
+                }
+              }
+            ],
+            "decorative": false,
+            "name": "presenter_name",
+            "max_length": 30,
+            "min_length": 5
+          }
+        ]
+      },
+      {
+        "id": "bottom_date_block",
+        "description": "Compact date label and emphasized value aligned near the lower right margin.",
+        "position": {
+          "x": 1058.14,
+          "y": 630.33
+        },
+        "elements": [
+          {
+            "type": "text",
+            "position": {
+              "x": 105.39,
+              "y": 0
+            },
+            "size": {
+              "width": 34.58,
+              "height": 16.84
+            },
+            "font": {
+              "size": 12.44,
+              "family": "Montserrat",
+              "color": "#000000",
+              "line_height": 1.4,
+              "letter_spacing": 0.31
+            },
+            "alignment": {
+              "horizontal": "right",
+              "vertical": "top"
+            },
+            "runs": [
+              {
+                "text": "Date",
+                "font": {
+                  "size": 12.44,
+                  "family": "Montserrat",
+                  "color": "#000000",
+                  "line_height": 1.4,
+                  "letter_spacing": 0.31
+                }
+              }
+            ],
+            "decorative": false,
+            "name": "date_label",
+            "max_length": 4,
+            "min_length": 2
+          },
+          {
+            "type": "text",
+            "position": {
+              "x": 0,
+              "y": 22.86
+            },
+            "size": {
+              "width": 139.97,
+              "height": 18.49
+            },
+            "font": {
+              "size": 14.22,
+              "family": "Montserrat Bold",
+              "color": "#000000",
+              "bold": true,
+              "line_height": 1.4,
+              "letter_spacing": 0.08
+            },
+            "alignment": {
+              "horizontal": "right",
+              "vertical": "top"
+            },
+            "runs": [
+              {
+                "text": "22 December 2030",
+                "font": {
+                  "size": 14.22,
+                  "family": "Montserrat Bold",
+                  "color": "#000000",
+                  "bold": true,
+                  "line_height": 1.4,
+                  "letter_spacing": 0.08
+                }
+              }
+            ],
+            "decorative": false,
+            "name": "date_value",
+            "max_length": 16,
+            "min_length": 8
+          }
+        ]
+      }
+    ]
+  },
+  "large_title_list_footer_2424": {
+    "id": "large_title_list_footer_2424",
+    "description": "A clean layout with a large upper-left heading, stacked text items beneath it, decorative background glow, and compact pagination footer.",
+    "components": [
+      {
+        "id": "decorative_background",
+        "description": "Fixed full-slide decorative image overlays create a soft glow while preserving wide open space for foreground content.",
+        "position": {
+          "x": 0,
+          "y": 0
+        },
+        "elements": [
+          {
+            "type": "image",
+            "position": {
+              "x": 482.24,
+              "y": 374.34
+            },
+            "size": {
+              "width": 1017.57,
+              "height": 997.22
+            },
+            "data": "static/image1-7f30c6c93dd1.png",
+            "fit": "fill",
+            "clip_path": "path('M 0 0 L 1017.57 0 L 1017.57 997.22 L 0 997.22 L 0 0 Z')",
+            "decorative": true,
+            "name": "background_glow_layer",
+            "is_icon": false
+          },
+          {
+            "type": "image",
+            "position": {
+              "x": 426.76,
+              "y": 331.12
+            },
+            "size": {
+              "width": 1017.57,
+              "height": 997.22
+            },
+            "data": "static/image2-f9ab39ea57ed.png",
+            "fit": "fill",
+            "clip_path": "path('M 0 0 L 1017.57 0 L 1017.57 997.22 L 0 997.22 L 0 0 Z')",
+            "decorative": true,
+            "name": "background_light_layer",
+            "is_icon": false
+          },
+          {
+            "type": "image",
+            "position": {
+              "x": -407.01,
+              "y": -802.33
+            },
+            "size": {
+              "width": 1017.57,
+              "height": 997.22
+            },
+            "data": "static/image1-7f30c6c93dd1.png",
+            "fit": "fill",
+            "clip_path": "path('M 0 0 L 1017.57 0 L 1017.57 997.22 L 0 997.22 L 0 0 Z')",
+            "decorative": true,
+            "name": "background_top_glow_layer",
+            "is_icon": false
+          },
+          {
+            "type": "image",
+            "position": {
+              "x": -462.49,
+              "y": -845.56
+            },
+            "size": {
+              "width": 1017.57,
+              "height": 997.22
+            },
+            "data": "static/image2-f9ab39ea57ed.png",
+            "fit": "fill",
+            "clip_path": "path('M 0 0 L 1017.57 0 L 1017.57 997.22 L 0 997.22 L 0 0 Z')",
+            "decorative": true,
+            "name": "background_top_light_layer",
+            "is_icon": false
+          }
+        ]
+      },
+      {
+        "id": "header_title",
+        "description": "A prominent oversized title block anchored in the upper-left corner with enough width to prevent wrapping.",
+        "position": {
+          "x": 53.33,
+          "y": 32
+        },
+        "elements": [
+          {
+            "type": "text",
+            "position": {
+              "x": 0,
+              "y": 0
+            },
+            "size": {
+              "width": 1146.37,
+              "height": 131.78
+            },
+            "rotation": 0,
+            "font": {
+              "size": 97.78,
+              "family": "Anton",
+              "color": "#000000",
+              "line_height": 1.4
+            },
+            "alignment": {
+              "horizontal": "left",
+              "vertical": "top"
+            },
+            "runs": [
+              {
+                "text": "AGENDA",
+                "font": {
+                  "size": 97.78,
+                  "family": "Anton",
+                  "color": "#000000",
+                  "line_height": 1.4
+                }
+              }
+            ],
+            "decorative": false,
+            "name": "section_title",
+            "max_length": 26,
+            "min_length": 3
+          }
+        ]
+      },
+      {
+        "id": "stacked_text_items",
+        "description": "A vertical stack of text rows positioned under the heading with consistent spacing and bold leading labels.",
+        "position": {
+          "x": 53.33,
+          "y": 187.38
+        },
+        "elements": [
+          {
+            "type": "flex",
+            "position": {
+              "x": 0,
+              "y": 0
+            },
+            "size": {
+              "width": 1084.9,
+              "height": 387.23
+            },
+            "rotation": 0,
+            "direction": "column",
+            "wrap": false,
+            "align_items": "flex-start",
+            "justify_content": "flex-start",
+            "gap": 18.13,
+            "children": [
+              {
+                "type": "text",
+                "size": {
+                  "width": 1080.36,
+                  "height": 32.54
+                },
+                "font": {
+                  "size": 21.33,
+                  "family": "Montserrat Bold",
+                  "color": "#000000",
+                  "bold": true,
+                  "line_height": 1.87,
+                  "letter_spacing": 0.12
+                },
+                "alignment": {
+                  "horizontal": "left",
+                  "vertical": "top"
+                },
+                "runs": [
+                  {
+                    "text": "01.",
+                    "font": {
+                      "size": 21.33,
+                      "family": "Montserrat Bold",
+                      "color": "#000000",
+                      "bold": true,
+                      "line_height": 1.87,
+                      "letter_spacing": 0.12
+                    }
+                  },
+                  {
+                    "text": "Introduction",
+                    "font": {
+                      "size": 21.33,
+                      "family": "Montserrat Medium",
+                      "color": "#000000",
+                      "bold": true,
+                      "line_height": 1.87,
+                      "letter_spacing": 0.12
+                    }
+                  }
+                ],
+                "decorative": false,
+                "name": "list_item",
+                "max_length": 70,
+                "min_length": 5,
+                "__presenton_manual_position": true,
+                "position": {
+                  "x": 0,
+                  "y": 0
+                },
+                "rotation": 0
+              }
+            ],
+            "name": "vertical_text_stack",
+            "max_children": 10,
+            "min_children": 1
+          }
+        ]
+      },
+      {
+        "id": "footer_pagination",
+        "description": "A compact page indicator placed in the lower-right corner with label and value aligned on one row.",
+        "position": {
+          "x": 1140.13,
+          "y": 655.37
+        },
+        "elements": [
+          {
+            "type": "flex",
+            "position": {
+              "x": 0,
+              "y": 0
+            },
+            "size": {
+              "width": 86.55,
+              "height": 18
+            },
+            "direction": "row",
+            "wrap": false,
+            "align_items": "flex-start",
+            "justify_content": "flex-start",
+            "gap": 0,
+            "children": [
+              {
+                "type": "text",
+                "size": {
+                  "width": 61.15,
+                  "height": 17.99
+                },
+                "font": {
+                  "size": 14.22,
+                  "family": "Montserrat Bold",
+                  "color": "#000000",
+                  "bold": true,
+                  "line_height": 1.4,
+                  "letter_spacing": 0.08
+                },
+                "alignment": {
+                  "horizontal": "right",
+                  "vertical": "top"
+                },
+                "runs": [
+                  {
+                    "text": "Page",
+                    "font": {
+                      "size": 14.22,
+                      "family": "Montserrat Bold",
+                      "color": "#000000",
+                      "bold": true,
+                      "line_height": 1.4,
+                      "letter_spacing": 0.08
+                    }
+                  }
+                ],
+                "decorative": true,
+                "name": "footer_label",
+                "max_length": 8,
+                "min_length": 2
+              },
+              {
+                "type": "text",
+                "size": {
+                  "width": 31.53,
+                  "height": 17.99
+                },
+                "font": {
+                  "size": 14.22,
+                  "family": "Montserrat",
+                  "color": "#000000",
+                  "line_height": 1.4,
+                  "letter_spacing": 0.08
+                },
+                "alignment": {
+                  "horizontal": "right",
+                  "vertical": "top"
+                },
+                "runs": [
+                  {
+                    "text": "02",
+                    "font": {
+                      "size": 14.22,
+                      "family": "Montserrat",
+                      "color": "#000000",
+                      "line_height": 1.4,
+                      "letter_spacing": 0.08
+                    }
+                  }
+                ],
+                "decorative": false,
+                "name": "footer_page_value",
+                "max_length": 2,
+                "min_length": 1
+              }
+            ],
+            "name": "footer_pagination_row",
+            "max_children": 3,
+            "min_children": 2
+          }
+        ]
+      }
+    ]
+  },
+  "title_with_stacked_cards_2967": {
+    "id": "title_with_stacked_cards_2967",
+    "description": "A split slide layout with a large text introduction on the left and stacked rounded information cards on the right.",
+    "components": [
+      {
+        "id": "soft_background_accent",
+        "description": "Decorative translucent background artwork creating subtle movement along the left side of the slide.",
+        "position": {
+          "x": -731.89,
+          "y": -247.71
+        },
+        "elements": [
+          {
+            "type": "container",
+            "position": {
+              "x": 0,
+              "y": 0
+            },
+            "size": {
+              "width": 1073.05,
+              "height": 1040.44
+            },
+            "rotation": 90,
+            "child": {
+              "type": "group",
+              "position": {
+                "x": 0,
+                "y": 0
+              },
+              "size": {
+                "width": 1073.05,
+                "height": 1040.44
+              },
+              "children": [
+                {
+                  "type": "image",
+                  "position": {
+                    "x": 55.48,
+                    "y": 43.22
+                  },
+                  "size": {
+                    "width": 1017.57,
+                    "height": 997.22
+                  },
+                  "opacity": 0.36,
+                  "data": "static/image1-7f30c6c93dd1.png",
+                  "fit": "fill",
+                  "clip_path": "path('M 0 0 L 1017.57 0 L 1017.57 997.22 L 0 997.22 L 0 0 Z')",
+                  "decorative": true,
+                  "name": "background_texture_layer",
+                  "is_icon": false
+                },
+                {
+                  "type": "image",
+                  "position": {
+                    "x": 0,
+                    "y": 0
+                  },
+                  "size": {
+                    "width": 1017.57,
+                    "height": 997.22
+                  },
+                  "opacity": 0.36,
+                  "data": "static/image2-f9ab39ea57ed.png",
+                  "fit": "fill",
+                  "clip_path": "path('M 0 0 L 1017.57 0 L 1017.57 997.22 L 0 997.22 L 0 0 Z')",
+                  "decorative": true,
+                  "name": "background_wash_layer",
+                  "is_icon": false
+                }
+              ],
+              "name": "background_artwork_group"
+            }
+          }
+        ]
+      },
+      {
+        "id": "left_intro_text_part_1",
+        "description": "Ungrouped component element",
+        "position": {
+          "x": 53.33,
+          "y": 52.67
+        },
+        "elements": [
+          {
+            "type": "text",
+            "position": {
+              "x": 0,
+              "y": 0
+            },
+            "size": {
+              "width": 583.26,
+              "height": 8
+            },
+            "rotation": 0,
+            "font": {
+              "size": 55.99,
+              "family": "Anton",
+              "color": "#000000",
+              "bold": true,
+              "line_height": 1.05,
+              "letter_spacing": -0.55
+            },
+            "alignment": {
+              "horizontal": "left",
+              "vertical": "top"
+            },
+            "runs": [
+              {
+                "text": "Our Solution Smart Task Management Platform",
+                "font": {
+                  "size": 55.99,
+                  "family": "Anton",
+                  "color": "#000000",
+                  "bold": true,
+                  "italic": false,
+                  "underline": false,
+                  "line_height": 1.05,
+                  "letter_spacing": -0.55,
+                  "opacity": 1
+                }
+              }
+            ],
+            "decorative": false,
+            "name": "intro_headline",
+            "max_length": 45,
+            "min_length": 22
+          }
+        ]
+      },
+      {
+        "id": "left_intro_text_part_2",
+        "description": "Ungrouped component element",
+        "position": {
+          "x": 53.33,
+          "y": 199.39999999999998
+        },
+        "elements": [
+          {
+            "type": "text",
+            "position": {
+              "x": 0,
+              "y": 0
+            },
+            "size": {
+              "width": 535.26,
+              "height": 429.51
+            },
+            "rotation": 0,
+            "font": {
+              "size": 17.78,
+              "family": "Montserrat Medium",
+              "color": "#000000",
+              "bold": true,
+              "line_height": 1.4,
+              "letter_spacing": 0.11
+            },
+            "alignment": {
+              "horizontal": "left",
+              "vertical": "top"
+            },
+            "runs": [
+              {
+                "text": "The proposed platform provides an all-in-one digital solution where users can manage projects, tasks, deadlines, communication, and analytics from a single dashboard.",
+                "font": {
+                  "size": 17.78,
+                  "family": "Montserrat Medium",
+                  "color": "#000000",
+                  "bold": true,
+                  "line_height": 1.4,
+                  "letter_spacing": 0.11
+                }
+              }
+            ],
+            "decorative": false,
+            "name": "intro_description",
+            "max_length": 844,
+            "min_length": 83
+          }
+        ]
+      },
+      {
+        "id": "right_information_cards",
+        "description": "A vertical stack of rounded cards, each containing a small icon, heading, and short descriptive body text.",
+        "position": {
+          "x": 640,
+          "y": 47
+        },
+        "elements": [
+          {
+            "type": "flex",
+            "position": {
+              "x": 0,
+              "y": 0
+            },
+            "size": {
+              "width": 573.15,
+              "height": 600
+            },
+            "direction": "column",
+            "wrap": false,
+            "gap": 15,
+            "children": [
+              {
+                "type": "container",
+                "size": {
+                  "width": 573.15,
+                  "height": 183.2
+                },
+                "fill": {
+                  "color": "#F7F6FB",
+                  "opacity": 1
+                },
+                "border_radius": {
+                  "tl": 36,
+                  "tr": 36,
+                  "bl": 36,
+                  "br": 36
+                },
+                "child": {
+                  "type": "group",
+                  "position": {
+                    "x": 34,
+                    "y": 29
+                  },
+                  "size": {
+                    "width": 505.15,
+                    "height": 127
+                  },
+                  "children": [
+                    {
+                      "type": "image",
+                      "position": {
+                        "x": 0,
+                        "y": 0
+                      },
+                      "size": {
+                        "width": 22.79,
+                        "height": 23.58
+                      },
+                      "data": "/static/icons/placeholder.svg",
+                      "fit": "contain",
+                      "color": "#000000",
+                      "decorative": false,
+                      "name": "card_icon",
+                      "is_icon": true,
+                      "icon_type": "regular"
+                    },
+                    {
+                      "type": "text",
+                      "position": {
+                        "x": 0,
+                        "y": 46
+                      },
+                      "size": {
+                        "width": 461.81,
+                        "height": 30.27
+                      },
+                      "rotation": 0,
+                      "font": {
+                        "size": 21.33,
+                        "family": "Montserrat Semi-Bold",
+                        "color": "#000000",
+                        "bold": true,
+                        "line_height": 1.5,
+                        "letter_spacing": -0.08
+                      },
+                      "alignment": {
+                        "horizontal": "left",
+                        "vertical": "top"
+                      },
+                      "runs": [
+                        {
+                          "text": "Centralized Learning",
+                          "font": {
+                            "size": 21.33,
+                            "family": "Montserrat Semi-Bold",
+                            "color": "#000000",
+                            "bold": true,
+                            "line_height": 1.5,
+                            "letter_spacing": -0.08
+                          }
+                        }
+                      ],
+                      "decorative": false,
+                      "name": "card_heading",
+                      "max_length": 26,
+                      "min_length": 11
+                    },
+                    {
+                      "type": "text",
+                      "position": {
+                        "x": 0,
+                        "y": 87.5
+                      },
+                      "size": {
+                        "width": 505.92,
+                        "height": 106.23
+                      },
+                      "rotation": 0,
+                      "font": {
+                        "size": 12.44,
+                        "family": "Montserrat",
+                        "color": "#000000",
+                        "line_height": 1.5,
+                        "letter_spacing": 0.07
+                      },
+                      "alignment": {
+                        "horizontal": "left",
+                        "vertical": "top"
+                      },
+                      "runs": [
+                        {
+                          "text": "All tasks, projects, deadlines, and team activities are managed from one unified dashboard. This eliminates the need to switch between multiple applications",
+                          "font": {
+                            "size": 12.44,
+                            "family": "Montserrat",
+                            "color": "#000000",
+                            "line_height": 1.5,
+                            "letter_spacing": 0.07
+                          }
+                        }
+                      ],
+                      "decorative": false,
+                      "name": "card_body",
+                      "max_length": 225,
+                      "min_length": 78
+                    }
+                  ],
+                  "name": "card_content_group"
+                }
+              }
+            ],
+            "name": "cards_stack",
+            "max_children": 3,
+            "min_children": 1,
+            "justify_content": "center"
+          }
+        ]
+      },
+      {
+        "id": "footer_page_label",
+        "description": "Small footer label aligned to the bottom-right corner for slide navigation or pagination.",
+        "position": {
+          "x": 1126.61,
+          "y": 654.91
+        },
+        "elements": [
+          {
+            "type": "text",
+            "position": {
+              "x": 0,
+              "y": 0
+            },
+            "size": {
+              "width": 61.15,
+              "height": 17.99
+            },
+            "font": {
+              "size": 14.22,
+              "family": "Montserrat Bold",
+              "color": "#000000",
+              "bold": true,
+              "line_height": 1.4,
+              "letter_spacing": 0.08
+            },
+            "alignment": {
+              "horizontal": "right",
+              "vertical": "top"
+            },
+            "runs": [
+              {
+                "text": "Page",
+                "font": {
+                  "size": 14.22,
+                  "family": "Montserrat Bold",
+                  "color": "#000000",
+                  "bold": true,
+                  "line_height": 1.4,
+                  "letter_spacing": 0.08
+                }
+              }
+            ],
+            "decorative": true,
+            "name": "footer_label",
+            "max_length": 4,
+            "min_length": 2
+          },
+          {
+            "type": "text",
+            "position": {
+              "x": 55.01,
+              "y": 0
+            },
+            "size": {
+              "width": 31.53,
+              "height": 17.99
+            },
+            "font": {
+              "size": 14.22,
+              "family": "Montserrat",
+              "color": "#000000",
+              "line_height": 1.4,
+              "letter_spacing": 0.08
+            },
+            "alignment": {
+              "horizontal": "right",
+              "vertical": "top"
+            },
+            "runs": [
+              {
+                "text": "06",
+                "font": {
+                  "size": 14.22,
+                  "family": "Montserrat",
+                  "color": "#000000",
+                  "line_height": 1.4,
+                  "letter_spacing": 0.08
+                }
+              }
+            ],
+            "decorative": false,
+            "name": "footer_number",
+            "max_length": 2,
+            "min_length": 1
+          }
+        ]
+      }
+    ]
+  },
+  "title_timeline_sections_footer_6488": {
+    "id": "title_timeline_sections_footer_6488",
+    "description": "A centered title and subtitle sit above a horizontal timeline of milestone sections with decorative curve and footer pagination.",
+    "components": [
+      {
+        "id": "background_accents",
+        "description": "Subtle oversized decorative image accents sit beyond the slide edges to create a soft lower background texture.",
+        "position": {
+          "x": 0,
+          "y": 0
+        },
+        "elements": [
+          {
+            "type": "container",
+            "position": {
+              "x": -883.41,
+              "y": 370.64
+            },
+            "size": {
+              "width": 1073.05,
+              "height": 1040.44
+            },
+            "rotation": 90,
+            "child": {
+              "type": "group",
+              "position": {
+                "x": 0,
+                "y": 0
+              },
+              "size": {
+                "width": 1073.05,
+                "height": 1040.44
+              },
+              "children": [
+                {
+                  "type": "image",
+                  "position": {
+                    "x": 55.48,
+                    "y": 43.22
+                  },
+                  "size": {
+                    "width": 1017.57,
+                    "height": 997.22
+                  },
+                  "opacity": 0.36,
+                  "data": "static/image1-7f30c6c93dd1.png",
+                  "fit": "fill",
+                  "clip_path": "path('M 0 0 L 1017.57 0 L 1017.57 997.22 L 0 997.22 L 0 0 Z')",
+                  "decorative": true,
+                  "name": "background_accent_image",
+                  "is_icon": false
+                },
+                {
+                  "type": "image",
+                  "position": {
+                    "x": 0,
+                    "y": 0
+                  },
+                  "size": {
+                    "width": 1017.57,
+                    "height": 997.22
+                  },
+                  "opacity": 0.36,
+                  "data": "static/image2-f9ab39ea57ed.png",
+                  "fit": "fill",
+                  "clip_path": "path('M 0 0 L 1017.57 0 L 1017.57 997.22 L 0 997.22 L 0 0 Z')",
+                  "decorative": true,
+                  "name": "background_accent_image",
+                  "is_icon": false
+                }
+              ],
+              "name": "background_accent_group"
+            }
+          },
+          {
+            "type": "container",
+            "position": {
+              "x": 930.32,
+              "y": 564.14
+            },
+            "size": {
+              "width": 1073.05,
+              "height": 1040.44
+            },
+            "rotation": 90,
+            "child": {
+              "type": "group",
+              "position": {
+                "x": 0,
+                "y": 0
+              },
+              "size": {
+                "width": 1073.05,
+                "height": 1040.44
+              },
+              "children": [
+                {
+                  "type": "image",
+                  "position": {
+                    "x": 55.48,
+                    "y": 43.22
+                  },
+                  "size": {
+                    "width": 1017.57,
+                    "height": 997.22
+                  },
+                  "opacity": 0.36,
+                  "data": "static/image1-7f30c6c93dd1.png",
+                  "fit": "fill",
+                  "clip_path": "path('M 0 0 L 1017.57 0 L 1017.57 997.22 L 0 997.22 L 0 0 Z')",
+                  "decorative": true,
+                  "name": "background_accent_image",
+                  "is_icon": false
+                },
+                {
+                  "type": "image",
+                  "position": {
+                    "x": 0,
+                    "y": 0
+                  },
+                  "size": {
+                    "width": 1017.57,
+                    "height": 997.22
+                  },
+                  "opacity": 0.36,
+                  "data": "static/image2-f9ab39ea57ed.png",
+                  "fit": "fill",
+                  "clip_path": "path('M 0 0 L 1017.57 0 L 1017.57 997.22 L 0 997.22 L 0 0 Z')",
+                  "decorative": true,
+                  "name": "background_accent_image",
+                  "is_icon": false
+                }
+              ],
+              "name": "background_accent_group"
+            }
+          }
+        ]
+      },
+      {
+        "id": "header_area",
+        "description": "Centered headline and supporting subtitle span the upper slide area with strong typographic contrast.",
+        "position": {
+          "x": 53.33,
+          "y": 51.33
+        },
+        "elements": [
+          {
+            "type": "text",
+            "position": {
+              "x": 0,
+              "y": 0
+            },
+            "size": {
+              "width": 1173.35,
+              "height": 62
+            },
+            "rotation": 0,
+            "font": {
+              "size": 55.99,
+              "family": "Anton",
+              "color": "#000000",
+              "bold": true,
+              "line_height": 1.09,
+              "letter_spacing": -0.55
+            },
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "top"
+            },
+            "runs": [
+              {
+                "text": "Implementation ",
+                "font": {
+                  "size": 55.99,
+                  "family": "Anton",
+                  "color": "#000000",
+                  "bold": true,
+                  "italic": false,
+                  "underline": false,
+                  "line_height": 1.09,
+                  "letter_spacing": -0.55,
+                  "opacity": 1
+                }
+              },
+              {
+                "text": "Plan Manage Weekly",
+                "font": {
+                  "size": 55.99,
+                  "family": "Anton",
+                  "color": "5F4F9B",
+                  "bold": true,
+                  "italic": false,
+                  "underline": false,
+                  "line_height": 1.09,
+                  "letter_spacing": -0.55,
+                  "opacity": 1
+                }
+              },
+              {
+                "text": " Tasks",
+                "font": {
+                  "size": 55.99,
+                  "family": "Anton",
+                  "color": "#000000",
+                  "bold": true,
+                  "italic": false,
+                  "underline": false,
+                  "line_height": 1.09,
+                  "letter_spacing": -0.55,
+                  "opacity": 1
+                }
+              }
+            ],
+            "decorative": false,
+            "name": "main_headline",
+            "max_length": 93,
+            "min_length": 20
+          },
+          {
+            "type": "text",
+            "position": {
+              "x": 1.14,
+              "y": 138.49
+            },
+            "size": {
+              "width": 1173.35,
+              "height": 60.94
+            },
+            "rotation": 0,
+            "font": {
+              "size": 17.78,
+              "family": "Montserrat Medium",
+              "color": "#000000",
+              "bold": true,
+              "line_height": 1.4,
+              "letter_spacing": 0.11
+            },
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "top"
+            },
+            "runs": [
+              {
+                "text": "By reducing manual effort, improving communication, and enabling informed decision-making, the platform helps organizations deliver projects on time, optimize resources, and achieve sustainable business growth.",
+                "font": {
+                  "size": 17.78,
+                  "family": "Montserrat Medium",
+                  "color": "#000000",
+                  "bold": true,
+                  "line_height": 1.4,
+                  "letter_spacing": 0.11
+                }
+              }
+            ],
+            "decorative": false,
+            "name": "supporting_subtitle",
+            "max_length": 242,
+            "min_length": 105
+          }
+        ]
+      },
+      {
+        "id": "timeline_sections",
+        "description": "A row of milestone text blocks connects to a decorative curved timeline with vertical markers.",
+        "position": {
+          "x": 53.33,
+          "y": 283.12
+        },
+        "elements": [
+          {
+            "type": "flex",
+            "position": {
+              "x": 0,
+              "y": 0
+            },
+            "size": {
+              "width": 1173.36,
+              "height": 143
+            },
+            "direction": "row",
+            "wrap": false,
+            "align_items": "flex-start",
+            "justify_content": "flex-start",
+            "gap": 63.3,
+            "children": [
+              {
+                "type": "group",
+                "size": {
+                  "width": 167,
+                  "height": 143
+                },
+                "children": [
+                  {
+                    "type": "text",
+                    "position": {
+                      "x": 0,
+                      "y": 1.26
+                    },
+                    "size": {
+                      "width": 195.42,
+                      "height": 33.87
+                    },
+                    "rotation": 0,
+                    "font": {
+                      "size": 24.88,
+                      "family": "Montserrat Bold",
+                      "color": "#000000",
+                      "bold": true,
+                      "line_height": 1.5,
+                      "letter_spacing": 0.14
+                    },
+                    "alignment": {
+                      "horizontal": "center",
+                      "vertical": "top"
+                    },
+                    "runs": [
+                      {
+                        "text": "Planning",
+                        "font": {
+                          "size": 24.88,
+                          "family": "Montserrat Bold",
+                          "color": "#000000",
+                          "bold": true,
+                          "line_height": 1.5,
+                          "letter_spacing": 0.14
+                        }
+                      }
+                    ],
+                    "decorative": false,
+                    "name": "section_title",
+                    "max_length": 14,
+                    "min_length": 3
+                  },
+                  {
+                    "type": "text",
+                    "position": {
+                      "x": 0,
+                      "y": 43.21
+                    },
+                    "size": {
+                      "width": 167,
+                      "height": 95.82
+                    },
+                    "font": {
+                      "size": 14.22,
+                      "family": "Montserrat Medium",
+                      "color": "#000000",
+                      "bold": true,
+                      "line_height": 1.4,
+                      "letter_spacing": 0.17
+                    },
+                    "alignment": {
+                      "horizontal": "center",
+                      "vertical": "top"
+                    },
+                    "runs": [
+                      {
+                        "text": "Define project goals, gather requirements, identify stakeholders, and establish the project timeline.",
+                        "font": {
+                          "size": 14.22,
+                          "family": "Montserrat Medium",
+                          "color": "#000000",
+                          "bold": true,
+                          "line_height": 1.4,
+                          "letter_spacing": 0.17
+                        }
+                      }
+                    ],
+                    "decorative": false,
+                    "name": "section_description",
+                    "max_length": 101,
+                    "min_length": 51
+                  }
+                ],
+                "name": "timeline_section"
+              },
+              {
+                "type": "group",
+                "size": {
+                  "width": 167,
+                  "height": 143
+                },
+                "children": [
+                  {
+                    "type": "text",
+                    "position": {
+                      "x": 0,
+                      "y": 0
+                    },
+                    "size": {
+                      "width": 167,
+                      "height": 33.87
+                    },
+                    "font": {
+                      "size": 24.88,
+                      "family": "Montserrat Bold",
+                      "color": "#000000",
+                      "bold": true,
+                      "line_height": 1.5,
+                      "letter_spacing": 0.14
+                    },
+                    "alignment": {
+                      "horizontal": "center",
+                      "vertical": "top"
+                    },
+                    "runs": [
+                      {
+                        "text": "Design",
+                        "font": {
+                          "size": 24.88,
+                          "family": "Montserrat Bold",
+                          "color": "#000000",
+                          "bold": true,
+                          "line_height": 1.5,
+                          "letter_spacing": 0.14
+                        }
+                      }
+                    ],
+                    "decorative": false,
+                    "name": "section_title",
+                    "max_length": 14,
+                    "min_length": 3
+                  },
+                  {
+                    "type": "text",
+                    "position": {
+                      "x": 0,
+                      "y": 41.95
+                    },
+                    "size": {
+                      "width": 167,
+                      "height": 95.82
+                    },
+                    "font": {
+                      "size": 14.22,
+                      "family": "Montserrat Medium",
+                      "color": "#000000",
+                      "bold": true,
+                      "line_height": 1.4,
+                      "letter_spacing": 0.17
+                    },
+                    "alignment": {
+                      "horizontal": "center",
+                      "vertical": "top"
+                    },
+                    "runs": [
+                      {
+                        "text": "Define project goals, gather requirements, identify stakeholders, and establish the project timeline.",
+                        "font": {
+                          "size": 14.22,
+                          "family": "Montserrat Medium",
+                          "color": "#000000",
+                          "bold": true,
+                          "line_height": 1.4,
+                          "letter_spacing": 0.17
+                        }
+                      }
+                    ],
+                    "decorative": false,
+                    "name": "section_description",
+                    "max_length": 101,
+                    "min_length": 51
+                  }
+                ],
+                "name": "timeline_section"
+              },
+              {
+                "type": "group",
+                "size": {
+                  "width": 189,
+                  "height": 143
+                },
+                "children": [
+                  {
+                    "type": "text",
+                    "position": {
+                      "x": 0,
+                      "y": 0
+                    },
+                    "size": {
+                      "width": 189,
+                      "height": 33.87
+                    },
+                    "font": {
+                      "size": 24.88,
+                      "family": "Montserrat Bold",
+                      "color": "#000000",
+                      "bold": true,
+                      "line_height": 1.5,
+                      "letter_spacing": 0.14
+                    },
+                    "alignment": {
+                      "horizontal": "center",
+                      "vertical": "top"
+                    },
+                    "runs": [
+                      {
+                        "text": "Development",
+                        "font": {
+                          "size": 24.88,
+                          "family": "Montserrat Bold",
+                          "color": "#000000",
+                          "bold": true,
+                          "line_height": 1.5,
+                          "letter_spacing": 0.14
+                        }
+                      }
+                    ],
+                    "decorative": false,
+                    "name": "section_title",
+                    "max_length": 14,
+                    "min_length": 3
+                  },
+                  {
+                    "type": "text",
+                    "position": {
+                      "x": 11,
+                      "y": 41.95
+                    },
+                    "size": {
+                      "width": 167,
+                      "height": 95.82
+                    },
+                    "font": {
+                      "size": 14.22,
+                      "family": "Montserrat Medium",
+                      "color": "#000000",
+                      "bold": true,
+                      "line_height": 1.4,
+                      "letter_spacing": 0.17
+                    },
+                    "alignment": {
+                      "horizontal": "center",
+                      "vertical": "top"
+                    },
+                    "runs": [
+                      {
+                        "text": "Define project goals, gather requirements, identify stakeholders, and establish the project timeline.",
+                        "font": {
+                          "size": 14.22,
+                          "family": "Montserrat Medium",
+                          "color": "#000000",
+                          "bold": true,
+                          "line_height": 1.4,
+                          "letter_spacing": 0.17
+                        }
+                      }
+                    ],
+                    "decorative": false,
+                    "name": "section_description",
+                    "max_length": 101,
+                    "min_length": 51
+                  }
+                ],
+                "name": "timeline_section"
+              },
+              {
+                "type": "group",
+                "size": {
+                  "width": 167,
+                  "height": 143
+                },
+                "children": [
+                  {
+                    "type": "text",
+                    "position": {
+                      "x": 0,
+                      "y": 0
+                    },
+                    "size": {
+                      "width": 167,
+                      "height": 33.87
+                    },
+                    "font": {
+                      "size": 24.88,
+                      "family": "Montserrat Bold",
+                      "color": "#000000",
+                      "bold": true,
+                      "line_height": 1.5,
+                      "letter_spacing": 0.14
+                    },
+                    "alignment": {
+                      "horizontal": "center",
+                      "vertical": "top"
+                    },
+                    "runs": [
+                      {
+                        "text": "Deployment",
+                        "font": {
+                          "size": 24.88,
+                          "family": "Montserrat Bold",
+                          "color": "#000000",
+                          "bold": true,
+                          "line_height": 1.5,
+                          "letter_spacing": 0.14
+                        }
+                      }
+                    ],
+                    "decorative": false,
+                    "name": "section_title",
+                    "max_length": 14,
+                    "min_length": 3
+                  },
+                  {
+                    "type": "text",
+                    "position": {
+                      "x": 0,
+                      "y": 41.95
+                    },
+                    "size": {
+                      "width": 167,
+                      "height": 95.82
+                    },
+                    "font": {
+                      "size": 14.22,
+                      "family": "Montserrat Medium",
+                      "color": "#000000",
+                      "bold": true,
+                      "line_height": 1.4,
+                      "letter_spacing": 0.17
+                    },
+                    "alignment": {
+                      "horizontal": "center",
+                      "vertical": "top"
+                    },
+                    "runs": [
+                      {
+                        "text": "Define project goals, gather requirements, identify stakeholders, and establish the project timeline.",
+                        "font": {
+                          "size": 14.22,
+                          "family": "Montserrat Medium",
+                          "color": "#000000",
+                          "bold": true,
+                          "line_height": 1.4,
+                          "letter_spacing": 0.17
+                        }
+                      }
+                    ],
+                    "decorative": false,
+                    "name": "section_description",
+                    "max_length": 101,
+                    "min_length": 51
+                  }
+                ],
+                "name": "timeline_section"
+              },
+              {
+                "type": "group",
+                "size": {
+                  "width": 182,
+                  "height": 143
+                },
+                "children": [
+                  {
+                    "type": "text",
+                    "position": {
+                      "x": 0,
+                      "y": 1.26
+                    },
+                    "size": {
+                      "width": 182,
+                      "height": 33.87
+                    },
+                    "font": {
+                      "size": 24.88,
+                      "family": "Montserrat Bold",
+                      "color": "#000000",
+                      "bold": true,
+                      "line_height": 1.5,
+                      "letter_spacing": 0.14
+                    },
+                    "alignment": {
+                      "horizontal": "center",
+                      "vertical": "top"
+                    },
+                    "runs": [
+                      {
+                        "text": "Maintenance",
+                        "font": {
+                          "size": 24.88,
+                          "family": "Montserrat Bold",
+                          "color": "#000000",
+                          "bold": true,
+                          "line_height": 1.5,
+                          "letter_spacing": 0.14
+                        }
+                      }
+                    ],
+                    "decorative": false,
+                    "name": "section_title",
+                    "max_length": 14,
+                    "min_length": 3
+                  },
+                  {
+                    "type": "text",
+                    "position": {
+                      "x": 8,
+                      "y": 43.21
+                    },
+                    "size": {
+                      "width": 167,
+                      "height": 95.82
+                    },
+                    "font": {
+                      "size": 14.22,
+                      "family": "Montserrat Medium",
+                      "color": "#000000",
+                      "bold": true,
+                      "line_height": 1.4,
+                      "letter_spacing": 0.17
+                    },
+                    "alignment": {
+                      "horizontal": "center",
+                      "vertical": "top"
+                    },
+                    "runs": [
+                      {
+                        "text": "Define project goals, gather requirements, identify stakeholders, and establish the project timeline.",
+                        "font": {
+                          "size": 14.22,
+                          "family": "Montserrat Medium",
+                          "color": "#000000",
+                          "bold": true,
+                          "line_height": 1.4,
+                          "letter_spacing": 0.17
+                        }
+                      }
+                    ],
+                    "decorative": false,
+                    "name": "section_description",
+                    "max_length": 101,
+                    "min_length": 51
+                  }
+                ],
+                "name": "timeline_section"
+              }
+            ],
+            "name": "section_row",
+            "max_children": 5,
+            "min_children": 5
+          },
+          {
+            "type": "group",
+            "position": {
+              "x": 0,
+              "y": 150.71
+            },
+            "size": {
+              "width": 1173.36,
+              "height": 202
+            },
+            "children": [
+              {
+                "type": "vector",
+                "points": [
+                  {
+                    "x": 68.19,
+                    "y": 0
+                  },
+                  {
+                    "x": 68.19,
+                    "y": 181.73
+                  }
+                ],
+                "closed": false,
+                "stroke": {
+                  "color": "#9081C8",
+                  "width": 3.33
+                }
+              },
+              {
+                "type": "vector",
+                "points": [
+                  {
+                    "x": 292.51,
+                    "y": 0
+                  },
+                  {
+                    "x": 292.51,
+                    "y": 132.37
+                  }
+                ],
+                "closed": false,
+                "stroke": {
+                  "color": "#9081C8",
+                  "width": 3.33
+                }
+              },
+              {
+                "type": "vector",
+                "points": [
+                  {
+                    "x": 541.41,
+                    "y": 0
+                  },
+                  {
+                    "x": 541.41,
+                    "y": 109.88
+                  }
+                ],
+                "closed": false,
+                "stroke": {
+                  "color": "#9081C8",
+                  "width": 3.33
+                }
+              },
+              {
+                "type": "vector",
+                "points": [
+                  {
+                    "x": 805.91,
+                    "y": 0
+                  },
+                  {
+                    "x": 805.91,
+                    "y": 119.03
+                  }
+                ],
+                "closed": false,
+                "stroke": {
+                  "color": "#9081C8",
+                  "width": 3.33
+                }
+              },
+              {
+                "type": "vector",
+                "points": [
+                  {
+                    "x": 1068.87,
+                    "y": 0
+                  },
+                  {
+                    "x": 1068.87,
+                    "y": 181.73
+                  }
+                ],
+                "closed": false,
+                "stroke": {
+                  "color": "#9081C8",
+                  "width": 3.33
+                }
+              },
+              {
+                "type": "vector",
+                "points": [
+                  {
+                    "x": 68.19,
+                    "y": 181.73
+                  },
+                  {
+                    "x": 292.51,
+                    "y": 124.98
+                  },
+                  {
+                    "x": 541.41,
+                    "y": 97.58
+                  },
+                  {
+                    "x": 805.91,
+                    "y": 113.08
+                  },
+                  {
+                    "x": 1068.87,
+                    "y": 169.66
+                  }
+                ],
+                "closed": false,
+                "curve": {
+                  "type": "smooth",
+                  "tension": 0.45,
+                  "segments": 48
+                },
+                "stroke": {
+                  "color": "#9081C8",
+                  "width": 2.67,
+                  "dash": [
+                    10,
+                    6
+                  ]
+                }
+              },
+              {
+                "type": "vector",
+                "shape": "ellipse",
+                "points": [
+                  {
+                    "x": 55.19,
+                    "y": 168.73
+                  },
+                  {
+                    "x": 81.19,
+                    "y": 194.73
+                  }
+                ],
+                "fill": {
+                  "color": "#FFFFFF"
+                },
+                "stroke": {
+                  "color": "#9081C8",
+                  "width": 4
+                }
+              },
+              {
+                "type": "vector",
+                "shape": "ellipse",
+                "points": [
+                  {
+                    "x": 279.51,
+                    "y": 111.98
+                  },
+                  {
+                    "x": 305.51,
+                    "y": 137.98
+                  }
+                ],
+                "fill": {
+                  "color": "#FFFFFF"
+                },
+                "stroke": {
+                  "color": "#9081C8",
+                  "width": 4
+                }
+              },
+              {
+                "type": "vector",
+                "shape": "ellipse",
+                "points": [
+                  {
+                    "x": 528.41,
+                    "y": 84.58
+                  },
+                  {
+                    "x": 554.41,
+                    "y": 110.58
+                  }
+                ],
+                "fill": {
+                  "color": "#FFFFFF"
+                },
+                "stroke": {
+                  "color": "#9081C8",
+                  "width": 4
+                }
+              },
+              {
+                "type": "vector",
+                "shape": "ellipse",
+                "points": [
+                  {
+                    "x": 792.91,
+                    "y": 100.08
+                  },
+                  {
+                    "x": 818.91,
+                    "y": 126.08
+                  }
+                ],
+                "fill": {
+                  "color": "#FFFFFF"
+                },
+                "stroke": {
+                  "color": "#9081C8",
+                  "width": 4
+                }
+              },
+              {
+                "type": "vector",
+                "shape": "ellipse",
+                "points": [
+                  {
+                    "x": 1055.87,
+                    "y": 156.66
+                  },
+                  {
+                    "x": 1081.87,
+                    "y": 182.66
+                  }
+                ],
+                "fill": {
+                  "color": "#FFFFFF"
+                },
+                "stroke": {
+                  "color": "#9081C8",
+                  "width": 4
+                }
+              }
+            ],
+            "name": "timeline_marker_graphic"
+          }
+        ]
+      },
+      {
+        "id": "footer_pagination",
+        "description": "Small pagination label is aligned in the lower-right corner of the slide.",
+        "position": {
+          "x": 1140.13,
+          "y": 655.37
+        },
+        "elements": [
+          {
+            "type": "text",
+            "position": {
+              "x": 0,
+              "y": 0
+            },
+            "size": {
+              "width": 61.15,
+              "height": 17.99
+            },
+            "font": {
+              "size": 14.22,
+              "family": "Montserrat Bold",
+              "color": "#000000",
+              "bold": true,
+              "line_height": 1.4,
+              "letter_spacing": 0.08
+            },
+            "alignment": {
+              "horizontal": "right",
+              "vertical": "top"
+            },
+            "runs": [
+              {
+                "text": "Page",
+                "font": {
+                  "size": 14.22,
+                  "family": "Montserrat Bold",
+                  "color": "#000000",
+                  "bold": true,
+                  "line_height": 1.4,
+                  "letter_spacing": 0.08
+                }
+              }
+            ],
+            "decorative": true,
+            "name": "footer_label",
+            "max_length": 8,
+            "min_length": 2
+          },
+          {
+            "type": "text",
+            "position": {
+              "x": 55.02,
+              "y": 0
+            },
+            "size": {
+              "width": 31.53,
+              "height": 17.99
+            },
+            "font": {
+              "size": 14.22,
+              "family": "Montserrat",
+              "color": "#000000",
+              "line_height": 1.4,
+              "letter_spacing": 0.08
+            },
+            "alignment": {
+              "horizontal": "right",
+              "vertical": "top"
+            },
+            "runs": [
+              {
+                "text": "24",
+                "font": {
+                  "size": 14.22,
+                  "family": "Montserrat",
+                  "color": "#000000",
+                  "line_height": 1.4,
+                  "letter_spacing": 0.08
+                }
+              }
+            ],
+            "decorative": false,
+            "name": "footer_number",
+            "max_length": 3,
+            "min_length": 1
+          }
+        ]
+      }
+    ]
+  },
+  "title_cards_chart_footer_2861": {
+    "id": "title_cards_chart_footer_2861",
+    "description": "A wide presentation layout with prominent heading, supporting copy, stacked informational cards, right chart area, and small footer marker.",
+    "components": [
+      {
+        "id": "background_accent",
+        "description": "Subtle decorative accent layer positioned behind the main content near the lower right edge.",
+        "position": {
+          "x": 0,
+          "y": 0
+        },
+        "elements": [
+          {
+            "type": "image",
+            "position": {
+              "x": 674.62,
+              "y": 576.01
+            },
+            "size": {
+              "width": 1017.57,
+              "height": 997.22
+            },
+            "data": "static/image2-f9ab39ea57ed.png",
+            "fit": "fill",
+            "clip_path": "path('M 0 0 L 1017.57 0 L 1017.57 997.22 L 0 997.22 L 0 0 Z')",
+            "decorative": true,
+            "name": "background_glow",
+            "is_icon": false
+          }
+        ]
+      },
+      {
+        "id": "title_and_summary",
+        "description": "Top-left text block containing the primary heading and a short descriptive summary beneath it.",
+        "position": {
+          "x": 53.33,
+          "y": 51.33
+        },
+        "elements": [
+          {
+            "type": "text",
+            "position": {
+              "x": 0,
+              "y": 0
+            },
+            "size": {
+              "width": 668.77,
+              "height": 122.83
+            },
+            "font": {
+              "size": 55.99,
+              "family": "Anton",
+              "color": "#000000",
+              "bold": true,
+              "line_height": 1.09,
+              "letter_spacing": -0.55
+            },
+            "alignment": {
+              "horizontal": "left",
+              "vertical": "top"
+            },
+            "runs": [
+              {
+                "text": "Growth Opportunities as business Growth",
+                "font": {
+                  "size": 55.99,
+                  "family": "Anton",
+                  "color": "#000000",
+                  "bold": true,
+                  "italic": false,
+                  "underline": false,
+                  "line_height": 1.09,
+                  "letter_spacing": -0.55,
+                  "opacity": 1
+                }
+              }
+            ],
+            "decorative": false,
+            "name": "main_heading",
+            "max_length": 46,
+            "min_length": 20
+          },
+          {
+            "type": "text",
+            "position": {
+              "x": 0,
+              "y": 144.73
+            },
+            "size": {
+              "width": 647.92,
+              "height": 48.44
+            },
+            "font": {
+              "size": 17.78,
+              "family": "Montserrat Medium",
+              "color": "#000000",
+              "bold": true,
+              "line_height": 1.4,
+              "letter_spacing": 0.11
+            },
+            "alignment": {
+              "horizontal": "left",
+              "vertical": "top"
+            },
+            "runs": [
+              {
+                "text": "Organizations achieve faster project completion, improved communication, better resource allocation, and increased productivity.",
+                "font": {
+                  "size": 17.78,
+                  "family": "Montserrat Medium",
+                  "color": "#000000",
+                  "bold": true,
+                  "line_height": 1.4,
+                  "letter_spacing": 0.11
+                }
+              }
+            ],
+            "decorative": false,
+            "name": "summary_text",
+            "max_length": 128,
+            "min_length": 64
+          }
+        ]
+      },
+      {
+        "id": "stacked_info_cards",
+        "description": "A vertical stack of rounded text cards with soft side accents and repeated title-description content areas.",
+        "position": {
+          "x": 53.33,
+          "y": 293.38
+        },
+        "elements": [
+          {
+            "type": "flex",
+            "name": "flex_items",
+            "position": {
+              "x": 0,
+              "y": 0
+            },
+            "size": {
+              "width": 506,
+              "height": 363
+            },
+            "direction": "column",
+            "gap": 12,
+            "justify_content": "flex-start",
+            "min_children": 1,
+            "max_children": 3,
+            "children": [
+              {
+                "type": "group",
+                "position": {
+                  "x": 0,
+                  "y": 0
+                },
+                "size": {
+                  "width": 506,
+                  "height": 107
+                },
+                "children": [
+                  {
+                    "type": "vector",
+                    "shape": "ellipse",
+                    "points": [
+                      {
+                        "x": 9.69,
+                        "y": 17.32
+                      },
+                      {
+                        "x": 57.94,
+                        "y": 63.56
+                      }
+                    ],
+                    "opacity": 1,
+                    "fill": {
+                      "color": "#F0EEF7",
+                      "opacity": 0.85
+                    },
+                    "stroke": {
+                      "color": "#F0EEF7",
+                      "opacity": 0,
+                      "width": 0
+                    },
+                    "rotation": 0
+                  },
+                  {
+                    "type": "text",
+                    "position": {
+                      "x": 75.71,
+                      "y": 12.49
+                    },
+                    "size": {
+                      "width": 380.37,
+                      "height": 29.1
+                    },
+                    "font": {
+                      "size": 21.33,
+                      "family": "Montserrat Bold",
+                      "color": "#000000",
+                      "bold": true,
+                      "line_height": 1.5,
+                      "letter_spacing": 0.12
+                    },
+                    "alignment": {
+                      "horizontal": "left",
+                      "vertical": "top"
+                    },
+                    "runs": [
+                      {
+                        "text": "Productivity Rate",
+                        "font": {
+                          "size": 21.33,
+                          "family": "Montserrat Bold",
+                          "color": "#000000",
+                          "bold": true,
+                          "line_height": 1.5,
+                          "letter_spacing": 0.12
+                        }
+                      }
+                    ],
+                    "decorative": false,
+                    "name": "card_title",
+                    "max_length": 30,
+                    "min_length": 9
+                  },
+                  {
+                    "type": "text",
+                    "position": {
+                      "x": 75.71,
+                      "y": 51.14
+                    },
+                    "size": {
+                      "width": 429.86,
+                      "height": 38.44
+                    },
+                    "font": {
+                      "size": 14.22,
+                      "family": "Montserrat",
+                      "color": "#000000",
+                      "line_height": 1.45,
+                      "letter_spacing": 0.08
+                    },
+                    "alignment": {
+                      "horizontal": "left",
+                      "vertical": "top"
+                    },
+                    "runs": [
+                      {
+                        "text": "Productivity Rate measures the percentage of tasks are completed within their assigned deadlines.",
+                        "font": {
+                          "size": 14.22,
+                          "family": "Montserrat",
+                          "color": "#000000",
+                          "line_height": 1.45,
+                          "letter_spacing": 0.08
+                        }
+                      }
+                    ],
+                    "decorative": false,
+                    "name": "card_description",
+                    "max_length": 98,
+                    "min_length": 49
+                  }
+                ],
+                "name": "card_content"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "right_chart_panel",
+        "description": "Right-side data visualization area containing a line chart with axes and light gridlines.",
+        "position": {
+          "x": 728,
+          "y": 274
+        },
+        "elements": [
+          {
+            "type": "chart",
+            "position": {
+              "x": 0,
+              "y": 0
+            },
+            "size": {
+              "width": 485,
+              "height": 330
+            },
+            "chart_type": "line",
+            "colors": [
+              "#8A5CFF"
+            ],
+            "x_axis": true,
+            "y_axis": true,
+            "axis_color": "#666666",
+            "categories": [
+              "2021",
+              "2022",
+              "2023",
+              "2024",
+              "2025"
+            ],
+            "series": [
+              {
+                "name": "Metric",
+                "values": [
+                  8,
+                  18,
+                  19,
+                  33,
+                  36
+                ]
+              }
+            ],
+            "legend": false,
+            "x_axis_grid": false,
+            "y_axis_grid": true,
+            "grid_color": "#E7E7E7",
+            "decorative": false,
+            "name": "line_chart"
+          }
+        ]
+      },
+      {
+        "id": "footer_marker",
+        "description": "Small footer marker aligned to the lower right, combining a label and page value.",
+        "position": {
+          "x": 1140.13,
+          "y": 655.37
+        },
+        "elements": [
+          {
+            "type": "text",
+            "position": {
+              "x": 0,
+              "y": 0
+            },
+            "size": {
+              "width": 61.15,
+              "height": 17.99
+            },
+            "font": {
+              "size": 14.22,
+              "family": "Montserrat Bold",
+              "color": "#000000",
+              "bold": true,
+              "line_height": 1.4,
+              "letter_spacing": 0.08
+            },
+            "alignment": {
+              "horizontal": "right",
+              "vertical": "top"
+            },
+            "runs": [
+              {
+                "text": "Page",
+                "font": {
+                  "size": 14.22,
+                  "family": "Montserrat Bold",
+                  "color": "#000000",
+                  "bold": true,
+                  "line_height": 1.4,
+                  "letter_spacing": 0.08
+                }
+              }
+            ],
+            "decorative": true,
+            "name": "footer_label",
+            "max_length": 4,
+            "min_length": 2
+          },
+          {
+            "type": "text",
+            "position": {
+              "x": 55.02,
+              "y": 0
+            },
+            "size": {
+              "width": 31.53,
+              "height": 17.99
+            },
+            "font": {
+              "size": 14.22,
+              "family": "Montserrat",
+              "color": "#000000",
+              "line_height": 1.4,
+              "letter_spacing": 0.08
+            },
+            "alignment": {
+              "horizontal": "right",
+              "vertical": "top"
+            },
+            "runs": [
+              {
+                "text": "09",
+                "font": {
+                  "size": 14.22,
+                  "family": "Montserrat",
+                  "color": "#000000",
+                  "line_height": 1.4,
+                  "letter_spacing": 0.08
+                }
+              }
+            ],
+            "decorative": false,
+            "name": "footer_value",
+            "max_length": 2,
+            "min_length": 1
+          }
+        ]
+      }
+    ]
+  }
+}

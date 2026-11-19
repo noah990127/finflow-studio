@@ -4,12 +4,16 @@ import com.finflow.studio.auth.ActorContext;
 import com.finflow.studio.data.DataModels.CreateExtractRequest;
 import com.finflow.studio.data.ExtractJobService;
 import com.finflow.studio.data.DataTransformService;
+import com.finflow.studio.data.DataConnectionService;
+import com.finflow.studio.deliverable.DeliverableService;
 import com.finflow.studio.knowledge.KnowledgeService;
 import com.finflow.studio.project.ProjectService;
+import com.finflow.studio.skill.AnalysisSkillService;
 import com.finflow.studio.worker.WorkerClient;
 import com.finflow.studio.workflow.WorkflowModels.*;
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -28,42 +32,58 @@ import java.time.Instant;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executors;
 
 @Service
 public class WorkflowRunService {
     private final JdbcClient jdbc;
     private final ObjectMapper objectMapper;
     private final ProjectService projects;
+    private final AnalysisSkillService analysisSkills;
     private final WorkflowDefinitionService definitions;
     private final ExtractJobService extracts;
+    private final DataConnectionService connections;
     private final DataTransformService dataTransforms;
     private final KnowledgeService knowledge;
+    private final DeliverableService deliverables;
     private final WorkerClient worker;
+    private final MysteryNodeService mysteries;
     private final WorkflowDeliverableService workflowDeliverables;
     private final WorkflowContextAssembler contexts;
     private final TaskExecutor taskExecutor;
     private final WorkflowRunEventService events;
     private final WorkflowFactService facts;
+    private final int maxParallelNodes;
 
     public WorkflowRunService(JdbcClient jdbc, ObjectMapper objectMapper, ProjectService projects,
+                              AnalysisSkillService analysisSkills,
                               WorkflowDefinitionService definitions, ExtractJobService extracts,
-                              DataTransformService dataTransforms, KnowledgeService knowledge, WorkerClient worker,
+                              DataConnectionService connections,
+                              DataTransformService dataTransforms, KnowledgeService knowledge,
+                              DeliverableService deliverables, WorkerClient worker, MysteryNodeService mysteries,
                               WorkflowDeliverableService workflowDeliverables, WorkflowContextAssembler contexts,
                               @Qualifier("applicationTaskExecutor") TaskExecutor taskExecutor,
-                              WorkflowRunEventService events, WorkflowFactService facts) {
+                              WorkflowRunEventService events, WorkflowFactService facts,
+                              @Value("${finflow.workflow.max-parallel-nodes:4}") int maxParallelNodes) {
         this.jdbc = jdbc;
         this.objectMapper = objectMapper;
         this.projects = projects;
+        this.analysisSkills = analysisSkills;
         this.definitions = definitions;
         this.extracts = extracts;
+        this.connections = connections;
         this.dataTransforms = dataTransforms;
         this.knowledge = knowledge;
+        this.deliverables = deliverables;
         this.worker = worker;
+        this.mysteries = mysteries;
         this.workflowDeliverables = workflowDeliverables;
         this.contexts = contexts;
         this.taskExecutor = taskExecutor;
         this.events = events;
         this.facts = facts;
+        this.maxParallelNodes = Math.max(1, Math.min(16, maxParallelNodes));
     }
 
     @Transactional
@@ -95,6 +115,7 @@ public class WorkflowRunService {
         var document = definitions.version(previous.workflowId(), previous.workflowVersion());
         var reusable = new LinkedHashMap<String, Map<String, Object>>();
         previous.nodes().stream().filter(node -> List.of("SUCCEEDED", "REUSED").contains(node.status()))
+                .filter(node -> node.nodeType() != NodeType.REF_SEARCH)
                 .forEach(node -> reusable.put(node.nodeId(), node.output()));
         return createRun(workflow, document, previous.workflowVersion(), previous.id(), "RETRY", reusable);
     }
@@ -222,63 +243,44 @@ public class WorkflowRunService {
         context.replaceAll((id, value) -> byId.containsKey(id) ? WorkflowVariables.publish(byId.get(id).type(), value) : value);
         try {
             var order = definitions.topologicalOrder(document);
-            var completed = 0;
-            for (var nodeId : order) {
-                if (context.containsKey(nodeId)) continue;
+            var completed = context.size();
+            while (context.size() < order.size()) {
                 ensureNotCanceled(runId);
-                var node = byId.get(nodeId);
-                var nodeStartedAt = Instant.now();
-                var upstream = upstream(document, nodeId, context);
-                startNode(runId, node, upstream);
-                var startProgress = 5 + (int) Math.floor(88.0 * completed / Math.max(1, order.size()));
-                var endProgress = 5 + (int) Math.floor(88.0 * (completed + 1) / Math.max(1, order.size()));
-                events.publish(runId, "NODE_STARTED", node.id(), node.name(), "RUNNING", startProgress,
-                        "开始：" + node.name(), "");
-                var activityId = facts.beginActivity(runId, node.id(), activityType(node.type()),
-                        capability(node), node.name(), Map.copyOf(upstream));
-                try {
-                    WorkflowVariables.validate(document, node);
+                var ready = WorkflowParallelPlanner.readyNodes(document, order, context.keySet(), maxParallelNodes);
+                if (ready.isEmpty()) throw new IllegalStateException("工作流没有可执行步骤，请检查节点依赖和变量引用");
+
+                // Review is a synchronization barrier: all prior runnable work finishes before pausing for a person.
+                if (ready.size() == 1 && byId.get(ready.getFirst()).type() == NodeType.REVIEW) {
+                    var node = byId.get(ready.getFirst());
+                    var upstream = upstream(document, node.id(), context);
                     var resolvedConfig = WorkflowVariables.resolve(node.config() == null ? Map.of() : node.config(), context);
                     var effectiveNode = new NodeDefinition(node.id(), node.type(), node.name(), node.x(), node.y(), resolvedConfig);
-                    for (var reference : WorkflowVariables.references(node.config() == null ? Map.of() : node.config())) {
-                        if (context.containsKey(reference.nodeId())) upstream.putIfAbsent(reference.nodeId(), context.get(reference.nodeId()));
-                    }
-                    var inputSource = WorkflowVariables.inputSource(resolvedConfig);
-                    if (inputSource != null) {
-                        var source = context.get(inputSource.nodeId());
-                        var selected = new LinkedHashMap<String, Object>();
-                        selected.put("text", WorkflowVariables.asText(WorkflowVariables.read(inputSource, context)));
-                        selected.put("refs", source.getOrDefault("sources", source.getOrDefault("refs", List.of())));
-                        selected.put("refIds", source.getOrDefault("refIds", List.of()));
-                        upstream.clear();
-                        upstream.put(inputSource.nodeId(), selected);
-                    }
-                    var actualInput = new LinkedHashMap<String, Map<String, Object>>();
-                    actualInput.put("config", resolvedConfig);
-                    actualInput.put("upstream", new LinkedHashMap<>(upstream));
-                    startNode(runId, node, node.type() == NodeType.REVIEW ? upstream : actualInput);
-                    if (node.type() == NodeType.REVIEW) {
-                        waitForReview(runId, effectiveNode, upstream, context, endProgress);
-                        return;
-                    }
-                    var output = WorkflowVariables.publish(node.type(), executeNode(run, runId, effectiveNode, upstream, context, startProgress, endProgress));
-                    context.put(node.id(), output);
-                    facts.completeActivity(activityId, "SUCCEEDED", output, "");
-                    facts.recordNodeLineage(runId, node.id(), upstream, output);
-                    finishNode(runId, node.id(), "SUCCEEDED", output, "");
-                    completed++;
-                    events.publish(runId, "NODE_COMPLETED", node.id(), node.name(), "SUCCEEDED", endProgress,
-                            node.name() + "已完成，用时 " + elapsed(nodeStartedAt), "");
-                } catch (Exception exception) {
-                    facts.completeActivity(activityId, exception instanceof CancellationException ? "CANCELED" : "FAILED",
-                            Map.of(), sanitize(exception.getMessage()));
-                    finishNode(runId, node.id(), exception instanceof CancellationException ? "CANCELED" : "FAILED",
-                            Map.of(), sanitize(exception.getMessage()));
-                    events.publish(runId, "NODE_FAILED", node.id(), node.name(),
-                            exception instanceof CancellationException ? "CANCELED" : "FAILED", startProgress,
-                            sanitize(exception.getMessage()), "");
-                    throw exception;
+                    var progress = progress(completed + 1, order.size());
+                    startNode(runId, node, upstream);
+                    waitForReview(runId, effectiveNode, upstream, context, progress);
+                    return;
                 }
+
+                var snapshot = Map.copyOf(context);
+                var actor = ActorContext.current();
+                var startProgress = progress(completed, order.size());
+                var futures = ready.stream().map(nodeId -> {
+                    var node = byId.get(nodeId);
+                    return CompletableFuture.supplyAsync(() -> {
+                        try (var ignored = ActorContext.bind(actor)) {
+                            return executeParallelNode(run, runId, document, node, snapshot, startProgress, order.size());
+                        }
+                    }, taskExecutor);
+                }).toList();
+                var outcomes = futures.stream().map(CompletableFuture::join).toList();
+                RuntimeException failure = null;
+                for (var outcome : outcomes) {
+                    if (outcome.error() == null) {
+                        context.put(outcome.node().id(), outcome.output());
+                        completed++;
+                    } else if (failure == null) failure = outcome.error();
+                }
+                if (failure != null) throw failure;
             }
             jdbc.sql("""
                     update workflow_run set status = 'SUCCEEDED', current_node_id = null,
@@ -296,6 +298,70 @@ public class WorkflowRunService {
         }
     }
 
+    private ParallelNodeOutcome executeParallelNode(RunResponse run, String runId, WorkflowDocument document,
+                                                    NodeDefinition node,
+                                                    Map<String, Map<String, Object>> context,
+                                                    int startProgress, int totalNodes) {
+        var nodeStartedAt = Instant.now();
+        var upstream = upstream(document, node.id(), context);
+        events.publish(runId, "NODE_STARTED", node.id(), node.name(), "RUNNING", startProgress,
+                "开始：" + node.name(), "");
+        var activityId = facts.beginActivity(runId, node.id(), activityType(node.type()),
+                capability(node), node.name(), Map.copyOf(upstream));
+        try {
+            ensureNotCanceled(runId);
+            WorkflowVariables.validate(document, node);
+            var resolvedConfig = WorkflowVariables.resolve(node.config() == null ? Map.of() : node.config(), context);
+            var effectiveNode = new NodeDefinition(node.id(), node.type(), node.name(), node.x(), node.y(), resolvedConfig);
+            for (var reference : WorkflowVariables.references(node.config() == null ? Map.of() : node.config())) {
+                if (context.containsKey(reference.nodeId())) upstream.putIfAbsent(reference.nodeId(), context.get(reference.nodeId()));
+            }
+            var inputSource = WorkflowVariables.inputSource(resolvedConfig);
+            if (inputSource != null) {
+                var source = context.get(inputSource.nodeId());
+                var selected = new LinkedHashMap<String, Object>();
+                selected.put("text", WorkflowVariables.asText(WorkflowVariables.read(inputSource, context)));
+                selected.put("refs", source.getOrDefault("sources", source.getOrDefault("refs", List.of())));
+                selected.put("refIds", source.getOrDefault("refIds", List.of()));
+                upstream.clear();
+                upstream.put(inputSource.nodeId(), selected);
+            }
+            var actualInput = new LinkedHashMap<String, Map<String, Object>>();
+            actualInput.put("config", resolvedConfig);
+            actualInput.put("upstream", new LinkedHashMap<>(upstream));
+            startNode(runId, node, actualInput);
+            var endProgress = progress(completedNodeCount(runId) + 1, totalNodes);
+            var output = WorkflowVariables.publish(node.type(), executeNode(run, runId, effectiveNode, upstream,
+                    context, startProgress, endProgress));
+            facts.completeActivity(activityId, "SUCCEEDED", output, "");
+            facts.recordNodeLineage(runId, node.id(), upstream, output);
+            finishNode(runId, node.id(), "SUCCEEDED", output, "");
+            events.publish(runId, "NODE_COMPLETED", node.id(), node.name(), "SUCCEEDED", endProgress,
+                    node.name() + "已完成，用时 " + elapsed(nodeStartedAt), "");
+            return new ParallelNodeOutcome(node, output, null);
+        } catch (Exception exception) {
+            var status = exception instanceof CancellationException ? "CANCELED" : "FAILED";
+            facts.completeActivity(activityId, status, Map.of(), sanitize(exception.getMessage()));
+            finishNode(runId, node.id(), status, Map.of(), sanitize(exception.getMessage()));
+            events.publish(runId, "NODE_FAILED", node.id(), node.name(), status, startProgress,
+                    sanitize(exception.getMessage()), "");
+            var runtime = exception instanceof RuntimeException value
+                    ? value : new IllegalStateException(sanitize(exception.getMessage()), exception);
+            return new ParallelNodeOutcome(node, Map.of(), runtime);
+        }
+    }
+
+    private int completedNodeCount(String runId) {
+        return jdbc.sql("select count(*) from workflow_node_run where run_id = :runId and status in ('SUCCEEDED','REUSED')")
+                .param("runId", runId).query(Integer.class).single();
+    }
+
+    private int progress(int completed, int total) {
+        return 5 + (int) Math.floor(88.0 * Math.min(completed, total) / Math.max(1, total));
+    }
+
+    private record ParallelNodeOutcome(NodeDefinition node, Map<String, Object> output, RuntimeException error) { }
+
     private Map<String, Object> executeNode(RunResponse run, String runId, NodeDefinition node,
                                             Map<String, Map<String, Object>> upstream,
                                             Map<String, Map<String, Object>> context,
@@ -303,9 +369,18 @@ public class WorkflowRunService {
         var config = node.config() == null ? Map.<String, Object>of() : node.config();
         return switch (node.type()) {
             case FILE_INPUT -> {
+                var deliverableId = optional(config, "deliverableId", "");
+                if (!deliverableId.isBlank()) {
+                    var source = deliverables.workflowSource(deliverableId);
+                    if (!deliverables.get(deliverableId).projectId().equals(run.projectId())) {
+                        throw new IllegalArgumentException("成果不属于当前项目");
+                    }
+                    yield source;
+                }
                 var file = knowledge.get(text(config, "resourceId"));
                 var refs = knowledge.sampledCurrentRefs(file.id(), 160);
                 yield Map.of("fileId", file.id(), "name", file.name(), "version", file.currentVersion(),
+                        "sourceKind", "FILE",
                         "downloadUrl", "/api/files/" + file.id() + "/download",
                         "refs", refs.stream().map(this::refMap).toList(),
                         "refIds", refs.stream().map(ref -> ref.id()).toList());
@@ -316,14 +391,16 @@ public class WorkflowRunService {
                 if (!job.projectId().equals(run.projectId())) throw new IllegalArgumentException("数据文件不属于当前项目");
                 if (!"SUCCEEDED".equals(job.status())) throw new IllegalStateException("数据文件尚未采集完成");
                 yield Map.of("extractJobId", job.id(), "rowCount", job.rowCount(), "byteCount", job.byteCount(),
-                        "fileName", job.outputName(), "downloadUrl", "/api/extract-jobs/" + job.id() + "/download");
+                        "fileName", job.outputName(), "sourceKind", "EXTRACT",
+                        "downloadUrl", "/api/extract-jobs/" + job.id() + "/download");
             }
             case DATA_EXTRACT -> runExtract(run, runId, node, config, startProgress, endProgress);
             case DATA_TRANSFORM -> transformData(run, runId, node, config, upstream, startProgress, endProgress);
             case PROCESS -> transformData(run, runId, node, config, upstream, startProgress, endProgress);
             case SPREADSHEET_TRANSFORM -> transformSpreadsheet(config, upstream);
-            case REF_SEARCH -> searchRefs(run.projectId(), config);
-            case AI_ANALYSIS -> analyze(runId, node, config, upstream,
+            case REF_SEARCH -> searchRefs(run.projectId(), runId, node, config, startProgress, endProgress);
+            case MYSTERY -> mystery(runId, node, config, upstream, startProgress, endProgress);
+            case AI_ANALYSIS -> analyze(run.projectId(), runId, node, config, upstream,
                     startProgress, endProgress);
             case AGENT_TASK -> agentTask(run.projectId(), runId, node, config, upstream, context,
                     startProgress, endProgress);
@@ -526,6 +603,7 @@ public class WorkflowRunService {
         output.put("sampleReport", result.sampleReport());
         output.put("qualityReport", result.qualityReport());
         output.put("script", Objects.toString(config.get("script"), ""));
+        if (config.get("transformPlan") != null) output.put("transformPlan", config.get("transformPlan"));
         output.put("requirements", Objects.toString(config.get("requirements"), ""));
         return output;
     }
@@ -556,8 +634,10 @@ public class WorkflowRunService {
             }
         }
         if (!"SUCCEEDED".equals(job.status())) throw new IllegalStateException(job.errorMessage());
+        var sourceType = connections.get(text(config, "connectionId")).sourceType().name();
         return Map.of("extractJobId", job.id(), "rowCount", job.rowCount(), "byteCount", job.byteCount(),
-                "fileName", job.outputName(), "downloadUrl", "/api/extract-jobs/" + job.id() + "/download");
+                "fileName", job.outputName(), "sourceKind", sourceType,
+                "downloadUrl", "/api/extract-jobs/" + job.id() + "/download");
     }
 
     private Map<String, Object> transformSpreadsheet(Map<String, Object> config,
@@ -576,21 +656,273 @@ public class WorkflowRunService {
                 "downloadUrl", "/api/files/" + result.id() + "/download");
     }
 
-    private Map<String, Object> searchRefs(String projectId, Map<String, Object> config) {
-        var refs = knowledge.search(projectId, text(config, "query"), integer(config, "limit", 10));
-        var items = refs.stream().map(this::refMap).toList();
-        return Map.of("count", items.size(), "refs", items, "refIds", refs.stream().map(ref -> ref.id()).toList());
+    private Map<String, Object> searchRefs(String projectId, String runId, NodeDefinition node,
+                                           Map<String, Object> config, int startProgress, int endProgress) {
+        var configuredQuery = text(config, "query");
+        var normalizedQuery = configuredQuery.replaceAll("\\s+", " ").strip();
+        var query = compactSearchTopic(configuredQuery);
+        var queryCompacted = !query.equals(normalizedQuery);
+        // maxSources was emitted by earlier Agent-created workflows. Keep those workflows
+        // executable while using the public node contract (limit/includeWeb) going forward.
+        var legacyAgentSearch = config.containsKey("maxSources");
+        var limit = Math.max(1, Math.min(integer(config, "limit",
+                integer(config, "maxSources", 10)), 20));
+        var includeWeb = bool(config, "includeWeb") || legacyAgentSearch;
+        var projectRefs = knowledge.search(projectId, query, limit).stream().map(this::refMap).toList();
+        var adoptedRefs = new ArrayList<Map<String, Object>>();
+        var links = new ArrayList<Map<String, Object>>();
+        var snapshots = new ArrayList<Map<String, Object>>();
+        var rejected = new ArrayList<Map<String, Object>>();
+        var webSearchError = "";
+
+        if (includeWeb) {
+            if (queryCompacted) {
+                events.publish(runId, "MODEL_STATUS", node.id(), node.name(), "RUNNING",
+                        Math.max(startProgress + 1, 8), "已将较长的上游内容整理为可搜索的主题", "");
+            }
+            events.publish(runId, "MODEL_STATUS", node.id(), node.name(), "RUNNING",
+                    Math.max(startProgress + 1, 8), "正在联网搜索本次需要的资料", "");
+            Map<String, Object> discovered;
+            try {
+                var discoveryLimit = Math.min(20, Math.max(10, limit * 3));
+                discovered = worker.discoverResearchSources(query, discoveryLimit);
+            } catch (RuntimeException exception) {
+                webSearchError = sanitize(exception.getMessage());
+                if (projectRefs.isEmpty()) {
+                    throw new IllegalStateException("联网搜索暂时不可用：" + webSearchError);
+                }
+                events.publish(runId, "TOOL_STATUS", node.id(), node.name(), "RUNNING",
+                        Math.max(startProgress + 1, 8), "联网搜索暂时不可用，继续使用项目内资料", "");
+                discovered = Map.of("sources", List.of());
+            }
+            var searchStatus = Objects.toString(discovered.get("status"), "ready");
+            var searchSummary = Objects.toString(discovered.get("summary"), "").strip();
+            if (("unavailable".equals(searchStatus) || "failed".equals(searchStatus)) && projectRefs.isEmpty()) {
+                throw new IllegalStateException(("unavailable".equals(searchStatus)
+                        ? "联网搜索服务当前不可用：" : "联网搜索执行失败：")
+                        + (searchSummary.isBlank() ? "请检查搜索服务配置" : searchSummary));
+            }
+            if (("unavailable".equals(searchStatus) || "failed".equals(searchStatus)) && !projectRefs.isEmpty()) {
+                webSearchError = searchSummary;
+                events.publish(runId, "TOOL_STATUS", node.id(), node.name(), "RUNNING",
+                        Math.max(startProgress + 1, 8), "联网搜索未完成，继续使用项目内已有资料", "");
+            }
+            var candidates = list(discovered.get("sources"));
+            var discoveredCandidates = candidates.stream().filter(Map.class::isInstance).map(raw -> {
+                var candidate = (Map<?, ?>) raw;
+                var url = Objects.toString(candidate.get("url"), "").trim();
+                var title = Objects.toString(candidate.get("title"), url).trim();
+                var snippet = Objects.toString(candidate.get("snippet"), "").trim();
+                return new ResearchCandidate(url, title, snippet);
+            }).filter(candidate -> !candidate.url().isBlank()).toList();
+            var fetchLimit = Math.min(20, Math.max(8, limit * 2));
+            var fetches = discoveredCandidates.stream()
+                    .filter(candidate -> isRelevantSearchCandidate(query, candidate.title(), candidate.snippet()))
+                    .limit(fetchLimit).toList();
+            discoveredCandidates.stream().filter(candidate -> !fetches.contains(candidate)).forEach(candidate ->
+                    rejected.add(Map.of("title", candidate.title(), "url", candidate.url(),
+                            "reason", "候选资料与查找主题相关性不足")));
+            events.publish(runId, "TOOL_STATUS", node.id(), node.name(), "RUNNING",
+                    Math.max(startProgress + 1, 8), "正在并行验证 " + fetches.size() + " 个候选网页", "");
+            List<ResearchFetch> fetchedCandidates;
+            try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+                fetchedCandidates = fetches.stream().map(candidate -> CompletableFuture.supplyAsync(() -> {
+                    try {
+                        return new ResearchFetch(candidate, worker.fetchResearchSource(candidate.url()), "");
+                    } catch (RuntimeException exception) {
+                        return new ResearchFetch(candidate, Map.of(), sanitize(exception.getMessage()));
+                    }
+                }, executor)).toList().stream().map(CompletableFuture::join).toList();
+            }
+            var candidateIndex = 0;
+            for (var fetch : fetchedCandidates) {
+                ensureNotCanceled(runId);
+                if (adoptedRefs.size() >= limit) break;
+                candidateIndex++;
+                var url = fetch.candidate().url();
+                var candidateTitle = fetch.candidate().title();
+                var progress = startProgress + Math.max(1, (int) Math.floor(
+                        Math.max(1, endProgress - startProgress - 1) * candidateIndex / (double) Math.max(1, fetchedCandidates.size())));
+                events.publish(runId, "TOOL_STATUS", node.id(), node.name(), "RUNNING",
+                        Math.min(progress, endProgress - 1), "正在验证资料：" + candidateTitle, "");
+                try {
+                    if (!fetch.error().isBlank()) throw new IllegalStateException(fetch.error());
+                    var fetched = fetch.result();
+                    var sourceText = Objects.toString(fetched.get("text"), "").trim();
+                    if (sourceText.codePointCount(0, sourceText.length()) < 120) {
+                        throw new IllegalStateException("网页没有足够的可读正文");
+                    }
+                    var fetchedTitle = Objects.toString(fetched.get("title"), candidateTitle).trim();
+                    if (!isRelevantSearchCandidate(query, fetchedTitle,
+                            sourceText.substring(0, Math.min(sourceText.length(), 8_000)))) {
+                        throw new IllegalStateException("网页正文与查找主题不匹配");
+                    }
+                    var title = safeFileName(fetchedTitle);
+                    var finalUrl = Objects.toString(fetched.get("final_url"), url);
+                    var contentHash = Objects.toString(fetched.get("content_hash"), "");
+                    var fetchedAt = Instant.now();
+                    var markdown = "# " + title + "\n\n"
+                            + "- 本次查找：" + query + "\n"
+                            + "- 原始地址：" + url + "\n"
+                            + "- 最终地址：" + finalUrl + "\n"
+                            + "- 抓取时间：" + fetchedAt + "\n"
+                            + "- 内容哈希：" + contentHash + "\n\n" + sourceText;
+                    var resource = knowledge.importBytes(projectId, title + "-网页快照.md", "text/markdown",
+                            markdown.getBytes(StandardCharsets.UTF_8));
+                    var refId = "web:" + resource.id();
+                    var location = Map.<String, Object>of("url", finalUrl, "fetchedAt", fetchedAt.toString(),
+                            "query", query);
+                    var ref = new LinkedHashMap<String, Object>();
+                    ref.put("id", refId);
+                    ref.put("resourceId", resource.id());
+                    ref.put("version", resource.currentVersion());
+                    ref.put("sourceName", title);
+                    ref.put("text", sourceText.substring(0, Math.min(sourceText.length(), 12_000)));
+                    ref.put("location", location);
+                    ref.put("contentHash", contentHash);
+                    adoptedRefs.add(Map.copyOf(ref));
+                    links.add(Map.of("title", title, "url", finalUrl, "resourceId", resource.id(),
+                            "contentHash", contentHash));
+                    snapshots.add(Map.of("resourceId", resource.id(), "version", resource.currentVersion(),
+                            "title", title, "url", finalUrl,
+                            "downloadUrl", "/api/files/" + resource.id() + "/download"));
+                    facts.recordExternalSource(runId, node.id(), resource.id(), resource.currentVersion(),
+                            finalUrl, contentHash);
+                } catch (RuntimeException exception) {
+                    rejected.add(Map.of("title", candidateTitle, "url", url,
+                            "reason", sanitize(exception.getMessage())));
+                }
+            }
+            if (adoptedRefs.isEmpty() && projectRefs.isEmpty()) {
+                throw new IllegalStateException(candidates.isEmpty()
+                        ? ("empty".equals(searchStatus)
+                            ? "联网搜索已完成，但没有找到匹配的候选资料，请调整查找内容"
+                            : "联网搜索没有返回可用候选资料")
+                        : "候选网页均未通过可读性与相关性检查：" + rejectedSummary(rejected));
+            }
+        }
+
+        for (var ref : projectRefs) {
+            if (adoptedRefs.size() >= limit) break;
+            adoptedRefs.add(ref);
+        }
+        var refIds = adoptedRefs.stream().map(ref -> Objects.toString(ref.get("id"), ""))
+                .filter(value -> !value.isBlank()).toList();
+        var output = new LinkedHashMap<String, Object>();
+        output.put("query", query);
+        output.put("queryCompacted", queryCompacted);
+        output.put("count", adoptedRefs.size());
+        output.put("webSearch", includeWeb);
+        output.put("links", List.copyOf(links));
+        output.put("refs", List.copyOf(adoptedRefs));
+        output.put("refIds", refIds);
+        output.put("sourceSnapshots", List.copyOf(snapshots));
+        output.put("rejectedCandidates", List.copyOf(rejected));
+        if (!webSearchError.isBlank()) output.put("webSearchError", webSearchError);
+        return Map.copyOf(output);
     }
 
-    private Map<String, Object> analyze(String runId, NodeDefinition node, Map<String, Object> config,
+    static String compactSearchTopic(String value) {
+        var normalized = Objects.toString(value, "").replaceAll("\\s+", " ").strip();
+        if (normalized.isBlank()) return normalized;
+        var codePoints = normalized.codePoints().toArray();
+        var sentenceEnd = -1;
+        for (var punctuation : List.of("。", "！", "？", "!", "?", "\n", "；", ";", "：", ":")) {
+            var index = normalized.indexOf(punctuation);
+            if (index >= 4 && (sentenceEnd < 0 || index < sentenceEnd)) sentenceEnd = index;
+        }
+        var candidate = sentenceEnd > 0 ? normalized.substring(0, sentenceEnd).strip()
+                : new String(codePoints, 0, Math.min(120, codePoints.length)).strip();
+        candidate = candidate
+                .replaceFirst("^(?:(?:新建|创建)(?:一个|个)?项目[，,、：:\\s]*)?", "")
+                .replaceFirst("^(?:请|麻烦|可以|能否|能不能)?(?:帮我|帮忙)?", "")
+                .replaceFirst("^(?:查找|搜索|检索|调研|研究|分析|了解|看看|总结|梳理)(?:一下|下)?[，,、：:\\s]*", "")
+                .replaceFirst("^(?:最近|近期|当前)(?:发生的|的)?", "")
+                .strip();
+        for (var boundary : List.of("的时间线", "当前舆论", "舆论形势", "并生成", "并输出", "做成", "生成一份", "输出一份")) {
+            var index = candidate.indexOf(boundary);
+            if (index >= 4) candidate = candidate.substring(0, index).strip();
+        }
+        if (candidate.isBlank()) candidate = normalized;
+        var candidatePoints = candidate.codePoints().toArray();
+        return candidatePoints.length <= 160 ? candidate
+                : new String(candidatePoints, 0, 160).stripTrailing();
+    }
+
+    private static String rejectedSummary(List<Map<String, Object>> rejected) {
+        if (rejected.isEmpty()) return "搜索服务没有给出可验证的具体原因";
+        return rejected.stream().limit(3).map(item -> {
+            var title = Objects.toString(item.get("title"), "未命名网页");
+            var reason = Objects.toString(item.get("reason"), "无法读取");
+            return title + "（" + reason + "）";
+        }).reduce((left, right) -> left + "；" + right).orElse("候选网页不可用");
+    }
+
+    static boolean isRelevantSearchCandidate(String query, String title, String snippet) {
+        var haystack = (Objects.toString(title, "") + " " + Objects.toString(snippet, ""))
+                .toLowerCase(Locale.ROOT).replaceAll("\\s+", "");
+        var topic = Objects.toString(query, "").toLowerCase(Locale.ROOT)
+                .replaceAll("请|帮我|分析|调研|研究|最近|近期|当前|相关|资料|情况|事件|总结|整理", "")
+                .replaceAll("[^\\p{IsHan}a-z0-9]", "");
+        var latinTokens = java.util.regex.Pattern.compile("[a-z0-9]{3,}").matcher(topic);
+        while (latinTokens.find()) if (haystack.contains(latinTokens.group())) return true;
+        var han = topic.replaceAll("[^\\p{IsHan}]", "");
+        if (han.length() < 2) return true;
+        for (var index = 0; index < han.length() - 1; index++) {
+            var token = han.substring(index, index + 2);
+            if (haystack.contains(token)) return true;
+        }
+        return false;
+    }
+
+    private record ResearchCandidate(String url, String title, String snippet) { }
+
+    private record ResearchFetch(ResearchCandidate candidate, Map<String, Object> result, String error) { }
+
+    private Map<String, Object> mystery(String runId, NodeDefinition node, Map<String, Object> config,
+                                        Map<String, Map<String, Object>> upstream,
+                                        int startProgress, int endProgress) {
+        var direct = optional(config, "content", "").strip();
+        var connected = contexts.collectText(upstream).strip();
+        var source = new StringBuilder();
+        if (!direct.isBlank()) source.append("【用户丢入的内容】\n").append(direct);
+        if (!connected.isBlank()) {
+            if (!source.isEmpty()) source.append("\n\n");
+            source.append("【连接到节点的内容】\n").append(connected);
+        }
+        var span = Math.max(1, endProgress - startProgress);
+        var result = mysteries.transformStreaming(source.toString(), optional(config, "hint", ""),
+                optional(config, "target", "AUTO"), event -> {
+                    var type = Objects.toString(event.get("type"), "status");
+                    var modelProgress = event.get("progress") instanceof Number number ? number.intValue() : 50;
+                    var progress = startProgress + Math.max(1, (int) Math.floor(span * modelProgress / 100.0));
+                    if (!"complete".equals(type)) {
+                        var message = "content".equals(type) ? "正在把内容变成可继续使用的结果"
+                                : Objects.toString(event.get("message"), "正在理解丢入的内容");
+                        events.publish(runId, "MODEL_STATUS", node.id(), node.name(), "RUNNING", progress, message, "");
+                    }
+                });
+        var output = new LinkedHashMap<>(result);
+        output.put("refs", contexts.sourceRefs(upstream));
+        output.put("refIds", contexts.refIds(upstream));
+        return Map.copyOf(output);
+    }
+
+    private Map<String, Object> analyze(String projectId, String runId, NodeDefinition node, Map<String, Object> config,
                                         Map<String, Map<String, Object>> upstream,
                                         int startProgress, int endProgress) {
         var prompt = text(config, "prompt");
         var sourceText = contexts.collectText(upstream);
         var refIds = contexts.refIds(upstream);
         if (sourceText.isBlank()) throw new IllegalStateException("智能分析没有可读取的上游资料，请先连接资料或数据节点");
+        var skillId = optional(config, "analysisSkillId", "");
+        var skill = skillId.isBlank() ? null : analysisSkills.getForProject(projectId, skillId);
         var span = Math.max(1, endProgress - startProgress);
-        var result = worker.generateContentStreaming("ANALYSIS", prompt, sourceText, event -> {
+        if (skill != null) {
+            events.publish(runId, "MODEL_STATUS", node.id(), node.name(), "RUNNING", startProgress + 1,
+                    "正在应用分析 Skill：" + skill.name(), "");
+        }
+        java.util.function.Consumer<Map<String, Object>> streamEvent = event -> {
             var type = Objects.toString(event.get("type"), "status");
             var modelProgress = event.get("progress") instanceof Number number ? number.intValue() : 50;
             var progress = startProgress + Math.max(1, (int) Math.floor(span * modelProgress / 100.0));
@@ -601,15 +933,26 @@ public class WorkflowRunService {
                 events.publish(runId, "MODEL_STATUS", node.id(), node.name(), "RUNNING", progress,
                         Objects.toString(event.get("message"), "正在分析"), "");
             }
-        });
+        };
+        var result = skill == null
+                ? worker.generateContentStreaming("ANALYSIS", prompt, sourceText, streamEvent)
+                : worker.generateContentStreaming("ANALYSIS", prompt, sourceText, skill.name(),
+                        skill.instructions(), streamEvent);
         var analysis = Objects.toString(result.get("content"), "");
         var mode = Objects.toString(result.get("mode"), "");
         if (mode.contains("fallback")) throw new IllegalStateException("大模型当前不可用，智能分析未执行");
         var points = Arrays.stream(analysis.split("\\R"))
                 .map(String::trim).filter(line -> !line.isBlank()).toList();
         if (points.isEmpty() && !analysis.isBlank()) points = List.of(analysis);
-        return Map.of("analysis", analysis, "points", points, "refIds", refIds, "refs", contexts.sourceRefs(upstream),
-                "analysisMode", mode);
+        var output = new LinkedHashMap<String, Object>();
+        output.put("analysis", analysis);
+        output.put("points", points);
+        output.put("refIds", refIds);
+        output.put("refs", contexts.sourceRefs(upstream));
+        output.put("analysisMode", mode);
+        if (skill != null) output.put("skill", Map.of("id", skill.id(), "name", skill.name(),
+                "contentHash", skill.contentHash(), "sourceName", skill.sourceName()));
+        return Map.copyOf(output);
     }
 
     @SuppressWarnings("unchecked")
@@ -763,7 +1106,7 @@ public class WorkflowRunService {
 
     private String activityType(NodeType type) {
         return switch (type) {
-            case AGENT_TASK, AI_ANALYSIS -> "PLAN";
+            case MYSTERY, AGENT_TASK, AI_ANALYSIS -> "PLAN";
             case DELIVERABLE, OUTPUT -> "ARTIFACT";
             case DATA_TRANSFORM, PROCESS, SPREADSHEET_TRANSFORM -> "TOOL_CALL";
             case REVIEW -> "MESSAGE";

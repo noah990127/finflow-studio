@@ -4,6 +4,8 @@ import com.finflow.studio.knowledge.KnowledgeModels.FileResourceResponse;
 import com.finflow.studio.knowledge.KnowledgeModels.RefResponse;
 import com.finflow.studio.preview.CsvPreviewService;
 import com.finflow.studio.preview.PreviewModels.CsvPreview;
+import com.finflow.studio.preview.PreviewModels.SpreadsheetPreview;
+import com.finflow.studio.preview.SpreadsheetPreviewService;
 import com.finflow.studio.worker.WorkerClient;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.http.HttpStatus;
@@ -21,11 +23,14 @@ public class KnowledgeController {
     private final KnowledgeService knowledge;
     private final WorkerClient worker;
     private final CsvPreviewService previews;
+    private final SpreadsheetPreviewService spreadsheetPreviews;
 
-    public KnowledgeController(KnowledgeService knowledge, WorkerClient worker, CsvPreviewService previews) {
+    public KnowledgeController(KnowledgeService knowledge, WorkerClient worker, CsvPreviewService previews,
+                               SpreadsheetPreviewService spreadsheetPreviews) {
         this.knowledge = knowledge;
         this.worker = worker;
         this.previews = previews;
+        this.spreadsheetPreviews = spreadsheetPreviews;
     }
 
     @PostMapping(value = "/projects/{projectId}/files", consumes = "multipart/form-data")
@@ -65,15 +70,34 @@ public class KnowledgeController {
         return previews.preview(knowledge.filePath(id, version), cursor, limit);
     }
 
+    @GetMapping("/files/{id}/spreadsheet-preview")
+    public SpreadsheetPreview previewSpreadsheet(@PathVariable String id,
+                                                 @RequestParam(required = false) Integer version,
+                                                 @RequestParam(required = false) String sheet,
+                                                 @RequestParam(required = false) String cursor,
+                                                 @RequestParam(defaultValue = "100") int limit) {
+        var resource = knowledge.get(id);
+        var name = resource.name().toLowerCase();
+        if (!(name.endsWith(".xlsx") || name.endsWith(".xlsm"))) {
+            throw new IllegalArgumentException("当前文件不是可分页查看的 Excel 工作簿");
+        }
+        return spreadsheetPreviews.preview(knowledge.filePath(id, version), sheet, cursor, limit);
+    }
+
     @GetMapping("/files/{id}/content")
     public void content(@PathVariable String id, @RequestParam(required = false) Integer version,
                         HttpServletResponse response) throws IOException {
         var resource = knowledge.get(id);
-        if (!(resource.name().toLowerCase().endsWith(".pdf") || "application/pdf".equals(resource.mediaType()))) {
-            throw new IllegalArgumentException("当前只有 PDF 使用原文内联预览");
+        var name = resource.name().toLowerCase(java.util.Locale.ROOT);
+        var contentType = name.endsWith(".png") ? "image/png"
+                : name.endsWith(".jpg") || name.endsWith(".jpeg") ? "image/jpeg"
+                : name.endsWith(".webp") ? "image/webp"
+                : name.endsWith(".pdf") || "application/pdf".equals(resource.mediaType()) ? "application/pdf" : null;
+        if (contentType == null) {
+            throw new IllegalArgumentException("当前文件不支持原文内联预览");
         }
         var path = knowledge.filePath(id, version);
-        response.setContentType("application/pdf");
+        response.setContentType(contentType);
         response.setHeader("X-Content-Type-Options", "nosniff");
         response.setHeader("Content-Length", Long.toString(Files.size(path)));
         response.setHeader("Content-Disposition", "inline; filename*=UTF-8''" +

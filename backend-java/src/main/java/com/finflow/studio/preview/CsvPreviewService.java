@@ -9,6 +9,8 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.DriverManager;
+import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
@@ -21,6 +23,9 @@ public class CsvPreviewService {
 
     public CsvPreview preview(Path path, String cursorValue, int requestedLimit) {
         var limit = Math.max(20, Math.min(requestedLimit, MAX_PAGE_SIZE));
+        if (path.getFileName().toString().toLowerCase().endsWith(".parquet")) {
+            return previewParquet(path, cursorValue, limit);
+        }
         var columns = readHeader(path);
         if (columns.isEmpty()) return new CsvPreview(List.of(), List.of(), 0, null, false);
         var cursor = decodeCursor(cursorValue, path);
@@ -48,6 +53,50 @@ public class CsvPreviewService {
             }
         } catch (IOException exception) {
             throw new IllegalArgumentException("CSV 文件无法读取，请检查文件编码和格式", exception);
+        }
+    }
+
+    private CsvPreview previewParquet(Path path, String cursorValue, int limit) {
+        var rowOffset = decodeRowOffset(cursorValue);
+        try (var connection = DriverManager.getConnection("jdbc:duckdb:");
+             var statement = connection.prepareStatement(
+                     "SELECT * FROM read_parquet(?) LIMIT ? OFFSET ?")) {
+            statement.setString(1, path.toAbsolutePath().toString());
+            statement.setInt(2, limit + 1);
+            statement.setLong(3, rowOffset);
+            try (var result = statement.executeQuery()) {
+                var metadata = result.getMetaData();
+                var columns = new ArrayList<String>(metadata.getColumnCount());
+                for (var index = 1; index <= metadata.getColumnCount(); index++) {
+                    columns.add(truncate(metadata.getColumnLabel(index)));
+                }
+                var rows = new ArrayList<List<String>>(limit);
+                var hasMore = false;
+                while (result.next()) {
+                    if (rows.size() == limit) { hasMore = true; break; }
+                    var row = new ArrayList<String>(columns.size());
+                    for (var index = 1; index <= columns.size(); index++) {
+                        row.add(truncate(result.getObject(index) == null ? "" : result.getObject(index).toString()));
+                    }
+                    rows.add(row);
+                }
+                var next = hasMore ? encodeCursor(0, rowOffset + rows.size()) : null;
+                return new CsvPreview(columns, rows, rowOffset, next, hasMore);
+            }
+        } catch (SQLException exception) {
+            throw new IllegalArgumentException("Parquet 文件无法读取，请检查文件是否完整", exception);
+        }
+    }
+
+    private long decodeRowOffset(String value) {
+        if (value == null || value.isBlank()) return 0;
+        try {
+            var decoded = new String(Base64.getUrlDecoder().decode(value), StandardCharsets.US_ASCII).split(":", -1);
+            var rowOffset = Long.parseLong(decoded[1]);
+            if (rowOffset < 0) throw new IllegalArgumentException();
+            return rowOffset;
+        } catch (Exception exception) {
+            throw new IllegalArgumentException("表格翻页位置已失效，请从第一页重新查看");
         }
     }
 

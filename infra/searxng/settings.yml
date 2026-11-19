@@ -1,0 +1,25 @@
+use_default_settings: true
+
+general:
+  debug: false
+  instance_name: "FinBTP Studio Search"
+
+search:
+  safe_search: 1
+  autocomplete: ""
+  formats:
+    - html
+    - json
+
+engines:
+  - name: bing
+    disabled: false
+
+server:
+  # The container replaces this value with SEARXNG_SECRET.
+  secret_key: "ultrasecretkey"
+  limiter: false
+  image_proxy: false
+
+ui:
+  static_use_hash: true

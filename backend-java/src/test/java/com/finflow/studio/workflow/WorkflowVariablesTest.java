@@ -48,11 +48,44 @@ class WorkflowVariablesTest {
         assertThat(contexts.sourceRefs(Map.of("analysis", output))).containsExactly(source);
         assertThat(contexts.referenceCatalog(Map.of("analysis", output))).contains("年报", "原始证据");
     }
+    @Test void publishesMysteryResultAsTextAndKeepsItsStructuredFields() {
+        var output = WorkflowVariables.publish(NodeType.MYSTERY, Map.of(
+                "content", "1. 确认输入\n2. 分析偏差\n3. 生成报告",
+                "detectedKind", "notes",
+                "understanding", "这是一项每月重复的偏差分析工作",
+                "inferredIntent", "把记录变成可复用流程",
+                "outputKind", "WORKFLOW_DRAFT",
+                "confidence", 0.86,
+                "assumptions", List.of("运行前需确认数据口径"),
+                "workSteps", List.of(Map.of("title", "确认输入")),
+                "suggestedNext", "连接数据提取节点"));
+
+        assertThat(output).containsEntry("output", "1. 确认输入\n2. 分析偏差\n3. 生成报告")
+                .containsEntry("outputKind", "WORKFLOW_DRAFT")
+                .containsEntry("confidence", 0.86)
+                .containsEntry("sources", List.of());
+        assertThat(WorkflowVariables.outputs(NodeType.MYSTERY)).extracting(WorkflowVariables.Field::name)
+                .contains("content", "understanding", "inferredIntent", "workSteps", "suggestedNext");
+    }
     @Test void validatesExplicitBindingsAndIgnoresNames() {
         var target = node("target", Map.of("inputSource", Map.of("nodeId", "source", "path", List.of("output"))));
         WorkflowVariables.validate(document(target), target);
         assertThat(WorkflowVariables.inputSource(target.config()).nodeId()).isEqualTo("source");
         assertThatThrownBy(() -> WorkflowVariables.inputSource(Map.of("inputSource", Map.of("nodeId", "source", "path", "output"))))
                 .hasMessageContaining("输入变量配置无效");
+    }
+    @Test void compactsLongResearchTopicsToTheBusinessSubject() {
+        var query = "请查找深圳福田今天下班后的文化活动。" + "补充背景".repeat(200)
+                + "重点保留活动时间、地点和报名方式。";
+
+        var compacted = WorkflowRunService.compactSearchTopic(query);
+
+        assertThat(compacted).isEqualTo("深圳福田今天下班后的文化活动");
+    }
+    @Test void extractsTheSubjectBeforeExpandedResearchInstructions() {
+        var query = "分析最近发生的尊界制动踏板断裂事件：基于可核验且成功读取的公开证据，"
+                + "按发布时间梳理事件时间线，并生成带引用的中文PPTX。";
+
+        assertThat(WorkflowRunService.compactSearchTopic(query)).isEqualTo("尊界制动踏板断裂事件");
     }
 }

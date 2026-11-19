@@ -134,10 +134,10 @@ public class DeliverableController {
         return deliverables.citations(id, version);
     }
 
-    @GetMapping("/deliverables/{id}/quality")
-    public Map<String, Object> quality(@PathVariable String id,
+    @GetMapping("/deliverables/{id}/validation")
+    public Map<String, Object> validation(@PathVariable String id,
                                        @RequestParam(required = false) Integer version) {
-        return deliverables.qualityReport(id, version);
+        return deliverables.validationReport(id, version);
     }
 
     @GetMapping("/deliverables/{id}/rendered-preview")

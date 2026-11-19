@@ -24,20 +24,23 @@ First choose and load exactly one authoring skill:
 
 Then use:
 
-`search_tools -> describe_tool -> create_deliverable/open_deliverable/edit_deliverable/export_deliverable`.
+`search_tools -> describe_tool -> workflow.open/prepare/edit/run -> deliverable.open/edit/export`.
 
-Before generation, use analysis/research tools to obtain evidence. Keep final result separate from execution trace.
+Before generation, use analysis/research tools to obtain evidence. Configure the selected format as a workflow
+deliverable node and generate it by running the workflow. Do not call `deliverable.create` directly from the
+Agent. Keep the final result separate from the execution trace.
 
 ## Steps And Checkpoints
 1. Infer format and audience from the user's goal unless ambiguity changes the business outcome.
 2. Build one Evidence Pack. Separate facts, calculations, inferences, recommendations, limitations, and verified sources.
-3. Load the format skill and create its strict intermediate specification. Do not send one generic paragraph list to every renderer.
-4. Attach citations to claims, tables, charts, pages, or nodes before rendering.
-5. Render with the format-specific template engine.
-6. Reopen and validate the real file. Check format integrity, content, layout, provenance, and accessibility.
-7. Use the quality report to repair only identified problems. Stop after two targeted repair rounds.
-8. Generate the artifact only after write confirmation when required.
-9. Return the artifact id/link and a short quality summary. Stop immediately after verified completion.
+3. Reuse a matching READY workflow or prepare one with the evidence inputs, analysis step, and requested deliverable node.
+4. Load the format skill and create its strict intermediate specification. Do not send one generic paragraph list to every renderer.
+5. Attach citations to claims, tables, charts, pages, or nodes before rendering.
+6. Run the saved workflow so the format-specific renderer produces the artifact.
+7. Validate the real file. Check format integrity, content, layout, provenance, and accessibility.
+8. Use the quality report to repair only identified problems. Stop after two targeted repair rounds.
+9. Generate the artifact only after write confirmation when required.
+10. Return the workflow run and artifact id/link with a short quality summary. Stop immediately after verified completion.
 
 ## Citation And Provenance
 Deliverables must include a citation map and source artifact list. A claim is not cited merely because a reference page exists; the claim or its containing block must point to the source. Preserve resource id, version, location, content hash, and verification time. Do not cite failed or unverified URLs.
@@ -49,7 +52,7 @@ Classify failures before acting. Fix schema errors by correcting fields, evidenc
 Creating, editing, overwriting, deleting, or exporting deliverables requires confirmation according to tool policy.
 
 ## Output Contract
-Return artifact id, format, title, version, citation count, provenance summary, quality score, validation status, repaired issues, and any remaining review items.
+Return artifact id, format, title, version, citation count, provenance summary, validation status, repaired issues, and any remaining review items.
 
 ## Example Tasks
 - Generate a one-page PPT from this analysis.

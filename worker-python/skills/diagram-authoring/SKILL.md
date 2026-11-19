@@ -29,7 +29,7 @@ Fix syntax from parser feedback. If the graph is too dense, split it; do not sim
 Follow the active Auto or Approval mode. Parsing and preview are read-only; saving, replacing, or exporting the diagram follows tool policy.
 
 ## Output Contract
-Return Mermaid source, diagram type, node/edge counts, parser status, render status, accessibility status, and quality score.
+Return Mermaid source, diagram type, node/edge counts, parser status, render status, accessibility status.
 
 ## Example Tasks
 - Draw the approval flow with all rejection paths.

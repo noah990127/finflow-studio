@@ -7,6 +7,8 @@ import com.finflow.studio.deliverable.DeliverableService;
 import com.finflow.studio.project.ProjectService;
 import com.finflow.studio.worker.WorkerClient;
 import com.finflow.studio.workspace.WorkspaceResourceService;
+import com.finflow.studio.workflow.WorkflowDefinitionService;
+import com.finflow.studio.workflow.WorkflowModels.SaveRequest;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -42,6 +44,7 @@ class AssistantWebDatasetFlowTest {
     @Autowired WorkspaceResourceService workspace;
     @Autowired KnowledgeService knowledge;
     @Autowired DeliverableService deliverables;
+    @Autowired WorkflowDefinitionService workflows;
     @Autowired ObjectMapper objectMapper;
 
     @Test
@@ -97,7 +100,7 @@ class AssistantWebDatasetFlowTest {
                 .hasMessageContaining("验证失败，未加入工作区");
 
         var after = workspace.get(project.id());
-        assertThat(after.workflow().currentVersion()).isEqualTo(before.workflow().currentVersion());
+        assertThat(after.workflows()).hasSameSizeAs(before.workflows());
         assertThat(after.resources()).noneMatch(item -> "失效来源".equals(item.name()));
     }
 
@@ -119,9 +122,62 @@ class AssistantWebDatasetFlowTest {
         var citations = (List<Map<String, Object>>) effects.get("knowledgeCitations");
         assertThat(citations).singleElement().satisfies(citation -> {
             assertThat(citation.get("resourceId")).isEqualTo(effects.get("resourceId"));
-            assertThat(citation.get("version")).isEqualTo(2);
+            assertThat(citation.get("version")).isEqualTo(1);
             assertThat(citation.get("contentHash")).isEqualTo("sha256:test-source");
         });
+    }
+
+    @Test
+    void verifiesSeveralIndependentSourcesInOneToolCall() {
+        var project = projects.create("批量来源验证", "减少模型与平台往返");
+        var effects = new LinkedHashMap<String, Object>();
+
+        var result = gateway.execute(step("source.add_verified", Map.of(
+                "project_id", project.id(),
+                "sources", List.of(
+                        Map.of("url", "https://example.test/one.json", "name", "来源一"),
+                        Map.of("url", "https://example.test/two.json", "name", "来源二"),
+                        Map.of("url", "https://example.test/unavailable", "name", "失效来源")))), effects);
+
+        assertThat(result).contains("添加 2 个").contains("1 个候选无法读取");
+        assertThat((List<?>) effects.get("verifiedSources")).hasSize(2);
+        assertThat((List<?>) effects.get("snapshotResourceIds")).hasSize(2);
+        assertThat(workspace.get(project.id()).resources())
+                .filteredOn(item -> "KNOWLEDGE_FILE".equals(item.resourceType()))
+                .extracting(item -> item.name())
+                .containsExactlyInAnyOrder("来源一-网页快照.md", "来源二-网页快照.md");
+    }
+
+    @Test
+    void repairsFileInputsAndGeneratesAVisibleDataTransformPlan() {
+        var project = projects.create("数据流程修复", "模型不需要判断内部资源类型");
+        var detail = knowledge.importBytes(project.id(), "经营明细.csv", "text/csv",
+                "产品编码,收入,成本\nP001,100,60\n".getBytes(StandardCharsets.UTF_8));
+        var dimension = knowledge.importBytes(project.id(), "产品维表.csv", "text/csv",
+                "产品编码,产品名称\nP001,云服务\n".getBytes(StandardCharsets.UTF_8));
+        var workflow = workflows.create(project.id(), new SaveRequest("数据准备", "", List.of(), List.of()));
+        var patch = Map.of(
+                "nodes", List.of(
+                        Map.of("id", "detail", "type", "DATASET_INPUT", "name", "经营明细",
+                                "config", Map.of("extractJobId", detail.id())),
+                        Map.of("id", "dimension", "type", "DATASET_INPUT", "name", "产品维表",
+                                "config", Map.of("extractJobId", dimension.id())),
+                        Map.of("id", "transform", "type", "DATA_TRANSFORM", "name", "补充产品信息",
+                                "config", Map.of("requirements", "按产品编码补充产品名称并计算毛利",
+                                        "outputName", "加工结果.parquet"))),
+                "edges", List.of(Map.of("source", "detail", "target", "transform"),
+                        Map.of("source", "dimension", "target", "transform")));
+
+        gateway.execute(step("workflow.edit", Map.of("workflow_id", workflow.id(), "patch", patch,
+                "expected_version", workflow.currentVersion())), new LinkedHashMap<>());
+
+        var saved = workflows.get(workflow.id());
+        assertThat(saved.status()).isEqualTo("READY");
+        assertThat(saved.nodes()).filteredOn(node -> node.id().equals("detail")).singleElement()
+                .satisfies(node -> assertThat(node.type().name()).isEqualTo("FILE_INPUT"));
+        assertThat(saved.nodes()).filteredOn(node -> node.id().equals("transform")).singleElement()
+                .satisfies(node -> assertThat(node.config())
+                        .containsKeys("transformPlan", "script", "inputAliases", "scriptSummary"));
     }
 
     @Test
@@ -142,7 +198,7 @@ class AssistantWebDatasetFlowTest {
         var outputId = outputs.getLast().get("id").toString();
         assertThat(deliverables.citations(outputId, null)).singleElement().satisfies(citation -> {
             assertThat(citation.get("resource_id")).isEqualTo(sourceId);
-            assertThat(citation.get("version")).isEqualTo(2);
+            assertThat(citation.get("version")).isEqualTo(1);
             assertThat(citation.get("content_hash")).isEqualTo("sha256:test-source");
         });
     }
@@ -251,6 +307,26 @@ class AssistantWebDatasetFlowTest {
                 }
 
                 @Override
+                public Map<String, Object> profileData(Path path, String originalName, String sheetName) {
+                    return Map.of("name", originalName, "estimated_rows", 1,
+                            "columns", List.of(Map.of("name", "产品编码", "data_type", "VARCHAR", "nullable", false)));
+                }
+
+                @Override
+                public Map<String, Object> generateDataTransform(Object request) {
+                    return Map.of(
+                            "plan", Map.of("version", "1.0", "goal", "补充产品信息",
+                                    "steps", List.of(Map.of("id", "result", "type", "join",
+                                            "left", "data_1", "right", "data_2",
+                                            "keys", List.of(Map.of("left", "产品编码", "right", "产品编码")),
+                                            "expected_cardinality", "MANY_TO_ONE"))),
+                            "script", "SELECT data_1.* FROM data_1 LEFT JOIN data_2 USING (产品编码)",
+                            "summary", "按产品编码补充维度",
+                            "assumptions", List.of(), "quality_rules", List.of("检查维表编码唯一性"),
+                            "warnings", List.of());
+                }
+
+                @Override
                 public Map<String, Object> generateContent(String format, String requirements, String sourceText) {
                     return Map.of("content", "<h1>公开指标分析</h1><p>数据来自已核验的月度公开指标。</p>");
                 }
@@ -280,14 +356,27 @@ class AssistantWebDatasetFlowTest {
                 }
 
                 @Override
+                public Map<String, Object> sampleDataTransform(List<DataTransformInput> inputs,
+                                                               String metadataJson, String script, String planJson) {
+                    return sampleDataTransform(inputs, metadataJson, script);
+                }
+
+                @Override
                 public void runDataTransform(List<DataTransformInput> inputs, String metadataJson,
                                              String script, Path target) {
                     try (var output = new ZipOutputStream(Files.newOutputStream(target))) {
                         writeEntry(output, "result.csv", "period,value\n2026-01,12.5\n2026-02,13.2\n");
                         writeEntry(output, "quality.json", "{\"valid\":true,\"rowCount\":2}");
+                        writeEntry(output, "manifest.json", "{\"version\":\"1.0\"}");
                     } catch (IOException exception) {
                         throw new IllegalStateException(exception);
                     }
+                }
+
+                @Override
+                public void runDataTransform(List<DataTransformInput> inputs, String metadataJson,
+                                             String script, String planJson, String outputFormat, Path target) {
+                    runDataTransform(inputs, metadataJson, script, target);
                 }
 
                 private void writeEntry(ZipOutputStream output, String name, String content) throws IOException {

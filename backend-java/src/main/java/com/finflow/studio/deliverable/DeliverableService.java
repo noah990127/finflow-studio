@@ -52,7 +52,7 @@ public class DeliverableService {
         var payload = buildPayload(request);
         var generated = worker.generateDeliverableArtifact(format, payload);
         var bytes = generated.content();
-        payload.put("quality_report", generated.quality());
+        payload.put("validation_report", generated.quality());
         var newResource = request.resourceId() == null || request.resourceId().isBlank();
         var resourceId = newResource ? UUID.randomUUID().toString() : request.resourceId();
         var now = Instant.now();
@@ -65,7 +65,7 @@ public class DeliverableService {
                     """).param("id", resourceId).param("projectId", request.projectId()).param("name", request.title())
                     .param("format", format).param("now", now).update();
         } else {
-            var row = jdbc.sql("select project_id, current_version, format from deliverable_resource where id = :id")
+            var row = jdbc.sql("select project_id, current_version, format from deliverable_resource where id = :id for update")
                     .param("id", resourceId).query((rs, rowNum) -> Map.of("projectId", rs.getString("project_id"),
                             "version", rs.getInt("current_version"), "format", rs.getString("format"))).optional()
                     .orElseThrow(() -> new IllegalArgumentException("输出文件不存在"));
@@ -110,6 +110,8 @@ public class DeliverableService {
                     """).param("id", resolvedResourceId).param("projectId", projectId).param("name", title.trim())
                     .param("format", format).param("now", now).update();
         } else {
+            jdbc.sql("select current_version from deliverable_resource where id = :id for update")
+                    .param("id", resolvedResourceId).query(Integer.class).single();
             var current = get(resolvedResourceId);
             if (!projectId.equals(current.projectId()) || !format.equals(current.format())) {
                 throw new IllegalArgumentException("输出文件不属于当前项目或格式不一致");
@@ -176,8 +178,11 @@ public class DeliverableService {
 
     @Transactional
     public Response createEditedVersion(String id, int expectedVersion, byte[] bytes) {
-        if (bytes == null || bytes.length == 0) throw new IllegalArgumentException("编辑结果为空");
         var current = get(id);
+        if (bytes == null || (bytes.length == 0 && !"MARKDOWN".equalsIgnoreCase(current.format()))) throw new IllegalArgumentException("编辑结果为空");
+        var lockedVersion = jdbc.sql("select current_version from deliverable_resource where id = :id for update")
+                .param("id", id).query(Integer.class).single();
+        if (lockedVersion != expectedVersion) throw new IllegalStateException("输出件已有更新版本，请重新打开后编辑");
         if (current.currentVersion() != expectedVersion) throw new IllegalStateException("输出件已有更新版本，请重新打开后编辑");
         var sourceSpec = jdbc.sql("select source_spec_json from deliverable_version where resource_id = :id and version_number = :version")
                 .param("id", id).param("version", expectedVersion).query(String.class).single();
@@ -261,19 +266,63 @@ public class DeliverableService {
         return List.copyOf(result.values());
     }
 
-    public Map<String, Object> qualityReport(String id, Integer version) {
+    public Map<String, Object> workflowSource(String id) {
+        var deliverable = get(id);
+        var specification = latestSpecification(id, null);
+        var refs = citations(id, null);
+        var result = new LinkedHashMap<String, Object>();
+        result.put("deliverableId", deliverable.id());
+        result.put("name", deliverable.name());
+        result.put("format", deliverable.format());
+        result.put("version", deliverable.currentVersion());
+        result.put("sourceKind", "DELIVERABLE");
+        result.put("downloadUrl", "/api/deliverables/" + deliverable.id() + "/download");
+        result.put("text", sourceText(specification));
+        result.put("refs", refs);
+        result.put("refIds", refs.stream().map(ref -> Objects.toString(ref.get("id"), ""))
+                .filter(value -> !value.isBlank()).toList());
+        return Map.copyOf(result);
+    }
+
+    public Map<String, Object> validationReport(String id, Integer version) {
         get(id);
+        var specification = latestSpecification(id, version);
+        if (!(specification.get("validation_report") instanceof Map<?, ?> raw)) return Map.of();
+        var report = new LinkedHashMap<String, Object>();
+        raw.forEach((key, value) -> report.put(Objects.toString(key), value));
+        return Map.copyOf(report);
+    }
+
+    private Map<String, Object> latestSpecification(String id, Integer version) {
         var sql = version == null
                 ? "select v.source_spec_json from deliverable_resource r join deliverable_version v on v.resource_id = r.id and v.version_number = r.current_version where r.id = :id"
                 : "select source_spec_json from deliverable_version where resource_id = :id and version_number = :version";
         var query = jdbc.sql(sql).param("id", id);
         if (version != null) query.param("version", version);
-        var specification = readMap(query.query(String.class).optional()
+        return readMap(query.query(String.class).optional()
                 .orElseThrow(() -> new IllegalArgumentException("输出版本不存在")));
-        if (!(specification.get("quality_report") instanceof Map<?, ?> raw)) return Map.of();
-        var report = new LinkedHashMap<String, Object>();
-        raw.forEach((key, value) -> report.put(Objects.toString(key), value));
-        return Map.copyOf(report);
+    }
+
+    static String sourceText(Map<String, Object> specification) {
+        var parts = new ArrayList<String>();
+        appendText(parts, specification.get("title"));
+        appendText(parts, specification.get("subtitle"));
+        for (var sectionValue : listValue(specification.get("sections"))) {
+            if (!(sectionValue instanceof Map<?, ?> section)) continue;
+            appendText(parts, section.get("heading"));
+            for (var paragraph : listValue(section.get("paragraphs"))) appendText(parts, paragraph);
+            for (var bullet : listValue(section.get("bullets"))) appendText(parts, bullet);
+        }
+        return String.join("\n\n", parts);
+    }
+
+    private static void appendText(List<String> parts, Object value) {
+        var text = Objects.toString(value, "").trim();
+        if (!text.isBlank()) parts.add(text);
+    }
+
+    private static List<?> listValue(Object value) {
+        return value instanceof List<?> items ? items : List.of();
     }
 
     private Map<String, Object> buildPayload(CreateRequest request) {
@@ -310,15 +359,27 @@ public class DeliverableService {
                 refs.add(ref);
             }
             suppliedCitations.values().forEach(citation -> refs.add(citationPayload(citation)));
-            sections.add(Map.of("heading", section.heading(),
-                    "paragraphs", section.paragraphs() == null ? List.of() : section.paragraphs(),
-                    "bullets", section.bullets() == null ? List.of() : section.bullets(), "refs", refs));
+            var page = new LinkedHashMap<String, Object>();
+            page.put("heading", section.heading());
+            page.put("paragraphs", section.paragraphs() == null ? List.of() : section.paragraphs());
+            page.put("bullets", section.bullets() == null ? List.of() : section.bullets());
+            page.put("refs", refs);
+            if (section.chapter() != null) page.put("chapter", section.chapter());
+            if (section.coreMessage() != null) page.put("core_message", section.coreMessage());
+            if (section.layout() != null) page.put("layout", section.layout());
+            if (section.visual() != null) page.put("visual", section.visual());
+            if (section.chart() != null) page.put("chart", section.chart());
+            sections.add(page);
         }
         var payload = new LinkedHashMap<String, Object>();
         payload.put("title", request.title());
         payload.put("subtitle", request.subtitle() == null ? "" : request.subtitle());
         payload.put("theme", "blue-white");
         payload.put("sections", sections);
+        var planMode = request.planMode() == null ? "auto" : request.planMode();
+        if (!List.of("auto", "fixed").contains(planMode)) throw new IllegalArgumentException("不支持的文档规划模式");
+        payload.put("plan_mode", planMode);
+        if (request.presentationBrief() != null) payload.put("presentation_brief", request.presentationBrief());
         payload.put("include_citations", request.includeCitations());
         payload.put("citation_style", normalizeCitationStyle(request.citationStyle()));
         if (request.pptSkill() != null && !request.pptSkill().isBlank()) {
@@ -350,8 +411,9 @@ public class DeliverableService {
         return style;
     }
 
-    private boolean formatSupportsSkill(String format, String skill) {
-        return ("pptx".equalsIgnoreCase(format) && "guizang-huawei-style-c".equals(skill)) ||
+    public static boolean formatSupportsSkill(String format, String skill) {
+        return ("pptx".equalsIgnoreCase(format) && List.of(
+                    "studio-professional-native", "guizang-huawei-style-c", "presenton-executive-v1", "blue-professional-v2").contains(skill)) ||
                 ("html_slides".equalsIgnoreCase(format) && "frontend-slides".equals(skill));
     }
 

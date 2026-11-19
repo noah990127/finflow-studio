@@ -45,6 +45,20 @@ class WorkflowTextAssemblyTest {
     }
 
     @Test
+    void dataTransformSampleIsPassedToAnalysisInsteadOfBeingHiddenInParquet() {
+        var output = Map.<String, Object>of(
+                "fileId", "generated-parquet",
+                "sampleReport", Map.of(
+                        "columns", List.of(Map.of("name", "region_name"), Map.of("name", "revenue_variance")),
+                        "rows", List.of(Map.of("region_name", "华南", "revenue_variance", -120000))),
+                "refs", List.of(Map.of("text", "原始输入不应遮住加工结果")));
+
+        assertThat(contexts.collectText(Map.of("transform", output)))
+                .contains("数据加工结果样例（由工作流实际计算）", "region_name | revenue_variance", "华南 | -120000")
+                .doesNotContain("原始输入不应遮住加工结果");
+    }
+
+    @Test
     void parsesModelSelectedDeliverablePlanWithoutMarkdownWrapper() {
         var plan = deliverables.parsePlan("""
                 ```json
@@ -123,8 +137,39 @@ class WorkflowTextAssemblyTest {
         assertThat(request.getValue().title()).isEqualTo("模型标题");
         assertThat(request.getValue().format()).isEqualTo("PPTX");
         assertThat(request.getValue().includeCitations()).isFalse();
-        assertThat(request.getValue().pptSkill()).isEmpty();
+        assertThat(request.getValue().pptSkill()).isEqualTo("studio-professional-native");
         assertThat(result).containsEntry("planningMode", "llm");
+    }
+
+    @Test
+    void modelCapacityFallbackStillCreatesAValidatedConservativeArtifact() {
+        var worker = mock(WorkerClient.class);
+        var artifacts = mock(DeliverableService.class);
+        var events = mock(WorkflowRunEventService.class);
+        var service = new WorkflowDeliverableService(worker, artifacts, events, new ObjectMapper(), contexts);
+        when(worker.generateContent(eq("DELIVERABLE_PLAN"), anyString(), anyString())).thenReturn(Map.of(
+                "mode", "llm", "content", """
+                {"format":"PPTX","title":"福田今晚活动指南","subtitle":"保守版本","heading":"出行建议",
+                 "include_citations":true,"citation_style":"IEEE","ppt_skill":""}
+                """));
+        when(worker.generateContentStreaming(eq("PPTX"), anyString(), anyString(), any()))
+                .thenReturn(Map.of("mode", "local-extractive-fallback", "content", """
+                {"slides":[{"title":"今晚优先选择室内活动","summary":"开放时间仍需出发前复核", "bullets":["查看官方通知"],"chart":null}]}
+                """));
+        when(artifacts.create(any())).thenReturn(new DeliverableModels.Response(
+                "artifact", "project", "福田今晚活动指南", "PPTX", 1, "READY", 100, "hash", null, null));
+        var config = Map.<String, Object>of("generationPrompt", "根据现有资料生成PPT", "format", "PPTX");
+        var node = new WorkflowModels.NodeDefinition("output", WorkflowModels.NodeType.DELIVERABLE,
+                "生成成果", 0, 0, config);
+
+        var result = service.create("project", "run", node, config,
+                Map.of("analysis", Map.of("analysis", "已核验分析与引用")), 10, 90);
+
+        verify(artifacts).create(any());
+        verify(events).publish(eq("run"), eq("MODEL_STATUS"), eq("output"), eq("生成成果"), eq("RUNNING"),
+                anyInt(), contains("保守版本"), eq(""));
+        assertThat(result).containsEntry("analysisMode", "local-extractive-fallback")
+                .containsEntry("degradedGeneration", true);
     }
 
     @Test

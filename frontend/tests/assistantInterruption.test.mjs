@@ -17,6 +17,14 @@ globalThis.EventSource = class {
   close() {}
 }
 globalThis.__assistantTestApi = {}
+globalThis.__projectsStore = {
+  current: { id: 'project' },
+  refreshCalls: [],
+  async refresh(projectId) {
+    this.refreshCalls.push(projectId)
+    this.current = { id: projectId }
+  },
+}
 
 const bundle = await build({
   stdin: {
@@ -28,17 +36,55 @@ const bundle = await build({
   bundle: true, write: false, platform: 'node', format: 'esm',
   plugins: [{ name: 'mock-api', setup(builder) {
     builder.onLoad({filter: /src\/api\/client\.ts$/}, () => ({ contents: 'export const api = globalThis.__assistantTestApi;', loader: 'js' }))
-    builder.onLoad({filter: /src\/stores\/projects\.ts$/}, () => ({ contents: 'export const useProjectsStore = () => ({refresh: async () => {}});', loader: 'js' }))
+    builder.onLoad({filter: /src\/stores\/projects\.ts$/}, () => ({ contents: 'export const useProjectsStore = () => globalThis.__projectsStore;', loader: 'js' }))
   }}],
 })
 const { createStore } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`)
 const api = globalThis.__assistantTestApi
+test('public replies stream as replaceable snapshots without finishing the run', () => {
+  const current = createStore()
+  current.sessionId = 'session'
+  current.streaming = true
+  for (const [index, message] of ['正在', '正在核对资料'].entries()) current.handleEvent({
+    sessionId:'session', eventSeq:index+1, type:'agent.message', createdAt:'2026-11-17T03:00:00Z',
+    payload:{message, activity_id:'reply-one', status:'running'},
+  })
+  assert.equal(current.timeline.length, 1)
+  assert.equal(current.timeline[0].detail, '正在核对资料')
+  assert.equal(current.streaming, true)
+  assert.equal(current.assistantMessage, '')
+  current.interrupted = true
+  current.handleEvent({sessionId:'session',eventSeq:3,type:'agent.message',payload:{message:'迟到内容'}})
+  assert.equal(current.timeline.length, 1)
+})
+test('a previous turn refresh cannot overwrite or stop the next turn', async () => {
+  const current = createStore()
+  current.sessionId = 'session'
+  current.activeRequestId = 'old'
+  const response = deferred()
+  api.getRun = () => response.promise
+  const pending = current.refreshRun('old-run')
+  current.activeRequestId = 'new'
+  current.streaming = true
+  current.busy = true
+  response.resolve({id:'old-run',status:'SUCCEEDED'})
+  await pending
+  assert.equal(current.run, null)
+  assert.equal(current.streaming, true)
+  assert.equal(current.busy, true)
+})
 function deferred() {
   let resolve
   const promise = new Promise(done => { resolve = done })
   return { promise, resolve }
 }
 function store() {
+  globalThis.__projectsStore.current = { id: 'project' }
+  globalThis.__projectsStore.refreshCalls = []
+  globalThis.__projectsStore.refresh = async function refresh(projectId) {
+    this.refreshCalls.push(projectId)
+    this.current = { id: projectId }
+  }
   const value = createStore()
   value.sessionId = 'session'
   value.sessionProjectId = 'project'
@@ -50,42 +96,31 @@ function store() {
   return value
 }
 
-test('a late session list from the previous project cannot replace the current project conversation', async () => {
+test('switching projects keeps the same global conversation and only updates its context', async () => {
   localValues.clear()
   const state = createStore()
-  const first = deferred()
-  const second = deferred()
-  api.listAssistantSessions = projectId => projectId === 'project-a' ? first.promise : second.promise
+  const globalSession = { id: 'session-global', projectId: 'project-a', title: '全局对话', status: 'ACTIVE', createdAt: '', updatedAt: '' }
+  api.listAssistantSessions = async () => [globalSession]
   api.listAssistantMessages = async () => []
   api.listAssistantEvents = async () => []
-  api.createSession = async projectId => ({ id: `new-${projectId}`, projectId, title: '新对话', status: 'ACTIVE', createdAt: '', updatedAt: '' })
 
-  const loadingA = state.ensureSession('project-a')
-  await Promise.resolve()
-  const loadingB = state.ensureSession('project-b')
-  second.resolve([{ id: 'session-b', projectId: 'project-b', title: 'B 对话', status: 'ACTIVE', createdAt: '', updatedAt: '' }])
-  await loadingB
-  first.resolve([{ id: 'session-a', projectId: 'project-a', title: 'A 对话', status: 'ACTIVE', createdAt: '', updatedAt: '' }])
-  await loadingA
+  await state.ensureSession('project-a')
+  await state.ensureSession('project-b')
 
   assert.equal(state.sessionProjectTarget, 'project-b')
   assert.equal(state.sessionProjectId, 'project-b')
-  assert.equal(state.sessionId, 'session-b')
-  assert.deepEqual(state.sessions.map(item => item.id), ['session-b'])
+  assert.equal(state.sessionId, 'session-global')
+  assert.deepEqual(state.sessions.map(item => item.id), ['session-global'])
 })
 
-test('each project restores its own latest conversation and creates new conversations in the active project', async () => {
+test('global history is shared while a new conversation starts with the visible project as context', async () => {
   localValues.clear()
-  localValues.set('finflow.assistant.session.project-a', 'session-a-old')
+  localValues.set('finflow.assistant.session.global', 'session-old')
   const state = createStore()
-  const sessions = {
-    'project-a': [
-      { id: 'session-a-new', projectId: 'project-a', title: 'A 新', status: 'ACTIVE', createdAt: '', updatedAt: '' },
-      { id: 'session-a-old', projectId: 'project-a', title: 'A 上次', status: 'ACTIVE', createdAt: '', updatedAt: '' },
-    ],
-    'project-b': [{ id: 'session-b', projectId: 'project-b', title: 'B 对话', status: 'ACTIVE', createdAt: '', updatedAt: '' }],
-  }
-  api.listAssistantSessions = async projectId => sessions[projectId]
+  api.listAssistantSessions = async () => [
+    { id: 'session-new', projectId: 'project-a', title: '新对话', status: 'ACTIVE', createdAt: '', updatedAt: '' },
+    { id: 'session-old', projectId: 'project-a', title: '上次对话', status: 'ACTIVE', createdAt: '', updatedAt: '' },
+  ]
   api.listAssistantMessages = async () => []
   api.listAssistantEvents = async () => []
   const createdIn = []
@@ -95,14 +130,12 @@ test('each project restores its own latest conversation and creates new conversa
   }
 
   await state.ensureSession('project-a')
-  assert.equal(state.sessionId, 'session-a-old')
+  assert.equal(state.sessionId, 'session-old')
   await state.ensureSession('project-b')
-  assert.equal(state.sessionId, 'session-b')
-  await state.ensureSession('project-a')
-  assert.equal(state.sessionId, 'session-a-old')
-  await state.createNewSession('project-a')
-  assert.equal(state.sessionId, 'created-project-a')
-  assert.deepEqual(createdIn, ['project-a'])
+  assert.equal(state.sessionId, 'session-old')
+  await state.createNewSession('project-b')
+  assert.equal(state.sessionId, 'created-project-b')
+  assert.deepEqual(createdIn, ['project-b'])
 })
 
 test('completed writes publish one workspace update and late writes still refresh after interruption', () => {
@@ -137,7 +170,20 @@ test('a terminal event refreshes the final run and releases the conversation imm
   assert.equal(state.progress, 100)
 })
 
-test('agent-created project navigation waits for the active run instead of canceling itself', () => {
+test('late activity and heartbeat events cannot move overall progress backwards', () => {
+  const state = store()
+
+  state.handleEvent({sessionId:'session', runId:'run', eventSeq:1, type:'agent.executing',
+    createdAt:new Date().toISOString(), payload:{message:'正在执行工作流', progress:78}})
+  state.handleEvent({sessionId:'session', runId:'run', eventSeq:2, type:'agent.thinking_summary',
+    createdAt:new Date().toISOString(), payload:{message:'正在选择下一步', progress:18}})
+  state.handleEvent({sessionId:'session', runId:'run', eventSeq:3, type:'agent.thinking_summary',
+    createdAt:new Date().toISOString(), payload:{message:'仍在处理'}})
+
+  assert.equal(state.progress, 78)
+})
+
+test('agent-created project opens immediately while the global conversation keeps running', async () => {
   const state = store()
   state.run = {id:'run', status:'RUNNING', planId:'plan'}
   const actions = []
@@ -145,10 +191,77 @@ test('agent-created project navigation waits for the active run instead of cance
 
   state.handleEvent({ sessionId:'session', runId:'run', eventSeq:1, type:'assistant.step.completed', createdAt:new Date().toISOString(),
     payload:{uiAction:{type:'OPEN_PROJECT', projectId:'created-project', refreshWorkspace:true}} })
+  await new Promise(resolve => setTimeout(resolve, 0))
 
-  assert.deepEqual(actions, [])
+  assert.deepEqual(actions, [{type:'OPEN_PROJECT', projectId:'created-project', refreshWorkspace:true}])
+  assert.deepEqual(globalThis.__projectsStore.refreshCalls, ['created-project'])
+  assert.equal(globalThis.__projectsStore.current.id, 'created-project')
   assert.equal(state.interrupted, false)
-  assert.match(state.timeline.at(-1).detail, /任务完成后/)
+  assert.match(state.timeline.at(-1).detail, /正在打开并继续处理/)
+
+  state.handleEvent({sessionId:'session', runId:'run', eventSeq:2, type:'assistant.step.completed', createdAt:new Date().toISOString(),
+    payload:{uiAction:{type:'REFRESH_WORKSPACE', projectId:'created-project', refreshWorkspace:true}}})
+  assert.deepEqual(actions.at(-1), {type:'REFRESH_WORKSPACE', projectId:'created-project', refreshWorkspace:true})
+  assert.equal(state.pendingWorkbenchAction, null)
+
+  state.handleEvent({sessionId:'session', runId:'run', eventSeq:3, type:'assistant.run.completed',
+    createdAt:new Date().toISOString(), payload:{message:'已完成', progress:100}})
+  assert.equal(actions.filter(action => action.type === 'OPEN_PROJECT').length, 1)
+})
+
+test('a stale project switch cannot publish over a newer agent-created project', async () => {
+  const state = store()
+  const oldRefresh = deferred()
+  const newRefresh = deferred()
+  const actions = []
+  state.publishWorkbenchAction = action => actions.push(action)
+  globalThis.__projectsStore.refresh = async function refresh(projectId) {
+    this.refreshCalls.push(projectId)
+    await (projectId === 'old-project' ? oldRefresh.promise : newRefresh.promise)
+    this.current = { id: projectId }
+  }
+
+  const oldSwitch = state.synchronizeAgentProject({type:'OPEN_PROJECT', projectId:'old-project', refreshWorkspace:true})
+  const newSwitch = state.synchronizeAgentProject({type:'OPEN_PROJECT', projectId:'new-project', refreshWorkspace:true})
+  newRefresh.resolve()
+  await newSwitch
+  oldRefresh.resolve()
+  await oldSwitch
+
+  assert.deepEqual(actions, [{type:'OPEN_PROJECT', projectId:'new-project', refreshWorkspace:true}])
+  assert.equal(state.activeTaskProjectId, 'new-project')
+  assert.equal(state.synchronizedAgentProjectId, 'new-project')
+})
+
+test('run polling restores a project switch when the live workspace event was missed', async () => {
+  const state = store()
+  state.run = {id:'run', status:'RUNNING', planId:'plan'}
+  state.activeRequestId = 'request'
+  state.refreshPlan = async () => {}
+  state.syncEvents = async () => {}
+  api.getRun = async () => ({id:'run', status:'SUCCEEDED', planId:'plan', resultSummary:'已完成',
+    result:{createdProjectId:'recovered-project'}})
+
+  await state.watchRun()
+
+  assert.equal(globalThis.__projectsStore.current.id, 'recovered-project')
+  assert.deepEqual(globalThis.__projectsStore.refreshCalls, ['recovered-project'])
+  assert.equal(state.sessionProjectTarget, 'recovered-project')
+})
+
+test('a later tool observation restores an immediately missed project-open event', async () => {
+  const state = store()
+  state.run = {id:'run', status:'RUNNING', planId:'plan'}
+  const actions = []
+  state.publishWorkbenchAction = action => actions.push(action)
+
+  state.handleEvent({sessionId:'session', runId:'run', eventSeq:2, type:'agent.observation', createdAt:new Date().toISOString(),
+    payload:{message:'已创建项目', output:{createdProjectId:'observed-project'}, provenance:{toolName:'project.create_workspace'}}})
+  await new Promise(resolve => setTimeout(resolve, 0))
+
+  assert.equal(globalThis.__projectsStore.current.id, 'observed-project')
+  assert.deepEqual(globalThis.__projectsStore.refreshCalls, ['observed-project'])
+  assert.deepEqual(actions, [{type:'OPEN_PROJECT', projectId:'observed-project', refreshWorkspace:true}])
 })
 
 test('SSE reconnect starts after restored history and cannot replay old workspace actions', () => {

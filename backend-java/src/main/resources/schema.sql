@@ -104,6 +104,20 @@ alter table assistant_run add column if not exists gateway_token varchar(128) no
 alter table assistant_run add column if not exists continuous_agent boolean not null default false;
 alter table assistant_run add column if not exists approval_count integer not null default 0;
 
+create table if not exists agent_work (
+    run_id varchar(64) primary key references assistant_run(id) on delete cascade,
+    stages_json text not null
+);
+create table if not exists artifact_review (
+    id varchar(64) primary key,
+    project_id varchar(64) not null references project(id),
+    resource_id varchar(64) not null,
+    resource_version integer not null,
+    reviewed_by varchar(100) not null,
+    reviewed_at timestamp with time zone not null
+);
+create index if not exists idx_artifact_review_project on artifact_review(project_id, reviewed_by);
+
 create table if not exists assistant_event (
     id varchar(64) primary key,
     session_id varchar(64) not null,
@@ -126,7 +140,7 @@ create table if not exists data_connection (
     source_type varchar(32) not null,
     jdbc_url varchar(2000) not null,
     username varchar(300) not null default '',
-    secret_ref varchar(300) not null default '',
+    secret_ref text not null default '',
     options_json text not null,
     status varchar(32) not null,
     last_test_message varchar(1000) not null default '',
@@ -135,6 +149,8 @@ create table if not exists data_connection (
     updated_at timestamp with time zone not null,
     constraint fk_connection_project foreign key (project_id) references project(id)
 );
+
+alter table data_connection alter column secret_ref type text;
 
 create table if not exists extract_job (
     id varchar(64) primary key,
@@ -213,6 +229,55 @@ create table if not exists knowledge_ref (
 
 create index if not exists idx_file_project_updated on file_resource(project_id, updated_at);
 create index if not exists idx_ref_project_resource on knowledge_ref(project_id, resource_id, version_number);
+
+create table if not exists pasted_import_provenance (
+    resource_id varchar(64) primary key,
+    project_id varchar(64) not null,
+    source_agent varchar(200) not null,
+    source_question varchar(2000) not null,
+    captured_at timestamp with time zone not null,
+    detected_format varchar(32) not null,
+    raw_hash varchar(128) not null,
+    raw_content text not null,
+    created_at timestamp with time zone not null,
+    constraint fk_pasted_import_resource foreign key (resource_id) references file_resource(id),
+    constraint fk_pasted_import_project foreign key (project_id) references project(id)
+);
+
+create index if not exists idx_pasted_import_project on pasted_import_provenance(project_id, created_at);
+
+create table if not exists spreadsheet_conversion_job (
+    resource_id varchar(64) primary key,
+    version_number integer not null,
+    status varchar(32) not null,
+    rows_per_file integer not null,
+    processed_rows bigint not null default 0,
+    part_count integer not null default 0,
+    error_message varchar(2000) not null default '',
+    started_at timestamp with time zone,
+    finished_at timestamp with time zone,
+    updated_at timestamp with time zone not null,
+    constraint fk_conversion_resource foreign key (resource_id) references file_resource(id)
+);
+
+create table if not exists spreadsheet_conversion_part (
+    id varchar(64) primary key,
+    resource_id varchar(64) not null,
+    version_number integer not null,
+    sequence_number integer not null,
+    sheet_name varchar(500) not null,
+    part_number integer not null,
+    row_count bigint not null,
+    name varchar(500) not null,
+    storage_path varchar(2000) not null,
+    size_bytes bigint not null,
+    checksum varchar(128) not null,
+    created_at timestamp with time zone not null,
+    constraint fk_conversion_part_resource foreign key (resource_id) references file_resource(id),
+    constraint uq_conversion_part_sequence unique (resource_id, version_number, sequence_number)
+);
+
+create index if not exists idx_conversion_part_resource on spreadsheet_conversion_part(resource_id, version_number);
 
 create table if not exists deliverable_resource (
     id varchar(64) primary key,
@@ -308,6 +373,22 @@ create index if not exists idx_workflow_project_updated on workflow_definition(p
 create index if not exists idx_workflow_next_run on workflow_definition(next_run_at);
 create index if not exists idx_workflow_run_definition on workflow_run(workflow_id, created_at);
 create index if not exists idx_workflow_node_run_run on workflow_node_run(run_id, step_order);
+
+create table if not exists analysis_skill (
+    id varchar(64) primary key,
+    project_id varchar(64) not null,
+    name varchar(200) not null,
+    description varchar(1000) not null default '',
+    instructions text not null,
+    source_name varchar(500) not null,
+    content_hash varchar(128) not null,
+    created_at timestamp with time zone not null,
+    updated_at timestamp with time zone not null,
+    constraint fk_analysis_skill_project foreign key (project_id) references project(id),
+    constraint uq_analysis_skill_name unique (project_id, name)
+);
+
+create index if not exists idx_analysis_skill_project on analysis_skill(project_id, updated_at);
 
 create table if not exists workflow_activity_run (
     id varchar(64) primary key,
@@ -435,4 +516,71 @@ create table if not exists assistant_model_settings (
     base_url varchar(2000) not null,
     model varchar(200) not null,
     encrypted_key text not null
+);
+
+create table if not exists fixed_work_definition (
+    id varchar(64) primary key,
+    project_id varchar(64) not null references project(id),
+    session_id varchar(64) not null references assistant_session(id),
+    source_run_id varchar(64) not null references assistant_run(id),
+    version integer not null,
+    definition_json text not null,
+    content_hash varchar(100) not null,
+    verified boolean not null default false,
+    created_at timestamp with time zone not null,
+    unique(session_id, version)
+);
+create table if not exists fixed_work_run (
+    id varchar(64) primary key,
+    definition_id varchar(64) not null references fixed_work_definition(id),
+    session_id varchar(64) not null references assistant_session(id),
+    request_id varchar(64) not null,
+    status varchar(32) not null,
+    snapshot_json text not null,
+    stages_json text not null,
+    error text not null default '',
+    created_at timestamp with time zone not null,
+    finished_at timestamp with time zone,
+    unique(session_id, request_id)
+);
+
+create table if not exists agent_work_title (
+    project_id varchar(64) not null references project(id) on delete cascade,
+    session_id varchar(64) not null references assistant_session(id) on delete cascade,
+    title varchar(160) not null,
+    primary key (project_id, session_id)
+);
+
+create table if not exists browser_user_grant (
+    id varchar(64) primary key,
+    owner_id varchar(160) not null,
+    kind varchar(32) not null,
+    scope_key varchar(100) not null,
+    label varchar(1000) not null,
+    status varchar(32) not null,
+    created_at timestamp with time zone not null,
+    expires_at timestamp with time zone not null
+);
+create index if not exists idx_browser_grant_owner on browser_user_grant(owner_id, scope_key, status);
+create table if not exists browser_approval_receipt (
+    step_id varchar(64) primary key,
+    owner_id varchar(160) not null,
+    scope_key varchar(100) not null,
+    consumed boolean not null default false
+);
+create table if not exists browser_authorization_audit (
+    id varchar(64) primary key,
+    owner_id varchar(160) not null,
+    grant_id varchar(64) not null,
+    step_id varchar(64) not null,
+    event varchar(40) not null,
+    label varchar(1000) not null,
+    created_at timestamp with time zone not null
+);
+create index if not exists idx_browser_audit_owner on browser_authorization_audit(owner_id, created_at);
+create table if not exists browser_authorized_session (
+    session_id varchar(128) primary key,
+    owner_id varchar(160) not null,
+    grant_id varchar(64) not null,
+    created_at timestamp with time zone not null
 );

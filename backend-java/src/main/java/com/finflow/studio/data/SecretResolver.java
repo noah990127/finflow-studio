@@ -4,14 +4,18 @@ import org.springframework.stereotype.Component;
 
 @Component
 public class SecretResolver {
+    private final DataSecretStore encryptedSecrets;
+
+    public SecretResolver(DataSecretStore encryptedSecrets) {
+        this.encryptedSecrets = encryptedSecrets;
+    }
 
     public String resolve(String secretRef) {
         if (secretRef == null || secretRef.isBlank()) {
             return "";
         }
-        if (!secretRef.startsWith("env:")) {
-            throw new IllegalArgumentException("密钥引用必须使用 env:变量名，密码不会保存在平台数据库中");
-        }
+        if (secretRef.startsWith(DataSecretStore.PREFIX)) return encryptedSecrets.decrypt(secretRef);
+        if (!secretRef.startsWith("env:")) throw new IllegalArgumentException("数据连接密码格式无效，请重新填写");
         var variable = secretRef.substring(4);
         if (!variable.matches("[A-Z][A-Z0-9_]{1,127}")) {
             throw new IllegalArgumentException("环境变量名称格式不正确");

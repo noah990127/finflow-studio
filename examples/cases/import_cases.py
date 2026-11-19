@@ -13,16 +13,21 @@ import uuid
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import HTTPCookieProcessor, Request, build_opener
+from http.cookiejar import CookieJar
 
 
 ROOT = Path(__file__).resolve().parent
-CASE_NAMES = ("nvidia", "global-tax-2026")
+CASE_NAMES = ("nvidia", "global-tax-2026", "data-preparation", "budget-variance-mvp")
 
 
 class Api:
     def __init__(self, base_url: str) -> None:
         self.base_url = base_url.rstrip("/")
+        self.opener = build_opener(HTTPCookieProcessor(CookieJar()))
+
+    def login(self, username: str, password: str) -> None:
+        self.json("POST", "/api/auth/login", {"username": username, "password": password})
 
     def json(self, method: str, path: str, body: Any | None = None) -> Any:
         data = None if body is None else json.dumps(body, ensure_ascii=False).encode("utf-8")
@@ -31,7 +36,7 @@ class Api:
             headers["Content-Type"] = "application/json; charset=utf-8"
         request = Request(self.base_url + path, data=data, headers=headers, method=method)
         try:
-            with urlopen(request, timeout=120) as response:
+            with self.opener.open(request, timeout=120) as response:
                 payload = response.read()
                 return json.loads(payload) if payload else None
         except HTTPError as error:
@@ -64,7 +69,7 @@ class Api:
             method="POST",
         )
         try:
-            with urlopen(request, timeout=300) as response:
+            with self.opener.open(request, timeout=300) as response:
                 return json.loads(response.read())
         except HTTPError as error:
             detail = error.read().decode("utf-8", errors="replace")
@@ -283,6 +288,8 @@ def import_case(api: Api, case_name: str) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Import curated FinBTP Studio demo cases")
     parser.add_argument("--api", default=os.getenv("FINFLOW_API_BASE_URL", "http://127.0.0.1:8080"))
+    parser.add_argument("--username", default=os.getenv("FINFLOW_IMPORT_USERNAME", "default"))
+    parser.add_argument("--password", default=os.getenv("FINFLOW_IMPORT_PASSWORD", "Pr0d1234"))
     parser.add_argument("--case", choices=CASE_NAMES, action="append", dest="cases")
     parser.add_argument("--check", action="store_true", help="validate resources without writing to FinBTP Studio")
     args = parser.parse_args()
@@ -294,6 +301,7 @@ def main() -> int:
             print("Case resources are valid: " + ", ".join(selected))
             return 0
         api = Api(args.api)
+        api.login(args.username, args.password)
         for case_name in selected:
             import_case(api, case_name)
         print("Demo case import completed")

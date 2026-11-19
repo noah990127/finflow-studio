@@ -18,12 +18,17 @@ public final class WorkspaceModels {
     public record MoveResourceRequest(String folderId) { }
 
     public record WebPreview(String title, String url, String siteName, String summary,
-                             List<String> highlights, List<WebPreviewSection> sections,
+                             List<WebPreviewFact> facts, List<String> highlights, List<WebPreviewSection> sections,
+                             List<WebPreviewLink> links,
                              String previewMode, String verifiedAt, String fetchedAt) { }
 
     public record WebEmbedStatus(String status, String reason) { }
 
     public record WebPreviewSection(String heading, List<String> paragraphs) { }
+
+    public record WebPreviewFact(String label, String value) { }
+
+    public record WebPreviewLink(String label, String url) { }
 
     public record Resource(
             String id,
@@ -42,5 +47,5 @@ public final class WorkspaceModels {
             String url) { }
 
     public record Response(Project project, WorkflowSummary workflow, List<WorkflowSummary> workflows,
-                           List<Folder> folders, List<Resource> resources) { }
+                           List<Folder> folders, List<Resource> resources, java.util.Set<String> internalResourceIds) { }
 }

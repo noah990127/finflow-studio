@@ -13,13 +13,16 @@ dependencies = [
   "pydantic>=2.11,<3.0",
   "pydantic-settings>=2.10,<3.0",
   "httpx>=0.28,<1.0",
+  "jieba>=0.42.1,<1.0",
   "python-multipart>=0.0.20,<1.0",
   "pypdf>=6.0,<7.0",
   "python-docx>=1.2,<2.0",
   "python-pptx>=1.0,<2.0",
+  "html-to-pptx==0.2.1",
   "reportlab>=4.4,<5.0",
   "pillow>=11.0,<12.0",
   "openpyxl>=3.1,<4.0",
+  "python-calamine>=0.7,<1.0",
   "duckdb>=1.4,<2.0",
   "sqlglot>=27,<29",
   "faster-whisper>=1.2,<2.0",
@@ -28,6 +31,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+browser = ["playwright==1.56.0"]
+browser-exploration = ["browser-use==1.0.6"]
 dev = [
   "pytest>=8.4,<9.0",
   "pytest-asyncio>=1.1,<2.0",
@@ -35,6 +40,10 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["integration: requires a local Chromium rendering runtime"]
+
+[tool.setuptools.package-data]
+app = ["templates/**/*.html", "templates/**/*.css", "templates/**/*.json", "templates/**/LICENSE", "templates/**/blue-LICENSE", "templates/**/*.md"]
 
 [tool.setuptools.packages.find]
 include = ["app*"]

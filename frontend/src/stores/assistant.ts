@@ -30,11 +30,19 @@ const eventTypes = [
   'agent.thinking_summary', 'agent.planning', 'agent.skill_loading', 'agent.tool_search',
   'agent.tool_call', 'agent.executing', 'agent.observation', 'agent.plan_updated',
   'agent.waiting_confirmation', 'agent.generating', 'agent.retrying', 'agent.completed',
-  'agent.failed', 'agent.cancelled',
+  'agent.failed', 'agent.cancelled', 'agent.message',
 ]
 let eventSource: EventSource | null = null
 let eventSessionId = ''
 let sessionLoadSequence = 0
+
+function eventTechnicalDetail(payload: Record<string, unknown>, fallback: string) {
+  const detail = Object.fromEntries([
+    'argumentSummary', 'output', 'failureType', 'retryable', 'recoveryHint', 'error', 'provenance',
+  ].filter(key => payload[key] !== undefined && payload[key] !== null && payload[key] !== '')
+    .map(key => [key, payload[key]]))
+  return Object.keys(detail).length ? JSON.stringify(detail, null, 2) : fallback
+}
 
 export const useAssistantStore = defineStore('assistant', {
   state: () => ({
@@ -66,7 +74,13 @@ export const useAssistantStore = defineStore('assistant', {
     lastEventSequence: 0,
     workbenchAction: null as Record<string, unknown> | null,
     workbenchActionSequence: 0,
-    executionMode: (localStorage.getItem('finflow.assistant.executionMode') === 'AUTO' ? 'AUTO' : 'APPROVAL') as 'AUTO' | 'APPROVAL',
+    pendingWorkbenchAction: null as Record<string, unknown> | null,
+    synchronizingAgentProjectId: '',
+    synchronizedAgentProjectId: '',
+    activeTaskProjectId: '',
+    projectSyncSequence: 0,
+    executionMode: (localStorage.getItem('finflow.assistant.executionMode') === 'APPROVAL' ? 'APPROVAL' : 'AUTO') as 'AUTO' | 'APPROVAL',
+    activeExecutionMode: '' as '' | 'AUTO' | 'APPROVAL',
     history: [] as AssistantMessage[],
     historySessionId: '',
     sessions: [] as AssistantSession[],
@@ -92,7 +106,7 @@ export const useAssistantStore = defineStore('assistant', {
       this.selection = selection ?? null
     },
     setExecutionMode(mode: 'AUTO' | 'APPROVAL') {
-      if (this.busy || (this.run && ['QUEUED', 'RUNNING'].includes(this.run.status))) return
+      if (this.busy || (this.run && ['QUEUED', 'RUNNING', 'WAITING_CONFIRMATION'].includes(this.run.status))) return
       this.executionMode = mode
       localStorage.setItem('finflow.assistant.executionMode', mode)
     },
@@ -123,31 +137,33 @@ export const useAssistantStore = defineStore('assistant', {
       this.interrupted = false
       this.interruptedAt = ''
       this.activeRequestId = ''
+      this.activeExecutionMode = ''
+      this.synchronizingAgentProjectId = ''
+      this.synchronizedAgentProjectId = ''
+      this.activeTaskProjectId = ''
+      this.projectSyncSequence += 1
     },
     async ensureSession(projectId: string) {
       if (!projectId) return
-      const projectChanged = this.sessionProjectTarget !== projectId
-      if (!projectChanged && this.sessionId && this.sessionProjectId === projectId
-          && this.sessionsProjectId === projectId) {
+      this.sessionProjectTarget = projectId
+      if (this.sessionId) {
+        if (!this.run || !['QUEUED', 'RUNNING', 'WAITING_CONFIRMATION'].includes(this.run.status)) {
+          this.sessionProjectId = projectId
+        }
         if (this.historySessionId !== this.sessionId) await this.loadHistory(true)
         this.connectEvents()
         return
       }
       const sequence = ++sessionLoadSequence
-      if (projectChanged && this.canInterrupt) await this.cancel()
-      if (sequence !== sessionLoadSequence) return
-      if (projectChanged) this.resetForProject(projectId)
-      else this.sessionProjectTarget = projectId
-      const sessions = await api.listAssistantSessions(projectId)
+      const sessions = await api.listAssistantSessions()
       if (sequence !== sessionLoadSequence || this.sessionProjectTarget !== projectId) return
       this.sessions = sessions
-      this.sessionsProjectId = projectId
-      const storageKey = `finflow.assistant.session.${projectId}`
+      this.sessionsProjectId = 'global'
+      const storageKey = 'finflow.assistant.session.global'
       const storedId = localStorage.getItem(storageKey) ?? ''
       let session = sessions.find(item => item.id === storedId) ?? sessions[0] ?? null
       if (!session) session = await api.createSession(projectId)
       if (sequence !== sessionLoadSequence || this.sessionProjectTarget !== projectId) return
-      if (session.projectId !== projectId) throw new Error('会话所属项目不一致，请重新打开当前项目')
       if (!this.sessions.some(item => item.id === session.id)) this.sessions.unshift(session)
       await this.activateSession(session, projectId, sequence)
     },
@@ -159,28 +175,26 @@ export const useAssistantStore = defineStore('assistant', {
       const stamp = new Date().toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
       const session = await api.createSession(projectId, `新对话 ${stamp}`)
       if (sequence !== sessionLoadSequence || this.sessionProjectTarget !== projectId) return
-      if (session.projectId !== projectId) throw new Error('新对话没有创建在当前项目中')
       this.sessions.unshift(session)
-      this.sessionsProjectId = projectId
+      this.sessionsProjectId = 'global'
       await this.activateSession(session, projectId, sequence)
     },
     async switchSession(sessionId: string) {
       if (sessionId === this.sessionId || this.busy || (this.run && ['QUEUED', 'RUNNING'].includes(this.run.status))) return
       const session = this.sessions.find(item => item.id === sessionId)
-      if (session && session.projectId === this.sessionProjectTarget) {
+      if (session) {
         const sequence = ++sessionLoadSequence
         await this.activateSession(session, this.sessionProjectTarget, sequence)
       }
     },
     async activateSession(session: AssistantSession, expectedProjectId = session.projectId, sequence = sessionLoadSequence) {
-      if (session.projectId !== expectedProjectId || this.sessionProjectTarget !== expectedProjectId
-          || sequence !== sessionLoadSequence) return
+      if (this.sessionProjectTarget !== expectedProjectId || sequence !== sessionLoadSequence) return
       eventSource?.close()
       eventSource = null
       eventSessionId = ''
       this.sessionId = session.id
-      this.sessionProjectId = session.projectId
-      localStorage.setItem(`finflow.assistant.session.${session.projectId}`, session.id)
+      this.sessionProjectId = expectedProjectId
+      localStorage.setItem('finflow.assistant.session.global', session.id)
       this.currentRequest = ''
       this.assistantMessage = ''
       this.plan = null
@@ -268,21 +282,89 @@ export const useAssistantStore = defineStore('assistant', {
       this.workbenchActionSequence += 1
       window.dispatchEvent(new CustomEvent('finflow:assistant-action', { detail: action }))
     },
+    async synchronizeAgentProject(action: Record<string, unknown>) {
+      const projectId = typeof action.projectId === 'string' ? action.projectId : ''
+      if (!projectId || this.synchronizingAgentProjectId === projectId) return
+      const projects = useProjectsStore()
+      const sequence = ++this.projectSyncSequence
+      this.activeTaskProjectId = projectId
+      this.sessionProjectTarget = projectId
+      if (projects.current?.id === projectId) {
+        this.synchronizedAgentProjectId = projectId
+        this.publishWorkbenchAction({ ...action, type: 'OPEN_PROJECT', projectId, refreshWorkspace: true })
+        return
+      }
+      this.synchronizingAgentProjectId = projectId
+      try {
+        await projects.refresh(projectId)
+        if (sequence !== this.projectSyncSequence || this.activeTaskProjectId !== projectId
+            || projects.current?.id !== projectId) return
+        this.synchronizedAgentProjectId = projectId
+        this.publishWorkbenchAction({ ...action, type: 'OPEN_PROJECT', projectId, refreshWorkspace: true })
+        const pendingProjectId = typeof this.pendingWorkbenchAction?.projectId === 'string'
+          ? this.pendingWorkbenchAction.projectId : ''
+        if (pendingProjectId === projectId) this.flushPendingWorkbenchAction()
+      } finally {
+        if (sequence === this.projectSyncSequence && this.synchronizingAgentProjectId === projectId) {
+          this.synchronizingAgentProjectId = ''
+        }
+      }
+    },
+    flushPendingWorkbenchAction() {
+      if (!this.pendingWorkbenchAction) return
+      const action = this.pendingWorkbenchAction
+      const projectId = typeof action.projectId === 'string' ? action.projectId : ''
+      if (projectId && this.activeTaskProjectId && projectId !== this.activeTaskProjectId) {
+        this.pendingWorkbenchAction = null
+        return
+      }
+      if (projectId && useProjectsStore().current?.id !== projectId) return
+      this.pendingWorkbenchAction = null
+      this.publishWorkbenchAction(action)
+    },
+    visibleProjectId() {
+      return this.activeTaskProjectId || this.synchronizedAgentProjectId
+        || useProjectsStore().current?.id || this.sessionProjectTarget || this.sessionProjectId
+    },
     handleEvent(event: AssistantEvent, replay = false) {
       if (event.sessionId !== this.sessionId || event.eventSeq <= this.lastEventSequence) return
       this.lastEventSequence = event.eventSeq
       if (!replay && ['assistant.run.canceled', 'agent.cancelled', 'assistant.run.failed'].includes(event.type)) {
-        this.publishWorkbenchAction({ type: 'REFRESH_WORKSPACE', projectId: this.sessionProjectId, refreshWorkspace: true })
+        this.publishWorkbenchAction({ type: 'REFRESH_WORKSPACE', projectId: this.visibleProjectId(), refreshWorkspace: true })
       }
       if (!replay && event.type === 'assistant.step.completed' && event.runId && this.interruptedRuns.includes(event.runId)) {
-        this.publishWorkbenchAction({ type: 'REFRESH_WORKSPACE', projectId: this.sessionProjectId, refreshWorkspace: true })
+        this.publishWorkbenchAction({ type: 'REFRESH_WORKSPACE', projectId: this.visibleProjectId(), refreshWorkspace: true })
       }
       if (event.runId && this.interruptedRuns.includes(event.runId)) return
       const payload = event.payload ?? {}
       if (event.type === 'assistant.request.received' && typeof payload.requestId === 'string' && (!this.activeRequestId || (replay && !this.busy))) this.activeRequestId = payload.requestId
+      if (event.type === 'assistant.plan.ready' && ['AUTO', 'APPROVAL'].includes(String(payload.executionMode))) {
+        this.activeExecutionMode = String(payload.executionMode) as 'AUTO' | 'APPROVAL'
+      }
       if (this.interrupted && event.type !== 'agent.cancelled') return
+      if (event.type === 'agent.message') {
+        const message = typeof payload.message === 'string' ? payload.message : ''
+        if (message) this.pushTimeline(`reply-${payload.activity_id || event.eventSeq}`, 'Agent 回复', message, 'info', event.createdAt, {
+          eventType: event.type, kind: 'thinking', detail: message, technicalDetail: message, status: String(payload.status || 'running'),
+        })
+        return
+      }
+      const output = payload.output && typeof payload.output === 'object'
+        ? payload.output as Record<string, unknown> : null
+      const provenance = payload.provenance && typeof payload.provenance === 'object'
+        ? payload.provenance as Record<string, unknown> : null
+      const createdProjectId = typeof output?.createdProjectId === 'string' ? output.createdProjectId
+        : typeof provenance?.createdProjectId === 'string' ? provenance.createdProjectId : ''
+      // An observation is a durable recovery signal when SSE and polling race past the OPEN_PROJECT event.
+      if (!replay && createdProjectId && useProjectsStore().current?.id !== createdProjectId) {
+        void this.synchronizeAgentProject({ type: 'OPEN_PROJECT', projectId: createdProjectId, refreshWorkspace: true })
+      }
       const value = Number(payload.progress)
-      if (Number.isFinite(value)) this.progress = Math.max(0, Math.min(100, value))
+      if (Number.isFinite(value)) {
+        const reported = Math.max(0, Math.min(100, value))
+        // Agent plans can grow and events can arrive late. Overall completion must never move backwards.
+        this.progress = Math.max(this.progress, reported)
+      }
       const message = String(payload.message ?? payload.result ?? payload.summary ?? '').trim()
       const title = String(payload.title ?? this.eventTitle(event.type)).trim()
       const publicProgress = workProgress({ type: event.type, message, phase: String(payload.phase ?? ''), toolName: String(payload.toolName ?? payload.tool ?? ''), status: String(payload.status ?? ''), error: typeof payload.error === 'string' ? payload.error : undefined })
@@ -306,15 +388,17 @@ export const useAssistantStore = defineStore('assistant', {
         if (!replay) {
           this.publishWorkbenchAction({
             type: 'REFRESH_WORKSPACE',
-            projectId: this.sessionProjectId,
+            projectId: this.visibleProjectId(),
             refreshWorkspace: true,
           })
+          this.flushPendingWorkbenchAction()
         }
       }
       if (event.type === 'assistant.run.failed' || event.type === 'agent.failed') {
         this.streaming = false
         this.busy = false
         this.error = String(payload.error ?? payload.message ?? 'Agent 未能完成这次任务')
+        if (!replay) this.flushPendingWorkbenchAction()
         if (event.runId) void this.refreshRun(event.runId)
       }
       if (event.type === 'assistant.run.canceled' || event.type === 'agent.cancelled') {
@@ -322,26 +406,35 @@ export const useAssistantStore = defineStore('assistant', {
         this.busy = false
         this.interrupted = true
         this.interruptedAt = event.createdAt
+        if (!replay) this.flushPendingWorkbenchAction()
         if (event.runId) void this.refreshRun(event.runId)
       }
       const uiAction = payload.uiAction
       if (!replay && event.type === 'assistant.step.completed' && uiAction && typeof uiAction === 'object') {
         const action = uiAction as Record<string, unknown>
         const targetProjectId = typeof action.projectId === 'string' ? action.projectId : ''
-        const crossesProjectDuringRun = Boolean(targetProjectId && targetProjectId !== this.sessionProjectId
+        const opensCreatedProject = action.type === 'OPEN_PROJECT' && Boolean(targetProjectId)
+        const crossesProjectDuringRun = Boolean(targetProjectId && targetProjectId !== useProjectsStore().current?.id
           && event.runId && ['QUEUED', 'RUNNING', 'WAITING_CONFIRMATION'].includes(this.run?.status ?? 'RUNNING'))
-        this.pushTimeline(`action-${event.eventSeq}`, '同步工作台', crossesProjectDuringRun
+        this.pushTimeline(`action-${event.eventSeq}`, '同步工作台', opensCreatedProject
+          ? '新项目已经创建，正在打开并继续处理'
+          : crossesProjectDuringRun
           ? '新项目已经准备好，任务完成后会自动打开'
           : '正在把这一步的结果呈现在左侧工作区', 'info', event.createdAt)
-        if (!crossesProjectDuringRun) this.publishWorkbenchAction(action)
+        if (opensCreatedProject) void this.synchronizeAgentProject(action)
+        else if (crossesProjectDuringRun) this.pendingWorkbenchAction = action
+        else this.publishWorkbenchAction(action)
       }
       const isPublicActivity = event.type.startsWith('agent.')
         || event.type === 'assistant.request.received'
         || event.type === 'assistant.context.started'
-      if (isPublicActivity && title && message) this.pushTimeline(`event-${event.eventSeq}`, publicProgress.title, publicProgress.detail,
+        || event.type === 'assistant.confirmation.required'
+      const activityId = typeof payload.activity_id === 'string' ? payload.activity_id
+        : typeof payload.activityId === 'string' ? payload.activityId : ''
+      if (isPublicActivity && title && message) this.pushTimeline(activityId ? `${event.type}:${activityId}` : `event-${event.eventSeq}`, publicProgress.title, publicProgress.detail,
           payload.error || String(payload.status).toLowerCase() === 'failed' || event.type.includes('failed') || event.type.includes('confirmation') ? 'warning' : event.type.endsWith('completed') ? 'success' : 'info',
           event.createdAt, {
-            technicalDetail: message,
+            technicalDetail: eventTechnicalDetail(payload, message),
             kind: this.eventKind(event.type),
             eventType: event.type,
             toolName: typeof payload.toolName === 'string' ? payload.toolName : typeof payload.tool === 'string' ? payload.tool : undefined,
@@ -401,7 +494,12 @@ export const useAssistantStore = defineStore('assistant', {
       return '当前步骤'
     },
     pushTimeline(id: string, title: string, detail: string, tone: TimelineItem['tone'], time = new Date().toISOString(), extra: Partial<TimelineItem> = {}) {
-      if (this.timeline.some(item => item.id === id)) return
+      const existing = this.timeline.find(item => item.id === id)
+      if (existing) {
+        Object.assign(existing, { title: businessText(title, '处理当前工作'), detail: businessText(detail), tone,
+          time, technicalDetail: detail, ...extra })
+        return
+      }
       const latest = this.timeline.at(-1)
       if (latest?.title === title && latest.detail === detail) return
       this.timeline.push({ id, title: businessText(title, '处理当前工作'), detail: businessText(detail), tone, time, kind: 'thinking', technicalDetail: detail, ...extra })
@@ -414,8 +512,12 @@ export const useAssistantStore = defineStore('assistant', {
       } catch { /* the run poll remains authoritative if a refresh races an update */ }
     },
     async refreshRun(runId: string) {
+      const sessionId = this.sessionId
+      const requestId = this.activeRequestId
       try {
         const run = await api.getRun(runId)
+        if (this.sessionId !== sessionId || this.activeRequestId !== requestId
+          || (this.run && this.run.id !== runId)) return
         if (!this.run || this.run.id === runId) this.run = run
         if (['SUCCEEDED', 'FAILED', 'CANCELED', 'ROLLED_BACK'].includes(run.status)) {
           this.streaming = false
@@ -425,9 +527,13 @@ export const useAssistantStore = defineStore('assistant', {
     },
     async send(projectId: string, requestText = this.input) {
       const text = requestText.trim()
-      if (!text || this.busy || this.stopping) return
+      if (!text || this.busy || this.stopping || (this.run && ['QUEUED', 'RUNNING', 'WAITING_CONFIRMATION'].includes(this.run.status))) return
       const requestId = crypto.randomUUID()
       this.activeRequestId = requestId
+      this.projectSyncSequence += 1
+      this.activeTaskProjectId = projectId
+      this.synchronizingAgentProjectId = ''
+      this.synchronizedAgentProjectId = useProjectsStore().current?.id === projectId ? projectId : ''
       this.interrupted = false
       this.interruptedAt = ''
       const hadCurrentRequest = Boolean(this.currentRequest)
@@ -442,6 +548,8 @@ export const useAssistantStore = defineStore('assistant', {
       this.progressLabel = '正在接收你的需求'
       this.streaming = true
       this.streamLines = ['正在接收你的需求']
+      this.pendingWorkbenchAction = null
+      this.activeExecutionMode = this.executionMode
       try {
         await this.ensureSession(projectId)
         if (!this.sessionId || this.sessionProjectId !== projectId || this.sessionProjectTarget !== projectId) {
@@ -481,15 +589,19 @@ export const useAssistantStore = defineStore('assistant', {
         if (this.activeRequestId === requestId) this.busy = false
       }
     },
-    async confirm() {
+    async confirm(rememberBrowserAuthorization = false) {
       if (!this.plan || !this.context || this.busy) return
       const requestId = this.activeRequestId
+      const planId = this.plan.id
       this.busy = true
       this.error = ''
       this.streaming = true
-      this.progressLabel = '正在启动处理任务'
+      this.progressLabel = '正在确认并恢复任务'
       try {
-        const confirmed = await api.confirmPlan(this.plan, this.context)
+        const latestPlan = await api.getAssistantPlan(planId)
+        if (this.activeRequestId !== requestId || this.interrupted) return
+        this.plan = latestPlan
+        const confirmed = await api.confirmPlan(latestPlan, this.context, rememberBrowserAuthorization)
         if (this.activeRequestId !== requestId || this.interrupted) return
         this.run = confirmed
         this.pushTimeline(`confirmed-${this.run.id}`, '已确认，开始处理', '原内容会保留', 'info')
@@ -506,10 +618,14 @@ export const useAssistantStore = defineStore('assistant', {
       if (!this.run) return
       const runId = this.run.id
       const requestId = this.activeRequestId
-      for (let attempt = 0; attempt < 300; attempt += 1) {
+      for (let attempt = 0; attempt < 1200; attempt += 1) {
         const updated = await api.getRun(runId)
         if (this.activeRequestId !== requestId || this.run?.id !== runId || this.interrupted) return
         this.run = updated
+        const createdProjectId = typeof updated.result?.createdProjectId === 'string' ? updated.result.createdProjectId : ''
+        if (createdProjectId && useProjectsStore().current?.id !== createdProjectId) {
+          await this.synchronizeAgentProject({ type: 'OPEN_PROJECT', projectId: createdProjectId, refreshWorkspace: true })
+        }
         await this.syncEvents()
         if (['SUCCEEDED', 'FAILED', 'CANCELED', 'ROLLED_BACK', 'WAITING_CONFIRMATION'].includes(this.run.status)) break
         await new Promise((resolve) => window.setTimeout(resolve, 1000))
@@ -530,20 +646,19 @@ export const useAssistantStore = defineStore('assistant', {
         const assistantResponse = typeof this.run.result?.assistantResponse === 'string' ? this.run.result.assistantResponse : ''
         if (assistantResponse) this.assistantMessage = assistantResponse
         const createdProjectId = typeof this.run.result?.createdProjectId === 'string' ? this.run.result.createdProjectId : ''
-        if (createdProjectId) {
-          this.sessionProjectId = createdProjectId
-          this.sessionProjectTarget = createdProjectId
-          this.sessionsProjectId = createdProjectId
-          this.sessions = this.sessions.map(session => session.id === this.sessionId
-            ? { ...session, projectId: createdProjectId }
-            : session)
-          localStorage.setItem(`finflow.assistant.session.${createdProjectId}`, this.sessionId)
-          await useProjectsStore().refresh(createdProjectId)
+        if (createdProjectId && useProjectsStore().current?.id !== createdProjectId) {
+          await this.synchronizeAgentProject({ type: 'OPEN_PROJECT', projectId: createdProjectId, refreshWorkspace: true })
         }
+        this.flushPendingWorkbenchAction()
         const uiAction = this.run.result?.uiAction
         if (uiAction && typeof uiAction === 'object') {
-          this.pushTimeline(`action-final-${this.run.id}`, '同步工作台', '已将最终结果呈现在工作区', 'success')
-          this.publishWorkbenchAction(uiAction as Record<string, unknown>)
+          const action = uiAction as Record<string, unknown>
+          const alreadyOpen = action.type === 'OPEN_PROJECT' && typeof action.projectId === 'string'
+            && useProjectsStore().current?.id === action.projectId
+          if (!alreadyOpen) {
+            this.pushTimeline(`action-final-${this.run.id}`, '同步工作台', '已将最终结果呈现在工作区', 'success')
+            this.publishWorkbenchAction(action)
+          }
         }
       } else if (['FAILED', 'CANCELED'].includes(this.run.status)) {
         this.streaming = false

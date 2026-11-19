@@ -12,15 +12,16 @@ final class WorkflowAgentPatch {
         current.nodes().forEach(node -> nodes.put(node.id(), node));
         String name = current.name();
         String description = current.description();
-        if (patch.containsKey("node_id")) {
-            if (patch.containsKey("nodes") || patch.containsKey("edges") || patch.containsKey("description"))
-                throw new IllegalArgumentException("单节点编辑仅支持 node_id、name、config");
+        var singleNodePatch = patch.containsKey("node_id") && !patch.containsKey("nodes")
+                && !patch.containsKey("edges") && !patch.containsKey("description");
+        if (singleNodePatch) {
             var id = text(patch.get("node_id"));
             if (!nodes.containsKey(id)) throw new IllegalArgumentException("工作流节点不存在：" + id);
             var nodePatch = new LinkedHashMap<>(patch);
             nodePatch.remove("node_id"); nodePatch.put("id", id);
             nodes.put(id, node(nodes.get(id), nodePatch));
         } else {
+            patch.remove("node_id");
             if (patch.containsKey("config")) throw new IllegalArgumentException("节点配置必须放在 patch.nodes[].config 中");
             if (patch.containsKey("name")) name = text(patch.get("name"));
             if (patch.containsKey("description")) description = Objects.toString(patch.get("description"), "");

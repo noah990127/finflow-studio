@@ -1,0 +1,28 @@
+{
+  "name": "预算预测偏差分析 MVP",
+  "description": "10 人预算预测团队的月结样板：线上刷新实际数据，合并已复核未入账补录，按区域和产品层级分析四项核心指标，并生成可下钻 HTML 报告。",
+  "files": [
+    {"key":"forecast","path":"assets/预算预测终稿.csv"},
+    {"key":"actual","path":"assets/实际经营数据_在线刷新快照.csv"},
+    {"key":"adjustments","path":"assets/未入账补录.csv"},
+    {"key":"regions","path":"assets/区域维表.csv"},
+    {"key":"products","path":"assets/产品维表.csv"},
+    {"key":"agent-signals","path":"assets/外部助手线索_已确认.csv"},
+    {"key":"policy","path":"assets/分析口径与复核清单.md"},
+    {"key":"about","path":"assets/样板数据说明.json"}
+  ],
+  "connections": [],
+  "workflow": "workflow.json",
+  "legacyRefs": {
+    "50000000-0000-4000-8000-000000000001":"file:forecast",
+    "50000000-0000-4000-8000-000000000002":"file:actual",
+    "50000000-0000-4000-8000-000000000003":"file:adjustments",
+    "50000000-0000-4000-8000-000000000004":"file:regions",
+    "50000000-0000-4000-8000-000000000005":"file:products",
+    "50000000-0000-4000-8000-000000000006":"file:agent-signals",
+    "50000000-0000-4000-8000-000000000007":"file:policy"
+  },
+  "artifacts": [
+    {"title":"月度预算预测偏差分析 MVP","format":"html_slides","path":"outputs/月度预算预测偏差分析_MVP.html"}
+  ]
+}

@@ -52,6 +52,16 @@ def render_office_pdf(source: Path, original_name: str, working_directory: Path)
         configured_fonts = environment.get("SAL_FONTPATH", "")
         font_path = ":".join(str(path) for path in mac_font_paths)
         environment["SAL_FONTPATH"] = f"{font_path}:{configured_fonts}" if configured_fonts else font_path
+        # Headless macOS builds use Fontconfig, not CoreText. SAL_FONTPATH
+        # alone does not expose system Chinese fonts to those builds.
+        if not environment.get("FONTCONFIG_FILE"):
+            font_config = ET.Element("fontconfig")
+            for path in mac_font_paths:
+                ET.SubElement(font_config, "dir").text = str(path)
+            ET.SubElement(font_config, "cachedir").text = str(font_cache)
+            config_path = working_directory / "fonts.conf"
+            ET.ElementTree(font_config).write(config_path, encoding="utf-8", xml_declaration=True)
+            environment["FONTCONFIG_FILE"] = str(config_path)
     result = subprocess.run(
         [binary, "--headless", f"-env:UserInstallation={profile.as_uri()}",
          "--convert-to", "pdf", "--outdir", str(working_directory), str(input_path)],
@@ -114,7 +124,7 @@ def _apply_presentation_font(content: bytes) -> bytes:
 
 
 def render_office_html(source: Path, original_name: str, working_directory: Path) -> Path:
-    if sys.platform == "darwin" and shutil.which("qlmanage"):
+    if sys.platform == "darwin" and Path(original_name).suffix.lower() not in {".ppt", ".pptx", ".odp"} and shutil.which("qlmanage"):
         try:
             return _render_quicklook_html(source, original_name, working_directory)
         except (RuntimeError, subprocess.SubprocessError) as error:

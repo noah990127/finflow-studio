@@ -1,16 +1,18 @@
 import asyncio
 import json
+import os
 import shutil
 import tempfile
-import time
-from urllib.parse import quote_plus
+import tomllib
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, AsyncIterator, Optional
 
 import httpx
 
 from .config import settings
 from .deepseek import deepseek
+from .integrations.search_provider import SearchProviderError, SearchProviderUnavailable
+from .research import search_web
 
 
 def extract_response_text(data: dict[str, Any]) -> str:
@@ -29,10 +31,28 @@ def extract_response_text(data: dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
-class LlmGateway:
-    def __init__(self) -> None:
-        self._codex_cli_research_unavailable_until = 0.0
+def extract_codex_stream_text(event: dict[str, Any]) -> str:
+    """Return only public assistant text, never reasoning or internal trace events."""
+    if event.get("type") == "response.output_text.delta":
+        delta = event.get("delta")
+        return delta if isinstance(delta, str) else ""
+    item = event.get("item")
+    if not isinstance(item, dict) or item.get("type") != "agent_message":
+        return ""
+    for key in ("delta", "text"):
+        value = item.get(key)
+        if isinstance(value, str):
+            return value
+    content = item.get("content")
+    if isinstance(content, list):
+        return "".join(
+            str(part.get("text", "")) for part in content
+            if isinstance(part, dict) and part.get("type") in {"output_text", "text"}
+        )
+    return ""
 
+
+class LlmGateway:
     @property
     def provider(self) -> str:
         return settings.llm_provider.strip().lower()
@@ -52,7 +72,7 @@ class LlmGateway:
         if self.provider == "codex":
             return settings.openai_model
         if self.provider == "codex-cli":
-            return settings.codex_cli_model or "Codex CLI"
+            return self._codex_cli_model() or "Codex CLI default"
         if self.provider == "deepseek":
             return settings.deepseek_chat_model
         return "local-extractive"
@@ -65,6 +85,17 @@ class LlmGateway:
         if self.provider == "deepseek":
             return await deepseek.complete(system, user)
         return None
+
+    async def stream_complete(self, system: str, user: str) -> AsyncIterator[str]:
+        if self.provider == "codex":
+            async for chunk in self._stream_codex(system, user):
+                yield chunk
+        elif self.provider == "codex-cli":
+            async for chunk in self._stream_codex_cli(system, user):
+                yield chunk
+        elif self.provider == "deepseek":
+            async for chunk in deepseek.stream_complete(system, user):
+                yield chunk
 
     async def _complete_codex(self, system: str, user: str) -> Optional[str]:
         if not settings.openai_api_key:
@@ -90,16 +121,76 @@ class LlmGateway:
                 raise RuntimeError("Codex 没有返回可用文本")
             return result
 
+    async def _stream_codex(self, system: str, user: str) -> AsyncIterator[str]:
+        if not settings.openai_api_key:
+            return
+        headers = {
+            "Authorization": "Bearer " + settings.openai_api_key,
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": settings.openai_model,
+            "instructions": system,
+            "input": user,
+            "reasoning": {"effort": settings.openai_reasoning_effort},
+            "max_output_tokens": settings.openai_max_output_tokens,
+            "store": False,
+            "stream": True,
+        }
+        timeout = httpx.Timeout(settings.request_timeout_seconds)
+        async with httpx.AsyncClient(base_url=settings.openai_base_url, timeout=timeout) as client:
+            async with client.stream("POST", "/responses", headers=headers, json=payload) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if not data or data == "[DONE]":
+                        continue
+                    event = json.loads(data)
+                    if event.get("type") == "error":
+                        raise RuntimeError(str(event.get("message") or event.get("error") or "Codex 流式生成失败"))
+                    chunk = extract_codex_stream_text(event)
+                    if chunk:
+                        yield chunk
+
     def _codex_cli_path(self) -> Optional[str]:
         candidates = [settings.codex_cli_path.strip(), shutil.which("codex") or "",
                       "/Applications/ChatGPT.app/Contents/Resources/codex"]
         return next((value for value in candidates if value and Path(value).is_file()), None)
 
-    def _codex_cli_research_available(self) -> bool:
-        return time.monotonic() >= self._codex_cli_research_unavailable_until
+    def _codex_cli_model(self) -> str:
+        """Use an explicit worker model, otherwise inherit only the safe desktop model field."""
+        explicit = settings.codex_cli_model.strip()
+        if explicit:
+            return explicit
+        source_home = Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex"))
+        config_path = source_home / "config.toml"
+        try:
+            value = tomllib.loads(config_path.read_text(encoding="utf-8")).get("model", "")
+        except (OSError, tomllib.TOMLDecodeError):
+            return ""
+        return value.strip() if isinstance(value, str) else ""
 
-    def _mark_codex_cli_research_unavailable(self) -> None:
-        self._codex_cli_research_unavailable_until = time.monotonic() + settings.codex_cli_cooldown_seconds
+    def _codex_cli_environment(self, runtime_dir: Path) -> dict[str, str]:
+        """Give the embedded CLI writable ephemeral state while reusing local authentication."""
+        environment = os.environ.copy()
+        source_home = Path(environment.get("CODEX_HOME") or (Path.home() / ".codex"))
+        runtime_home = runtime_dir / "codex-home"
+        runtime_home.mkdir(mode=0o700)
+        source_auth = source_home / "auth.json"
+        if source_auth.is_file():
+            target_auth = runtime_home / "auth.json"
+            shutil.copy2(source_auth, target_auth)
+            target_auth.chmod(0o600)
+        environment["CODEX_HOME"] = str(runtime_home)
+        return environment
+
+    @staticmethod
+    def _codex_cli_error(stderr: bytes) -> str:
+        lines = [line.strip() for line in stderr.decode("utf-8", errors="replace").splitlines() if line.strip()]
+        errors = [line for line in lines if " error" in line.lower() or line.lower().startswith("error")]
+        return (errors or lines or [""])[-1][:1000]
 
     async def _complete_codex_cli(self, system: str, user: str) -> Optional[str]:
         executable = self._codex_cli_path()
@@ -109,6 +200,7 @@ class LlmGateway:
             output_path = Path(directory) / "result.txt"
             command = [
                 executable, "exec", "--ephemeral", "--ignore-rules", "--skip-git-repo-check",
+                "--ignore-user-config", "--disable", "plugins",
                 "--sandbox", "read-only", "-C", directory,
                 "-c", 'model_reasoning_effort="%s"' % settings.codex_cli_reasoning_effort,
             ]
@@ -120,17 +212,21 @@ class LlmGateway:
                     "-c", "model_providers.finflow-http.supports_websockets=false",
                 ])
             command.extend(["-o", str(output_path)])
-            if settings.codex_cli_model.strip():
-                command.extend(["--model", settings.codex_cli_model.strip()])
+            for feature in ("apps", "shell_tool", "browser_use", "computer_use", "js_repl", "hooks"):
+                command.extend(["--disable", feature])
+            command.extend(["-c", 'web_search="disabled"'])
+            model = self._codex_cli_model()
+            if model:
+                command.extend(["--model", model])
             command.append("-")
             prompt = self._codex_cli_prompt(system, user)
             process = await asyncio.create_subprocess_exec(
                 *command, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE, env=self._codex_cli_environment(Path(directory)),
             )
             try:
                 _, stderr = await asyncio.wait_for(
-                    process.communicate(prompt.encode("utf-8")), timeout=settings.codex_cli_timeout_seconds
+                process.communicate(prompt.encode("utf-8", errors="replace")), timeout=settings.codex_cli_timeout_seconds
                 )
             except asyncio.TimeoutError as exception:
                 process.kill()
@@ -142,11 +238,89 @@ class LlmGateway:
                 await process.wait()
                 raise
             if process.returncode != 0:
-                detail = stderr.decode("utf-8", errors="replace").strip().splitlines()[-1:]
-                raise RuntimeError("Codex CLI 调用失败" + ("：" + detail[0] if detail else ""))
+                detail = self._codex_cli_error(stderr)
+                raise RuntimeError("Codex CLI 调用失败" + ("：" + detail if detail else ""))
             if not output_path.exists() or not output_path.read_text(encoding="utf-8").strip():
                 raise RuntimeError("Codex CLI 没有返回可用内容")
             return output_path.read_text(encoding="utf-8").strip()
+
+    async def _stream_codex_cli(self, system: str, user: str) -> AsyncIterator[str]:
+        executable = self._codex_cli_path()
+        if not executable:
+            return
+        with tempfile.TemporaryDirectory(prefix="finflow-codex-stream-") as directory:
+            output_path = Path(directory) / "result.txt"
+            command = [
+                executable, "exec", "--json", "--ephemeral", "--ignore-rules", "--skip-git-repo-check",
+                "--ignore-user-config", "--disable", "plugins",
+                "--sandbox", "read-only", "-C", directory,
+                "-c", 'model_reasoning_effort="%s"' % settings.codex_cli_reasoning_effort,
+            ]
+            if settings.codex_cli_force_http:
+                command.extend([
+                    "-c", 'model_provider="finflow-http"',
+                    "-c", 'model_providers.finflow-http.name="OpenAI HTTPS"',
+                    "-c", "model_providers.finflow-http.requires_openai_auth=true",
+                    "-c", "model_providers.finflow-http.supports_websockets=false",
+                ])
+            command.extend(["-o", str(output_path)])
+            model = self._codex_cli_model()
+            if model:
+                command.extend(["--model", model])
+            command.append("-")
+            process = await asyncio.create_subprocess_exec(
+                *command, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE, env=self._codex_cli_environment(Path(directory)),
+            )
+            emitted = ""
+            stderr = b""
+            stderr_task: asyncio.Task[bytes] | None = None
+            try:
+                assert process.stdin is not None
+                assert process.stdout is not None
+                assert process.stderr is not None
+                process.stdin.write(self._codex_cli_prompt(system, user).encode("utf-8"))
+                await process.stdin.drain()
+                process.stdin.close()
+                stderr_task = asyncio.create_task(process.stderr.read())
+                async with asyncio.timeout(settings.codex_cli_timeout_seconds):
+                    async for raw_line in process.stdout:
+                        try:
+                            event = json.loads(raw_line.decode("utf-8"))
+                        except (UnicodeDecodeError, json.JSONDecodeError):
+                            continue
+                        text = extract_codex_stream_text(event)
+                        if not text:
+                            continue
+                        chunk = text[len(emitted):] if text.startswith(emitted) else text
+                        if chunk:
+                            emitted += chunk
+                            yield chunk
+                    await process.wait()
+                stderr = await stderr_task
+            except TimeoutError as exception:
+                process.kill()
+                await process.wait()
+                if stderr_task is not None:
+                    await stderr_task
+                raise RuntimeError("Codex CLI 生成超时") from exception
+            except asyncio.CancelledError:
+                if process.returncode is None:
+                    process.kill()
+                await process.wait()
+                if stderr_task is not None:
+                    await stderr_task
+                raise
+            if process.returncode != 0:
+                detail = self._codex_cli_error(stderr)
+                raise RuntimeError("Codex CLI 调用失败" + ("：" + detail if detail else ""))
+            final = output_path.read_text(encoding="utf-8").strip() if output_path.exists() else ""
+            if final.startswith(emitted):
+                final = final[len(emitted):]
+            if final:
+                yield final
+            elif not emitted:
+                raise RuntimeError("Codex CLI 没有返回可用内容")
 
     def _codex_cli_prompt(self, system: str, user: str) -> str:
         return (
@@ -159,96 +333,48 @@ class LlmGateway:
         )
 
     async def discover_sources(self, topic: str, max_sources: int) -> dict[str, Any]:
-        executable = self._codex_cli_path()
-        if not executable or not self._codex_cli_research_available():
-            return self._research_fallback(topic)
-        with tempfile.TemporaryDirectory(prefix="finflow-research-") as directory:
-            workdir = Path(directory)
-            output_path = workdir / "result.json"
-            schema_path = workdir / "schema.json"
-            schema_path.write_text(json.dumps({
-                "type": "object",
-                "properties": {
-                    "summary": {"type": "string"},
-                    "sources": {"type": "array", "maxItems": max_sources, "items": {
-                        "type": "object",
-                        "properties": {
-                            "title": {"type": "string"}, "url": {"type": "string"},
-                            "source_type": {"type": "string"}, "why_relevant": {"type": "string"}
-                        },
-                        "required": ["title", "url", "source_type", "why_relevant"],
-                        "additionalProperties": False
-                    }}
-                },
-                "required": ["summary", "sources"], "additionalProperties": False
-            }, ensure_ascii=False), encoding="utf-8")
-            command = [
-                executable, "--search", "exec", "--ephemeral", "--ignore-rules", "--skip-git-repo-check",
-                "--sandbox", "read-only", "-C", directory, "--output-schema", str(schema_path),
-                "-c", 'model_reasoning_effort="low"', "-o", str(output_path)
-            ]
-            if settings.codex_cli_model.strip():
-                command.extend(["--model", settings.codex_cli_model.strip()])
-            command.append("-")
-            prompt = f"""你是财经研究资料搜集助手。围绕“{topic}”进行实时联网搜索，最多返回 {max_sources} 个资料入口。
-优先级：主体官网/投资者关系、监管披露、政府与央行、交易所、权威统计、行业协会、可靠财经媒体。
-要求：只返回已经访问并确认可打开的具体页面 URL；覆盖财报、经营数据、行业、宏观政策、重大事件和风险；不要返回搜索结果页，不要编造 URL。简要说明每项用途。输出必须符合给定 JSON Schema。"""
-            process = await asyncio.create_subprocess_exec(
-                *command, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            try:
-                _, stderr = await asyncio.wait_for(
-                    process.communicate(prompt.encode("utf-8")), timeout=settings.codex_cli_research_timeout_seconds
-                )
-            except asyncio.TimeoutError:
-                process.kill(); await process.wait()
-                self._mark_codex_cli_research_unavailable()
-                return self._research_fallback(topic)
-            except asyncio.CancelledError:
-                if process.returncode is None:
-                    process.kill()
-                await process.wait()
-                raise
-            if process.returncode != 0 or not output_path.exists():
-                self._mark_codex_cli_research_unavailable()
-                return self._research_fallback(topic)
-            try:
-                result = json.loads(output_path.read_text(encoding="utf-8"))
-                sources = [item for item in result.get("sources", [])
-                           if str(item.get("url", "")).startswith(("http://", "https://"))]
-                if not sources:
-                    return self._research_fallback(topic)
-                return {"topic": topic, "summary": result.get("summary", "已整理资料入口"),
-                        "sources": sources[:max_sources], "mode": "codex-web-search"}
-            except (json.JSONDecodeError, OSError, TypeError):
-                return self._research_fallback(topic)
-
-    def _research_fallback(self, topic: str) -> dict[str, Any]:
-        query = quote_plus(topic)
-        official = {
-            "microsoft": ("Microsoft Investor Relations", "https://www.microsoft.com/en-us/Investor"),
-            "apple": ("Apple Investor Relations", "https://investor.apple.com/"),
-            "alphabet": ("Alphabet Investor Relations", "https://abc.xyz/investor/"),
-            "amazon": ("Amazon Investor Relations", "https://ir.aboutamazon.com/"),
-            "meta": ("Meta Investor Relations", "https://investor.atmeta.com/"),
-            "nvidia": ("NVIDIA Investor Relations", "https://investor.nvidia.com/"),
+        try:
+            search_results = await search_web(topic, max_sources)
+        except SearchProviderUnavailable as exception:
+            return {
+                "topic": topic,
+                "summary": str(exception),
+                "sources": [],
+                "mode": "search-unavailable",
+                "status": "unavailable",
+                "provider": settings.research_search_provider,
+            }
+        except SearchProviderError as exception:
+            return {
+                "topic": topic,
+                "summary": str(exception),
+                "sources": [],
+                "mode": "search-failed",
+                "status": "failed",
+                "provider": settings.research_search_provider,
+            }
+        if search_results:
+            return {
+                "topic": topic,
+                "summary": "已通过配置的联网搜索服务找到候选资料，仍需逐项读取验证。",
+                "sources": [{
+                    "title": item["title"],
+                    "url": item["url"],
+                    "source_type": "联网搜索候选（待读取核验）",
+                    "why_relevant": item.get("snippet", "") or "与当前调研主题相关",
+                } for item in search_results[:max_sources]],
+                "mode": "search-provider",
+                "status": "ready",
+                "provider": settings.research_search_provider,
+            }
+        return {
+            "topic": topic,
+            "summary": "联网搜索已完成，但没有找到匹配的候选资料。",
+            "sources": [],
+            "mode": "search-empty",
+            "status": "empty",
+            "provider": settings.research_search_provider,
         }
-        lowered = topic.lower()
-        sources = [
-            {"title": title, "url": url, "source_type": "官方投资者关系入口（待读取核验）",
-             "why_relevant": "用于读取该公司最新财报、业绩公告、电话会材料和管理层指引"}
-            for key, (title, url) in official.items() if key in lowered
-        ]
-        if not sources:
-            sources = [
-                {"title": f"{topic} 官方与投资者关系资料检索", "url": f"https://www.bing.com/search?q={query}+官方+投资者关系",
-                 "source_type": "待核实检索", "why_relevant": "用于定位主体官网、公告和财务披露"},
-                {"title": f"{topic} 监管披露资料检索", "url": f"https://www.bing.com/search?q={query}+监管披露+年报",
-                 "source_type": "待核实检索", "why_relevant": "用于定位交易所、SEC 或其他监管披露"},
-            ]
-        return {"topic": topic, "summary": "联网资料搜索暂不可用，已建立待核实的资料搜集入口。",
-                "sources": sources, "mode": "search-plan-fallback"}
 
 
 llm = LlmGateway()

@@ -32,7 +32,7 @@ If a section lacks evidence, lower the certainty or mark the gap. If pagination 
 Follow the active Auto or Approval mode. Confirm creation, overwrite, or export when tool policy requires it; internal planning and validation are read-only.
 
 ## Output Contract
-Return the DOCX, document type, section count, citation coverage, reopen status, pagination findings, and quality score.
+Return the DOCX, document type, section count, citation coverage, reopen status, pagination findings.
 
 ## Example Tasks
 - Write a formal research report from interviews and survey data.

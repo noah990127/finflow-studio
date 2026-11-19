@@ -29,7 +29,7 @@ Reject missing fields and ambiguous formulas with exact correction hints. Never 
 Follow the active Auto or Approval mode. Data profiling and preview are read-only; creating, replacing, or exporting a report follows the corresponding tool policy.
 
 ## Output Contract
-Return the report, dataset/query versions, KPI catalog, views, filters, validation status, citation coverage, and quality score.
+Return the report, dataset/query versions, KPI catalog, views, filters, validation status, citation coverage.
 
 ## Example Tasks
 - Build a filterable revenue and margin dashboard from this dataset.

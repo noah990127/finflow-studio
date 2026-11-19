@@ -1,5 +1,19 @@
 # Built-in PPT skills
 
+## Current generation path
+
+Content planning and rendering are separate: `semantic_presentation.py` and
+`presentation_templates.py` handle structured intent and templates; presentation
+services coordinate output. Narrative and evidence requirements must follow the
+user's purpose. Research needs traceable sources; ordinary operational reports
+must not invent evidence or metrics for every slide.
+
+See the [Blue Professional adapter](../templates/blue-professional-v2/README.md)
+for upstream assets, offline dependencies and export limits. Preserve licenses and
+visually inspect exported artifacts; an aggregate quality score is not proof of a
+usable presentation. The options below describe individual renderers, not a promise
+that PowerPoint and ONLYOFFICE render every output identically.
+
 `guizang-huawei-style-c` implements an editable PowerPoint renderer based on the public Style C design description from:
 
 https://github.com/SeanDongX/guizang-ppt-skill

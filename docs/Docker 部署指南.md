@@ -4,9 +4,21 @@
 >
 > 部署形态：单机 Docker Compose，默认单用户
 >
-> 内置案例：英伟达近五年经营状况分析、2026 年全球税务政策趋势
+> 内置案例：英伟达分析、全球税务趋势、多源数据加工和预算偏差分析；这些是兼容性示例，不代表新版业务工序的唯一实现。
 
 ## 1. 部署后的服务
+
+### Agent 执行器开关
+
+- 本机直接启动 worker：在 `worker-python/.env` 设置 `AGENT_RUNTIME=codex-cli`，使用 `CODEX_CLI_PATH` 指定已安装并登录的 Codex CLI。`CODEX_CLI_MODEL` 留空时沿用本机模型选择，不复制个人插件或 MCP 配置。
+- 本机网络若出现连接超时，可设置已有兼容选项 `CODEX_CLI_FORCE_HTTP=true`；本机此次已通过该方式验证真实 CLI 调用。
+- 公司部署：在 Compose 使用的根目录 `.env` 显式设置 `AGENT_RUNTIME=opencode`、`OPENCODE_CLI_PATH`、`OPENCODE_MODEL`（provider/model）和 `OPENCODE_PROVIDER_CONFIG`。CLI 和 provider 配置文件路径必须在 worker 容器内可访问；模型值不是文件路径。需要在批准的镜像中预装兼容的 OpenCode v1 CLI，并挂载 provider 配置。仅修改开关不会安装二进制或挂载文件。
+- `AGENT_RUNTIME` 选择负责规划与工具调用的 CLI；`FINFLOW_LLM_PROVIDER` 独立控制文档生成等旧模型调用，不等于 Agent 执行器开关。
+- 两个 CLI 共用平台 MCP、工序状态、精确操作审批和产物校验。缺少运行时或认证会明确失败，不会静默切回旧助手。
+- 修改后重启 worker；Java 会重新识别运行时（健康缓存最多30秒）。建议在任务空闲时切换，不在执行途中切换；未完成任务与历史产物仍保存在平台。
+- 本地 `.env`、Codex 登录文件和 DeepSeek 密钥不得打进公司交付包。Compose 未设置开关时默认 `opencode`，但复制根 `.env.example` 后应明确修改其本地默认值 `codex-cli`。
+
+CLI 配置依据：[OpenAI 配置参考](https://developers.openai.com/codex/config-reference/)。
 
 基础部署会启动以下服务：
 
@@ -15,6 +27,7 @@
 | `frontend` | `frontend/Dockerfile` | `http://服务器IP:5173` | Vue 工作台及 API 反向代理 |
 | `java-api` | JDK 21，`backend-java/Dockerfile` | `http://服务器IP:8080` | 项目、资源、工作流、调度、文件和 Office 接入 |
 | `python-worker` | Python 3.12，`worker-python/Dockerfile` | 容器内 `8001` | AI、文档解析、数据处理、图表和输出件生成 |
+| `searxng` | 官方 SearxNG 镜像 | `http://服务器IP:8888` | 为工作流和 Agent 提供统一的候选网页搜索接口 |
 | `postgres` | `postgres:17-alpine` | 仅容器内访问 | 平台元数据以及两套案例的演示表 |
 | `minio` | `RELEASE.2025-07-23T15-54-02Z` | `9000` / `9001` | 上传文件、解析产物和输出件的对象存储 |
 | `minio-init` | `RELEASE.2025-07-21T05-28-08Z` | 不对外开放 | 首次创建 `finflow` Bucket，成功后自动退出 |
@@ -101,6 +114,10 @@ MINIO_ROOT_PASSWORD=替换为第二个强密码
 
 # Office 服务；Java 与 ONLYOFFICE 必须使用同一个值
 ONLYOFFICE_JWT_SECRET=替换为第三个强密码
+ONLYOFFICE_MAX_DOWNLOAD_BYTES=314572800
+ONLYOFFICE_XLSX_UNCOMPRESSED_LIMIT=1GB
+ONLYOFFICE_NGINX_BODY_SIZE=320m
+FINFLOW_OFFICE_MAX_EDITOR_FILE_BYTES=314572800
 # 默认通过 Studio 的 /office 同源代理访问，无需填写服务器 IP
 FINFLOW_OFFICE_DOCUMENT_SERVER_URL=/office
 ONLYOFFICE_PLATFORM=linux/amd64
@@ -137,6 +154,7 @@ OPENAI_MODEL=网关支持的模型名
 ```bash
 docker compose -f docker-compose.yml -f examples/cases/docker-compose.cases.yml config
 docker compose -f docker-compose.yml -f examples/cases/docker-compose.cases.yml up --build -d
+./scripts/configure-onlyoffice-large-files.sh "$(docker compose -f docker-compose.yml -f examples/cases/docker-compose.cases.yml ps -q onlyoffice-documentserver)"
 ```
 
 查看启动状态：
@@ -147,6 +165,7 @@ docker compose -f docker-compose.yml -f examples/cases/docker-compose.cases.yml 
 ```
 
 第一次启动 ONLYOFFICE 可能需要几分钟。`minio-init` 显示 `Exited (0)` 表示 Bucket 创建成功，不是故障。
+大文件配置脚本会把 Office 下载限制设为 300MB、XLSX 解压限制设为 1GB，并把 Office 内置 Nginx 请求限制设为 320MB；每次重建 ONLYOFFICE 容器后应重新执行。
 
 ## 6. 初始化两个案例
 

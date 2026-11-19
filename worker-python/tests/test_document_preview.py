@@ -1,9 +1,19 @@
 from pathlib import Path
+from PIL import Image
 
 from app.deliverables import create_docx, create_pptx
 from app.document_preview import preview_document
 from app.office_preview import _render_structured_html
 from app.models import DeliverableRequest, DeliverableSection
+
+
+def test_image_preview_reports_metadata_without_inventing_content(tmp_path: Path) -> None:
+    path = tmp_path / "screenshot.png"
+    Image.new("RGB", (1280, 800), "white").save(path)
+    preview = preview_document(path, path.name)
+    assert preview.kind == "image"
+    assert "1280 x 800" in preview.pages[0].blocks[0].text
+    assert "未识别" in preview.warnings[0]
 
 
 def _request() -> DeliverableRequest:

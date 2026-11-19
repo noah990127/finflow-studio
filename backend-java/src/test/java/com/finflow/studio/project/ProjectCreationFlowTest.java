@@ -16,13 +16,11 @@ class ProjectCreationFlowTest {
     @Autowired WorkspaceResourceService workspace;
 
     @Test
-    void createsProjectWithReadyToEditDefaultWorkflow() {
-        var project = creation.create("新项目", "验证默认工作流");
+    void createsProjectWithoutInventingAnEmptyWorkflow() {
+        var project = creation.create("新项目", "工作流按用户任务创建");
         var result = workspace.get(project.id());
 
-        assertThat(result.workflow()).isNotNull();
-        assertThat(result.workflow().name()).isEqualTo("主工作流");
-        assertThat(result.workflow().currentVersion()).isEqualTo(1);
-        assertThat(result.workflows()).hasSize(1);
+        assertThat(result.workflow()).isNull();
+        assertThat(result.workflows()).isEmpty();
     }
 }

@@ -1,11 +1,17 @@
 import json
+from io import BytesIO
 
 import pytest
 from pydantic import ValidationError
+from pptx import Presentation
+from pptx.util import Inches
 
-from app.artifacts.models import DiagramEdge, DiagramNode, DiagramSpec, EvidencePack
+from app.artifacts.models import (
+    ArtifactQualityReport, DiagramEdge, DiagramNode, DiagramSpec, EvidencePack, QualityIssue,
+)
 from app.artifacts.planning import build_evidence_pack, prepare_for_format
 from app.artifacts.quality import evaluate_artifact
+from app.artifacts import service as artifact_service
 from app.deliverables import (
     create_docx,
     create_excalidraw,
@@ -40,6 +46,41 @@ def artifact_request() -> DeliverableRequest:
             },
         }],
     })
+
+
+@pytest.mark.asyncio
+async def test_presentation_quality_failure_rebuilds_from_verified_source(monkeypatch) -> None:
+    request = artifact_request()
+    model_plan = request.model_copy(update={"title": "模型规划稿"}, deep=True)
+    reports = iter([
+        ArtifactQualityReport(
+            format="pptx", passed=False,
+            issues=[QualityIssue(code="empty_slides", severity="error", message="存在空白正文页")],
+        ),
+        ArtifactQualityReport(format="pptx", passed=True),
+    ])
+
+    async def prepare(_format, _request):
+        return model_plan, build_evidence_pack(request)
+
+    rendered_titles: list[str] = []
+
+    def render(value):
+        rendered_titles.append(value.title)
+        return value.title.encode()
+
+    monkeypatch.setattr(artifact_service, "prepare_for_format", prepare)
+    monkeypatch.setitem(artifact_service.RENDERERS, "pptx", render)
+    monkeypatch.setattr(artifact_service, "evaluate_artifact", lambda *_args: next(reports))
+    monkeypatch.setattr(artifact_service, "review_rendered", lambda _content, report: report)
+
+    result = await artifact_service.generate_artifact("pptx", request)
+
+    # Repair must preserve the inferred brief and prepared content instead of
+    # reverting to raw material and losing the user's presentation intent.
+    assert rendered_titles == ["模型规划稿", "模型规划稿"]
+    assert result.prepared_request.title == "模型规划稿"
+    assert result.quality.passed is True
 
 
 def test_format_specs_are_strict_and_validate_relationships() -> None:
@@ -104,6 +145,23 @@ def test_all_supported_renderers_pass_format_quality_checks() -> None:
         assert report.passed, (output_format, report.model_dump())
         assert report.checks["non_empty"]
         assert report.metrics["bytes"] > 0
+
+
+def test_presentation_quality_rejects_elements_outside_the_slide() -> None:
+    deck = Presentation()
+    for label in ("封面", "正文"):
+        slide = deck.slides.add_slide(deck.slide_layouts[6])
+        box = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(3), Inches(1))
+        box.text = label
+    overflow = deck.slides[1].shapes.add_textbox(Inches(12.5), Inches(7), Inches(2), Inches(1))
+    overflow.text = "越界内容"
+    stream = BytesIO()
+    deck.save(stream)
+
+    report = evaluate_artifact("pptx", artifact_request(), stream.getvalue())
+
+    assert report.passed is False
+    assert any(issue.code == "shape_out_of_bounds" for issue in report.issues)
 
 
 def test_financial_report_has_semantic_layer_views_and_states() -> None:

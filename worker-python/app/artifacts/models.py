@@ -41,7 +41,10 @@ class PresentationPage(StrictModel):
     chapter: str = Field(default="", max_length=80)
     title: str = Field(min_length=1, max_length=80)
     core_message: str = Field(min_length=1, max_length=500)
-    layout: Literal["statement", "metric", "chart", "comparison", "timeline", "process", "matrix", "list"]
+    layout: Literal[
+        "statement", "metric", "chart", "comparison", "timeline", "process", "matrix", "list",
+        "decision", "table",
+    ]
     bullets: list[str] = Field(default_factory=list, max_length=4)
     ref_ids: list[str] = Field(default_factory=list, max_length=30)
 
@@ -159,7 +162,6 @@ class QualityIssue(StrictModel):
 
 class ArtifactQualityReport(StrictModel):
     format: ArtifactFormat
-    score: int = Field(ge=0, le=100)
     passed: bool
     checks: dict[str, bool] = Field(default_factory=dict)
     issues: list[QualityIssue] = Field(default_factory=list, max_length=200)

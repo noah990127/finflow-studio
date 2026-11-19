@@ -65,6 +65,17 @@ public class AssistantController {
         return assistant.createSession(projectId, request == null ? null : request.title());
     }
 
+    @PostMapping("/assistant/sessions")
+    @ResponseStatus(HttpStatus.CREATED)
+    SessionResponse createGlobalSession(@Valid @RequestBody CreateGlobalSessionRequest request) {
+        return assistant.createSession(request.projectId(), request.title());
+    }
+
+    @GetMapping("/assistant/sessions")
+    List<SessionResponse> listGlobalSessions() {
+        return assistant.listSessions();
+    }
+
     @GetMapping("/projects/{projectId}/assistant/sessions")
     List<SessionResponse> listSessions(@PathVariable String projectId) {
         return assistant.listSessions(projectId);

@@ -1,9 +1,21 @@
 # FinBTP Studio curated demo cases
 
-This directory contains two portable showcase cases with ready-to-view snapshots:
+## Compatibility note
+
+These bundles include historical technical workflows and offline artifacts. They
+are import/regression fixtures, not the current user-facing workflow editor. The
+current product uses Agent-managed business stages under My Work and reveals
+technical execution on demand. Import validation does not prove external model,
+search or legacy workflow execution in the destination environment.
+
+This directory contains four portable showcase cases with ready-to-view snapshots:
 
 - `nvidia`: NVIDIA FY2022-FY2026 operating and financial-quality analysis;
 - `global-tax-2026`: 2026 global tax-policy trends, simulated entity exposure and action planning.
+- `data-preparation`: governed multi-source data preparation with CSV facts, an Excel dimension,
+  a streaming API, a database table, a strict transform plan and reproducible wide-table benchmark.
+- `budget-variance-mvp`: monthly budget forecast versus actual analysis with online actual snapshots,
+  reviewed manual adjustments, region and product hierarchies, external-assistant evidence and an HTML report.
 
 No API key, database password, private document or local absolute path is included. All quarterly splits, entity exposure and cash-impact scenarios marked as simulated are demonstration data.
 
@@ -32,6 +44,10 @@ Import all cases through the public FinBTP Studio API:
 ```bash
 python3 examples/cases/import_cases.py --api http://127.0.0.1:8080
 ```
+
+The importer signs in through the public login API. It uses the local `default` demo account by default;
+override it with `--username` and `--password`, or `FINFLOW_IMPORT_USERNAME` and
+`FINFLOW_IMPORT_PASSWORD`.
 
 Import one or more cases by repeating `--case`:
 

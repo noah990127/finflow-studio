@@ -1,6 +1,8 @@
 import io
 import math
+import os
 import re
+import sys
 from typing import Iterable, List, Optional
 
 from lxml.etree import SubElement
@@ -17,6 +19,7 @@ from .models import DeliverableRequest, DeliverableSection
 
 
 HUAWEI_STYLE_C = "guizang-huawei-style-c"
+STUDIO_PROFESSIONAL = "studio-professional-native"
 FRONTEND_SLIDES = "frontend-slides"
 RED = RGBColor(199, 0, 11)
 RED_DARK = RGBColor(153, 0, 8)
@@ -28,7 +31,7 @@ MUTED = RGBColor(111, 118, 128)
 LINE = RGBColor(223, 227, 232)
 GREY = RGBColor(240, 242, 245)
 WHITE = RGBColor(255, 255, 255)
-FONT_FAMILY = "Microsoft YaHei"
+FONT_FAMILY = os.getenv("PRESENTATION_FONT_FAMILY", "Arial Unicode MS" if sys.platform == "darwin" else "Noto Sans CJK SC")
 SLIDE_LEFT = 0.95
 SLIDE_RIGHT = 12.38
 CONTENT_TOP = 1.68
@@ -37,6 +40,30 @@ CONTENT_BOTTOM = 6.56
 
 def catalog() -> list[dict[str, object]]:
     return [{
+        "id": "blue-professional-v2",
+        "name": "Blue Professional · 结构化企业汇报",
+        "description": "复用开源HTML模板，先设计路线图、职责矩阵或对比结构，再导出可编辑PPT。",
+        "formats": ["pptx"],
+        "theme": "Blue Professional",
+        "source": "https://github.com/zarazhangrui/beautiful-html-templates/tree/main/templates/blue-professional",
+        "license": "MIT",
+    }, {
+        "id": "presenton-executive-v1",
+        "name": "Executive · 企业汇报",
+        "description": "Presenton 开源版式的离线原生适配，根据汇报用途组织内容，支持可编辑文字与图表。",
+        "formats": ["pptx"],
+        "theme": "Executive",
+        "source": "https://github.com/presenton/presenton/tree/main/templates/executive",
+        "license": "Apache-2.0",
+    }, {
+        "id": STUDIO_PROFESSIONAL,
+        "name": "Studio Professional · 原生可编辑",
+        "description": "兼容历史工序的原生可编辑版式。",
+        "formats": ["pptx"],
+        "theme": "Studio Professional",
+        "source": "https://github.com/hugohe3/ppt-master",
+        "method_reference": "https://github.com/Gabberflast/academic-pptx-skill",
+    }, {
         "id": HUAWEI_STYLE_C,
         "name": "华为企业汇报 · Style C",
         "description": "白灰底、企业红、清晰层级，适合管理层汇报、经营复盘和工作计划。",
@@ -55,13 +82,15 @@ def catalog() -> list[dict[str, object]]:
 
 def render(request: DeliverableRequest) -> bytes:
     deck = Presentation()
+    deck.core_properties.title = request.title
+    deck.core_properties.subject = "presentation-content-v1 / studio-native-v2"
     deck.slide_width = Inches(13.333)
     deck.slide_height = Inches(7.5)
     _cover(deck, request)
     slide_number = 2
     for section_index, section in enumerate(request.sections, start=1):
         points = _content_points(section)
-        groups = [points[:3]] if valid_chart(section.chart) else list(_chunks(points, 4))
+        groups = list(_chunks(points, 3 if valid_chart(section.chart) else 4))
         for page_index, group in enumerate(groups, start=1):
             slide = deck.slides.add_slide(deck.slide_layouts[6])
             _background(slide, PAPER)
@@ -71,12 +100,17 @@ def render(request: DeliverableRequest) -> bytes:
                   min_size=22, single_line=True)
             if valid_chart(section.chart):
                 _chart_layout(slide, section.chart, group)
+            elif section.layout in {"process", "timeline"} and section.core_message:
+                _text(slide, section.core_message, 0.98, 1.66, 11.2, 0.62, 18, INK, min_size=15)
+                steps = [point for point in group if _semantic_key(point) != _semantic_key(section.core_message)]
+                _render_content(slide, heading, steps, section_index, section.layout)
             else:
                 _render_content(slide, heading, group, section_index, section.layout)
             refs = inline_sources(request, section.refs)
             if refs and not (valid_chart(section.chart) and section.chart.source_ref):
                 _text(slide, "参考：" + refs[:180], 0.95, 6.93, 10.55, 0.2, 8, MUTED,
                       min_size=8, single_line=True)
+            _speaker_notes(slide, section, group, refs)
             slide_number += 1
     _reference_slides(deck, request, slide_number)
     stream = io.BytesIO()
@@ -89,15 +123,34 @@ def _cover(deck: Presentation, request: DeliverableRequest) -> None:
     _background(slide, PAPER)
     _rect(slide, 0, 0, 0.34, 7.5, RED)
     _rect(slide, 0.92, 1.18, 0.18, 0.18, RED)
-    _text(slide, "MANAGEMENT REPORT", 1.28, 1.12, 4.5, 0.3, 10, RED, bold=True)
+    label = "MANAGEMENT REPORT" if request.ppt_skill == HUAWEI_STYLE_C else "STUDIO PROFESSIONAL"
+    _text(slide, label, 1.28, 1.12, 4.5, 0.3, 10, RED, bold=True)
     _text(slide, request.title, 0.95, 2.03, 10.75, 1.48, 42, INK, bold=True, min_size=32)
     _text(slide, request.subtitle or "由 FinBTP Studio 工作流生成", 0.98, 3.7, 10.2, 0.5, 17, MUTED,
           min_size=14, single_line=True)
     _rect(slide, 0.98, 4.46, 1.36, 0.07, RED)
     _text(slide, "FINBTP STUDIO", 10.75, 0.58, 1.65, 0.25, 10, INK, bold=True, align=PP_ALIGN.RIGHT)
-    _text(slide, "企业汇报 · Classic Red", 0.98, 6.72, 4.2, 0.25, 10, MUTED)
+    style_label = "企业汇报 · Classic Red" if request.ppt_skill == HUAWEI_STYLE_C else "结论先行 · 证据驱动"
+    _text(slide, style_label, 0.98, 6.72, 4.2, 0.25, 10, MUTED)
     _text(slide, "01", 11.65, 5.64, 0.65, 0.5, 18, WHITE, bold=True, align=PP_ALIGN.CENTER,
           fill=RED, vertical=MSO_ANCHOR.MIDDLE)
+
+
+def reflow_for_readability(request: DeliverableRequest) -> DeliverableRequest:
+    """One bounded, deterministic repair: split text, never rewrite facts."""
+    sections = []
+    for section in request.sections:
+        if section.chart is not None:
+            sections.append(section)
+            continue
+        for index, points in enumerate(_chunks(_content_points(section), 2)):
+            sections.append(section.model_copy(update={
+                "heading": section.heading if index == 0 else section.heading + "（续）",
+                "core_message": points[0], "paragraphs": [], "bullets": points[1:], "layout": "statement",
+            }, deep=True))
+    if len(sections) > 100:
+        raise ValueError("内容超过100页，请拆分文稿；系统不会删减正文")
+    return request.model_copy(update={"sections": sections}, deep=True)
 
 
 def _chrome(slide, page_number: int, section_number: int, chapter: str = "") -> None:
@@ -105,7 +158,7 @@ def _chrome(slide, page_number: int, section_number: int, chapter: str = "") -> 
     _text(slide, f"{section_number:02d}", 1.22, 0.7, 0.45, 0.3, 10, RED, bold=True,
           min_size=10, single_line=True)
     if chapter:
-        _text(slide, chapter, 1.72, 0.7, 2.8, 0.3, 10, MUTED, bold=True,
+        _text(slide, chapter, 0.95, 0.26, 8.8, 0.22, 10, MUTED, bold=True,
               min_size=9, single_line=True)
     _text(slide, "FINBTP STUDIO", 10.72, 0.26, 1.65, 0.22, 9, INK, bold=True,
           align=PP_ALIGN.RIGHT, min_size=9, single_line=True)
@@ -140,6 +193,10 @@ def _render_content(slide, heading: str, points: List[str], section_index: int,
     elif layout == "matrix" or (layout == "auto" and
             any(keyword in normalized for keyword in ("风险", "准备度", "优先级", "矩阵", "暴露"))):
         _priority_layout(slide, points)
+    elif layout == "decision":
+        _decision_layout(slide, points)
+    elif layout == "table":
+        _table_layout(slide, points)
     elif layout == "comparison" or (layout == "auto" and
             any(keyword in normalized for keyword in ("对比", "结构", "组合", "场景", "区域", "平台"))):
         _comparison_layout(slide, points)
@@ -186,9 +243,10 @@ def _comparison_layout(slide, points: List[str]) -> None:
         top = 1.72 + index * 1.18
         _text(slide, f"0{index + 1}", 1.02, top + 0.17, 0.58, 0.58, 17, WHITE, bold=True,
               align=PP_ALIGN.CENTER, fill=RED if index == 0 else INK, vertical=MSO_ANCHOR.MIDDLE)
-        _rect(slide, 1.84, top + 0.43, 0.9 + index * 0.35, 0.08, RED if index == 0 else RED_DARK)
-        _text(slide, point, 4.15, top + 0.08, 7.8, 0.86, 16, INK, bold=index == 0,
+        _text(slide, point, 2.05, top + 0.08, 9.9, 0.86, 18, INK, bold=index == 0,
               min_size=14, vertical=MSO_ANCHOR.MIDDLE)
+        if index < len(items) - 1:
+            _rect(slide, 2.05, top + 1.02, 9.9, 0.012, LINE)
 
 
 def _summary_layout(slide, points: List[str]) -> None:
@@ -256,6 +314,37 @@ def _action_layout(slide, points: List[str]) -> None:
               min_size=14)
 
 
+def _decision_layout(slide, points: List[str]) -> None:
+    items = points[:4] or ["基于当前证据给出决策建议"]
+    lead = items[0]
+    _rect(slide, 0.95, 1.78, 7.12, 4.82, INK)
+    _text(slide, "建议决策", 1.34, 2.15, 1.65, 0.3, 11, RED_SOFT, bold=True)
+    _text(slide, lead, 1.32, 2.78, 6.15, 2.05, 25, WHITE, bold=True, min_size=19,
+          vertical=MSO_ANCHOR.MIDDLE)
+    _rect(slide, 1.34, 5.46, 1.38, 0.07, RED)
+    labels = ["依据 01", "依据 02", "依据 03"]
+    supporting = items[1:4] or ["依据已核验的上游结果"]
+    for index, point in enumerate(supporting):
+        top = 1.9 + index * 1.48
+        _text(slide, labels[index], 8.52, top, 1.2, 0.28, 10, RED, bold=True)
+        _text(slide, point, 8.52, top + 0.38, 3.62, 0.84, 15, INK, min_size=13)
+
+
+def _table_layout(slide, points: List[str]) -> None:
+    items = points[:4] or ["当前没有可展示的明细"]
+    _rect(slide, 0.95, 1.75, 11.42, 0.55, INK)
+    _text(slide, "#", 1.18, 1.9, 0.45, 0.22, 10, WHITE, bold=True)
+    _text(slide, "关键事项", 1.85, 1.9, 7.1, 0.22, 10, WHITE, bold=True)
+    _text(slide, "当前判断", 9.62, 1.9, 2.1, 0.22, 10, WHITE, bold=True)
+    for index, point in enumerate(items):
+        top = 2.3 + index * 1.0
+        _rect(slide, 0.95, top, 11.42, 0.92, CARD if index % 2 == 0 else GREY, line=LINE)
+        _text(slide, f"{index + 1:02d}", 1.18, top + 0.28, 0.45, 0.25, 11, RED, bold=True)
+        _text(slide, point, 1.85, top + 0.2, 7.3, 0.48, 15, INK, min_size=13)
+        _text(slide, "需关注" if index == 0 else "已记录", 9.62, top + 0.25, 1.6, 0.28,
+              11, RED_DARK if index == 0 else MUTED, bold=index == 0)
+
+
 def _split_layout(slide, points: List[str]) -> None:
     lead = points[0] if points else "工作流已完成本次分析。"
     _rect(slide, 0.95, 1.78, 4.62, 4.82, INK)
@@ -298,6 +387,7 @@ def _rect(slide, left: float, top: float, width: float, height: float, fill: RGB
     shape = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(left), Inches(top), Inches(width), Inches(height))
     shape.fill.solid()
     shape.fill.fore_color.rgb = fill
+    SubElement(shape._element.spPr, qn("a:effectLst"))
     if line:
         shape.line.color.rgb = line
     else:
@@ -376,7 +466,7 @@ def _reference_slides(deck: Presentation, request: DeliverableRequest, page_numb
 
 
 def _content_points(section: DeliverableSection) -> List[str]:
-    raw: List[str] = []
+    raw: List[str] = [section.core_message] if section.core_message else []
     for paragraph in section.paragraphs:
         if section.bullets and len(section.paragraphs) == 1 and len(paragraph) <= 72:
             raw.append(paragraph)
@@ -384,15 +474,26 @@ def _content_points(section: DeliverableSection) -> List[str]:
             raw.extend(re.split(r"\n+|(?<=[。！？；])", paragraph))
     raw.extend(section.bullets)
     result: List[str] = []
+    seen = set()
     for value in raw:
         clean = value.replace("**", "").replace("`", "")
         clean = re.sub(r"^\s*(?:[#>*•\-]+\s*|\d+[.、]\s+)+", "", clean)
         clean = re.sub(r"\s+", " ", clean).strip(" ；;。")
-        if len(clean) >= 4 and clean not in result:
-            result.extend(item for item in _shorten_point(clean) if item not in result)
-        if len(result) >= 36:
-            break
+        semantic = _semantic_key(clean)
+        if len(semantic) >= 4 and semantic not in seen:
+            for item in _shorten_point(clean):
+                key = _semantic_key(item)
+                if key not in seen:
+                    result.append(item)
+                    seen.add(key)
+    if len(result) > 120:
+        raise ValueError("单个章节内容过多，请拆分章节后生成，系统不会截断正文")
     return result or ["工作流已完成处理，但当前步骤没有生成可展示的文字内容。"]
+
+
+def _semantic_key(value: str) -> str:
+    value = re.sub(r"\[(?:Ref\s*)?\d+\]", "", value, flags=re.IGNORECASE)
+    return re.sub(r"[\s，,；;。！？!?：:]", "", value).lower()
 
 
 def _shorten_point(value: str, limit: int = 72) -> List[str]:
@@ -409,7 +510,7 @@ def _shorten_point(value: str, limit: int = 72) -> List[str]:
             current += clause
     if current:
         result.append(current.rstrip("，,；;。"))
-    return [item[:limit] for item in result[:2]]
+    return [item[start:start + limit] for item in result for start in range(0, len(item), limit)]
 
 
 def _chunks(values: List[str], size: int) -> Iterable[List[str]]:
@@ -419,3 +520,14 @@ def _chunks(values: List[str], size: int) -> Iterable[List[str]]:
 
 def _format_refs(section: DeliverableSection) -> str:
     return "；".join(ref.source_name for ref in section.refs)
+
+
+def _speaker_notes(slide, section: DeliverableSection, points: List[str], refs: str) -> None:
+    frame = slide.notes_slide.notes_text_frame
+    notes = ["核心观点：" + (section.core_message or section.heading)]
+    if points:
+        notes.append("讲解要点：" + "；".join(points))
+    notes.append("原始正文：" + "\n".join(section.paragraphs + section.bullets))
+    if refs:
+        notes.append("来源：" + refs)
+    frame.text = "\n".join(notes)

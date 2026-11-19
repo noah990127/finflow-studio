@@ -4,8 +4,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUN_DIR="$ROOT/.run"
 OFFICE_CONTAINER="${FINFLOW_ONLYOFFICE_CONTAINER:-finflow-onlyoffice}"
+SEARXNG_CONTAINER="${FINFLOW_SEARXNG_CONTAINER:-finflow-searxng}"
 
-for name in frontend java java-launcher python demo-api inventory-api; do
+for name in frontend java java-launcher python demo-api inventory-api browser-runner browser-demo; do
   pid_file="$RUN_DIR/$name.pid"
   if [[ -f "$pid_file" ]]; then
     pid="$(cat "$pid_file")"
@@ -31,7 +32,7 @@ for port in 5174 8001 8080 8010; do
 done
 
 if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-  for container in "$OFFICE_CONTAINER" finflow-demo-api finflow-minio finflow-postgres; do
+  for container in "$OFFICE_CONTAINER" "$SEARXNG_CONTAINER" finflow-demo-api finflow-minio finflow-postgres; do
     docker stop "$container" >/dev/null 2>&1 || true
   done
 fi

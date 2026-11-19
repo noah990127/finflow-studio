@@ -66,6 +66,54 @@ class AssistantFlowTest {
                 .contains("3 个步骤和 2 条连线");
         assertThat(execution.deterministicWorkflowCompletion(
                 "workflow.edit", "编辑并运行工作流", effects)).isNull();
+        assertThat(execution.deterministicWorkflowCompletion(
+                "workflow.prepare", "运行这个可复用工作流并写个PPT", effects)).isNull();
+        assertThat(execution.deterministicWorkflowCompletion(
+                "workflow.prepare", "只创建可复用工作流，不要运行", effects))
+                .contains("已创建并验证可复用工作流");
+        assertThat(execution.deterministicWorkflowCompletion(
+                "workflow.prepare", "把这项工作做成可复用流程，最后生成HTML和PPT", effects)).isNull();
+    }
+
+    @Test
+    void aSuccessfulWorkflowRunCompletesForTheFormatsRequestedByTheTool() {
+        var project = projects.create("工作流完成判定", "测试");
+        var workflow = workflows.create(project.id(), new SaveRequest(
+                "福田活动调研工作流", "测试", List.of(
+                new NodeDefinition("control", NodeType.CONTROL, "准备", 0, 0, Map.of())),
+                List.of(), ExecutionMode.MANUAL, null, null));
+        var step = step("workflow.run", Map.of("workflow_id", workflow.id(),
+                "goal", "调研福田今晚活动并写个PPT", "output_formats", List.of("PPTX")));
+        var effects = Map.<String, Object>of(
+                "workflowRunStatus", "SUCCEEDED", "workflowId", workflow.id(),
+                "deliverables", List.of(Map.of("id", "deck-1", "name", "福田今晚活动指南", "format", "pptx")));
+
+        assertThat(execution.deterministicWorkflowRunCompletion(step,
+                "调研福田今晚活动并写个PPT", effects))
+                .contains("已运行并验证工作流")
+                .contains("福田今晚活动指南");
+
+        var repeated = execution.completedWorkflowRunObservation("workflow.run", step.arguments(),
+                "调研福田今晚活动并写个PPT", effects);
+        assertThat(repeated).containsEntry("success", true).containsEntry("taskComplete", true);
+        assertThat(repeated.get("result")).isEqualTo("相同工作流已经成功完成，已跳过重复运行");
+
+        var htmlStep = step("workflow.run", Map.of("workflow_id", workflow.id(),
+                "goal", "同时生成网页报告", "output_formats", List.of("HTML_SLIDES")));
+        assertThat(execution.deterministicWorkflowRunCompletion(htmlStep,
+                "同时生成网页报告", effects)).isNull();
+    }
+
+    @Test
+    void toolObservationsAreBoundedButKeepIdentifiers() {
+        var longText = "资料正文".repeat(1000);
+        var output = execution.observationOutput(Map.of(), Map.of(
+                "resource", Map.of("id", "resource-1", "content", longText),
+                "citations", java.util.stream.IntStream.range(0, 30)
+                        .mapToObj(index -> Map.of("id", "ref-" + index, "excerpt", longText)).toList()));
+
+        assertThat(output.toString()).contains("resource-1", "ref-0", "完整内容保留在工作区")
+                .hasSizeLessThan(25_000);
     }
 
     @Test
@@ -164,22 +212,22 @@ class AssistantFlowTest {
     }
 
     @Test
-    void listsProjectConversationSessionsForHistorySwitching() throws Exception {
+    void listsGlobalConversationSessionsForHistorySwitching() throws Exception {
         var project = json(postJson("/api/projects", Map.of(
                 "name", "会话切换测试", "description", "验证历史会话列表")));
         var projectId = project.get("id").asText();
         var first = json(postJson("/api/projects/" + projectId + "/assistant/sessions", Map.of("title", "第一段对话")));
         var second = json(postJson("/api/projects/" + projectId + "/assistant/sessions", Map.of("title", "第二段对话")));
 
-        var sessions = json(mockMvc.perform(get("/api/projects/" + projectId + "/assistant/sessions"))
+        var sessions = json(mockMvc.perform(get("/api/assistant/sessions"))
                 .andExpect(status().is2xxSuccessful()).andReturn().getResponse().getContentAsString());
 
         assertThat(sessions).extracting(item -> item.get("id").asText())
-                .containsExactly(second.get("id").asText(), first.get("id").asText());
+                .startsWith(second.get("id").asText(), first.get("id").asText());
     }
 
     @Test
-    void rejectsSendingAProjectMessageThroughAnotherProjectsSession() throws Exception {
+    void reusesTheSameConversationWithTheCurrentlyVisibleProjectContext() throws Exception {
         var firstProject = json(postJson("/api/projects", Map.of("name", "项目甲", "description", "")));
         var secondProject = json(postJson("/api/projects", Map.of("name", "项目乙", "description", "")));
         var session = json(postJson("/api/projects/" + firstProject.get("id").asText() + "/assistant/sessions",
@@ -190,11 +238,15 @@ class AssistantFlowTest {
                         .content(objectMapper.writeValueAsBytes(Map.of(
                                 "projectId", secondProject.get("id").asText(),
                                 "text", "在项目乙中新建文件", "page", "project-home"))))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().is2xxSuccessful());
+
+        var updatedSession = json(mockMvc.perform(get("/api/assistant/sessions/" + session.get("id").asText()))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+        assertThat(updatedSession.get("projectId").asText()).isEqualTo(secondProject.get("id").asText());
 
         var messages = json(mockMvc.perform(get("/api/assistant/sessions/" + session.get("id").asText() + "/messages"))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
-        assertThat(messages).isEmpty();
+        assertThat(messages).extracting(item -> item.get("role").asText()).contains("USER", "ASSISTANT");
     }
 
     @Test
@@ -227,8 +279,8 @@ class AssistantFlowTest {
 
         var runResult = execution.executeStep(step("workflow.run", Map.of(
                 "project_id", project.id(), "workflow_id", "${workflow.prepare.workflow_id}")), effects);
-        assertThat(runResult).isEqualTo("工作流已执行完成");
-        assertThat(effects).containsEntry("workflowRunStatus", "SUCCEEDED");
+        assertThat(runResult).isEqualTo("工作流已启动，正在按节点执行");
+        assertThat(effects).containsKeys("workflowRunId", "workflowRunStatus");
 
         var outputArguments = Map.<String, Object>of(
                 "project_id", project.id(), "goal", "生成网页摘要", "output_formats", List.of("HTML_SLIDES"));
@@ -240,8 +292,10 @@ class AssistantFlowTest {
 
         var prepareEffects = new LinkedHashMap<String, Object>();
         execution.executeStep(step("workflow.prepare", Map.of(
-                "project_id", project.id(), "goal", "分析资料并输出12页PPT和HTML网页报告")), prepareEffects);
+                "project_id", project.id(), "name", "月度经营分析", "goal", "分析资料并输出12页PPT和HTML网页报告")), prepareEffects);
         var prepared = workflows.get(prepareEffects.get("workflowId").toString());
+        assertThat(prepared.name()).isEqualTo("月度经营分析工作流");
+        assertThat(prepared.description()).isEqualTo("分析资料并输出12页PPT和HTML网页报告");
         var outputNodes = prepared.nodes().stream()
                 .filter(node -> node.type() == NodeType.DELIVERABLE)
                 .toList();
@@ -261,6 +315,85 @@ class AssistantFlowTest {
                 "project_id", project.id(), "workflow_id", disposable.id())), effects);
         assertThat(deleteResult).isEqualTo("已删除工作流“待删除工作流”");
         assertThat(workflows.list(project.id())).noneMatch(item -> item.id().equals(disposable.id()));
+    }
+
+    @Test
+    void preparesExecutableWebResearchWhenTheProjectHasNoSources() {
+        var project = projects.create("空项目研究", "验证 Agent 创建的查找节点真的联网");
+        var effects = new LinkedHashMap<String, Object>();
+
+        execution.executeStep(step("workflow.prepare", Map.of(
+                "project_id", project.id(),
+                "name", "事件舆情分析",
+                "goal", "调研近期事件的时间线与舆论变化，生成带来源的PPT",
+                "output_formats", List.of("PPTX"))), effects);
+
+        var workflow = workflows.get(effects.get("workflowId").toString());
+        assertThat(workflow.nodes()).filteredOn(node -> node.type() == NodeType.REF_SEARCH)
+                .singleElement().satisfies(node -> assertThat(node.config())
+                        .containsEntry("includeWeb", true)
+                        .containsEntry("limit", 5)
+                        .doesNotContainKey("maxSources"));
+        assertThat(workflow.edges()).anySatisfy(edge -> assertThat(edge.target())
+                .startsWith("analysis_"));
+    }
+
+    @Test
+    void compilesADeepAgentWorkflowSpecInsteadOfUsingTheFixedThreeNodeSkeleton() {
+        var project = projects.create("动态舆情分析", "验证模型规划工作流");
+        var effects = new LinkedHashMap<String, Object>();
+        var nodes = List.of(
+                Map.of("key", "official", "type", "REF_SEARCH", "name", "核验官方信息",
+                        "purpose", "获取公告和官方回应", "config", Map.of(
+                                "query", "目标事件 官方公告 回应", "includeWeb", true, "limit", 6),
+                        "depends_on", List.of()),
+                Map.of("key", "media", "type", "REF_SEARCH", "name", "观察媒体讨论",
+                        "purpose", "获取主流媒体和行业讨论", "config", Map.of(
+                                "query", "目标事件 媒体报道 舆论", "includeWeb", true, "limit", 6),
+                        "depends_on", List.of()),
+                Map.of("key", "synthesis", "type", "AI_ANALYSIS", "name", "交叉核验并分析",
+                        "purpose", "形成时间线并区分事实与争议", "config", Map.of(
+                                "prompt", "按时间线、已确认事实、争议点和舆情阶段输出，并逐项保留来源"),
+                        "depends_on", List.of("official", "media")),
+                Map.of("key", "deck", "type", "DELIVERABLE", "name", "生成管理简报",
+                        "purpose", "输出便于汇报的结论", "config", Map.of(
+                                "generationPrompt", "生成结论先行、带来源的专业PPT", "format", "PPTX",
+                                "includeCitations", true, "citationStyle", "IEEE",
+                                "pptSkill", "studio-professional-native"),
+                        "depends_on", List.of("synthesis")));
+        var spec = Map.<String, Object>of(
+                "version", "1.0", "name", "事件舆情动态分析", "description", "并行检索并交叉核验后输出简报",
+                "nodes", nodes);
+
+        execution.executeStep(step("workflow.prepare", Map.of(
+                "project_id", project.id(), "goal", "分析事件时间线和当前舆论，输出PPT",
+                "output_formats", List.of("PPTX"), "workflow_spec", spec)), effects);
+
+        var workflow = workflows.get(effects.get("workflowId").toString());
+        assertThat(effects).containsEntry("workflowPlanningMode", "deep-agent-spec");
+        assertThat(workflow.name()).isEqualTo("事件舆情动态分析工作流");
+        assertThat(workflow.nodes()).extracting(NodeDefinition::name)
+                .containsExactlyInAnyOrder("核验官方信息", "观察媒体讨论", "交叉核验并分析", "生成管理简报");
+        var analysis = workflow.nodes().stream().filter(node -> "交叉核验并分析".equals(node.name())).findFirst().orElseThrow();
+        assertThat(workflow.edges()).filteredOn(edge -> edge.target().equals(analysis.id())).hasSize(2);
+        assertThat(workflow.nodes()).allSatisfy(node -> assertThat(node.x()).isGreaterThanOrEqualTo(80));
+    }
+
+    @Test
+    void rejectsAWorkflowSpecWithAnUnknownDependency() {
+        var project = projects.create("错误动态流程", "验证动态规划约束");
+        var spec = Map.<String, Object>of(
+                "version", "1.0", "name", "错误流程", "description", "包含无效依赖",
+                "nodes", List.of(Map.of(
+                        "key", "analysis", "type", "AI_ANALYSIS", "name", "分析",
+                        "purpose", "形成结论", "config", Map.of("prompt", "分析资料"),
+                        "depends_on", List.of("missing-source"))));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> execution.executeStep(step("workflow.prepare", Map.of(
+                "project_id", project.id(), "goal", "分析资料", "workflow_spec", spec)), new LinkedHashMap<>()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("不存在的上游")
+                .hasMessageContaining("missing-source");
     }
 
     private PlanStep step(String tool, Map<String, Object> arguments) {
