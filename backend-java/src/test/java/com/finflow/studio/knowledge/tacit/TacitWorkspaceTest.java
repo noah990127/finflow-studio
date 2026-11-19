@@ -65,7 +65,7 @@ class TacitWorkspaceTest {
 
     @Test
     void compactTransportRetainsReceiptSemanticsForDefaultAndOptInClients() throws Exception {
-        var json = new com.fasterxml.jackson.databind.ObjectMapper();
+        var json = new tools.jackson.databind.ObjectMapper();
         var controller = new TacitController(service);
         var compact = json.readValue("""
                 {"action":"generate_flow","expected_revision":0,"request_id":"flow","payload":{},"compact":true}
