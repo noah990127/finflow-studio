@@ -150,10 +150,13 @@ def test_splits_long_analysis_into_readable_slides() -> None:
 
 def test_supports_management_decks_up_to_ten_slides() -> None:
     item = request().model_copy(update={"include_citations": False}, deep=True)
-    item.sections[0].paragraphs = ["。".join(f"这是第 {index} 条管理层结论" for index in range(40))]
+    conclusions = [f"这是第 {index} 条管理层结论" for index in range(40)]
+    item.sections[0].paragraphs = ["。".join(conclusions)]
     deck = Presentation(BytesIO(create_pptx(item)))
 
     assert len(deck.slides) == 10
+    visible_text = {shape.text for slide in deck.slides for shape in slide.shapes if shape.has_text_frame}
+    assert visible_text.issuperset(conclusions + item.sections[0].bullets)
 
 
 def test_huawei_style_c_skill_changes_native_pptx_design() -> None:

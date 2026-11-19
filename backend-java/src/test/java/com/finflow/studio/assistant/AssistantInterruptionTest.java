@@ -58,7 +58,7 @@ class AssistantInterruptionTest {
         assertThat(stopped.await(3, TimeUnit.SECONDS)).isTrue();
         var history = getJson("/api/assistant/sessions/" + session + "/messages");
         assertThat(history).anySatisfy(item -> assertThat(item.get("content").asText()).contains("已停止本次思考"));
-        when(worker.planAgent(any())).thenReturn(answer());
+        doReturn(answer()).when(worker).planAgent(any());
         var next = send(session, "next", "AUTO");
         awaitStatus(next.get("run").get("id").asText(), "SUCCEEDED");
     }
