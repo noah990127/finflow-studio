@@ -174,6 +174,18 @@ start_service "Python worker" "http://127.0.0.1:8001/health" \
   "$ROOT/worker-python" "$RUN_DIR/python.pid" "$RUN_DIR/python.log" \
   "$PYTHON_BIN" -m uvicorn app.main:app --host 127.0.0.1 --port 8001
 
+if [[ "${BROWSER_AGENT_ENABLED:-false}" == "true" ]]; then
+  export BROWSER_AGENT_TOKEN="${BROWSER_AGENT_TOKEN:-}"
+  [[ ${#BROWSER_AGENT_TOKEN} -ge 32 ]] || { echo "BROWSER_AGENT_TOKEN must contain at least 32 characters" >&2; exit 1; }
+  BROWSER_AGENT_PYTHON="$ROOT/worker-python/.venv-browser-agent/bin/python"
+  [[ -x "$BROWSER_AGENT_PYTHON" ]] || { echo "Install worker-python/browser-agent-requirements.txt in .venv-browser-agent first" >&2; exit 1; }
+  export ANONYMIZED_TELEMETRY=false BROWSER_USE_CLOUD_SYNC=false
+  export BROWSER_AGENT_DATA_DIR="${BROWSER_AGENT_DATA_DIR:-$ROOT/.local-runtime/browser-agent}"
+  start_service "Browser Agent" "http://127.0.0.1:8003/health" \
+    "$ROOT/worker-python" "$RUN_DIR/browser-agent.pid" "$RUN_DIR/browser-agent.log" \
+    "$BROWSER_AGENT_PYTHON" -m uvicorn app.browser_agent.service:app --host 127.0.0.1 --port 8003
+fi
+
 if [[ "${BROWSER_RUNNER_ENABLED:-false}" == "true" ]]; then
   export BROWSER_RUNNER_TOKEN="${BROWSER_RUNNER_TOKEN:-}"
   [[ ${#BROWSER_RUNNER_TOKEN} -ge 32 ]] || { echo "BROWSER_RUNNER_TOKEN must contain at least 32 characters" >&2; exit 1; }
@@ -210,7 +222,7 @@ if ! curl -fsS --max-time 2 "http://127.0.0.1:8080/actuator/health" >/dev/null 2
   (cd "$ROOT/backend-java" && mvn -q -DskipTests package)
   (
     cd "$ROOT/backend-java"
-    nohup env \
+    env \
       FINFLOW_OFFICE_ENABLED=true \
       FINFLOW_OFFICE_DOCUMENT_SERVER_URL=http://127.0.0.1:8082 \
       FINFLOW_OFFICE_INTERNAL_URL=http://127.0.0.1:8082 \
@@ -219,8 +231,20 @@ if ! curl -fsS --max-time 2 "http://127.0.0.1:8080/actuator/health" >/dev/null 2
       "FINFLOW_DEMO_DATABASE_URL=$FINFLOW_DEMO_DATABASE_URL" \
       "FINFLOW_DEMO_DATABASE_USERNAME=$FINFLOW_DEMO_DATABASE_USERNAME" \
       "FINFLOW_DEMO_DATABASE_PASSWORD=$FINFLOW_DEMO_DATABASE_PASSWORD" \
-      mvn spring-boot:run >"$RUN_DIR/java.log" 2>&1 &
-    echo $! >"$RUN_DIR/java-launcher.pid"
+      "$PYTHON_BIN" - "$RUN_DIR" <<'PY'
+import subprocess
+import sys
+from pathlib import Path
+
+run_dir = Path(sys.argv[1])
+# Detach the process group as well as stdin so the invoking terminal can exit.
+with (run_dir / "java.log").open("ab") as log:
+    process = subprocess.Popen(
+        ["mvn", "spring-boot:run"], stdin=subprocess.DEVNULL,
+        stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
+    )
+(run_dir / "java-launcher.pid").write_text(str(process.pid) + "\n")
+PY
   )
   wait_for_url "Java API" "http://127.0.0.1:8080/actuator/health" 90
   java_pid="$(lsof -tiTCP:8080 -sTCP:LISTEN 2>/dev/null | head -n 1)"

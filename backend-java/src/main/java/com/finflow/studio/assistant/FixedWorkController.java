@@ -23,4 +23,14 @@ public class FixedWorkController {
     void cancel(@PathVariable String projectId, @PathVariable String sessionId, @PathVariable String runId) {
         works.cancel(projectId, sessionId, runId);
     }
+    @GetMapping("/runs/{runId}/details")
+    java.util.Map<String, Object> details(@PathVariable String projectId, @PathVariable String sessionId, @PathVariable String runId) {
+        return works.executionDetails(projectId, sessionId, runId);
+    }
+    public record InteractionRequest(String taskId, int promptId) { }
+    @PostMapping("/runs/{runId}/interaction/{action}")
+    void interact(@PathVariable String projectId, @PathVariable String sessionId, @PathVariable String runId,
+                  @PathVariable String action, @RequestBody InteractionRequest request) {
+        works.controlInteraction(projectId, sessionId, runId, request.taskId(), request.promptId(), action);
+    }
 }

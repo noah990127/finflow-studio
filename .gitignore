@@ -27,6 +27,7 @@ demo-data/
 demo-services/
 prototype/
 docs/*
+!docs/技术实现归档与固定执行.md
 !docs/Docker 部署指南.md
 !docs/auto-ontology.md
 

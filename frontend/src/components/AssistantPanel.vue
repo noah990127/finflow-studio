@@ -7,11 +7,12 @@ import {
   Sparkles, Square, Zap,
 } from 'lucide-vue-next'
 import { useAssistantStore } from '../stores/assistant'
-import type { AssistantMessage, Project } from '../api/client'
+import { api, type AssistantMessage, type Project } from '../api/client'
 import { businessError, businessText } from '../domain/workProgress'
 import AssistantModelSettings from './AssistantModelSettings.vue'
 import BrowserAuthorizations from './BrowserAuthorizations.vue'
 import BrowserTaskHandoff from './BrowserTaskHandoff.vue'
+import BrowserAgentTasks from './BrowserAgentTasks.vue'
 import AssistantRichText from './AssistantRichText.vue'
 import { createComposerKeyboard } from '../domain/composerKeyboard'
 import { assistantElapsed } from '../domain/assistantElapsed'
@@ -21,6 +22,27 @@ const assistant = useAssistantStore()
 const conversation = ref<HTMLElement | null>(null)
 const composer = ref<HTMLTextAreaElement | null>(null)
 const showEvents = ref(false)
+const hasBrowserAgentTasks = ref(false)
+const browserAgentActive = ref(false)
+const browserTasks = ref<Awaited<ReturnType<typeof api.browserAgentTasks>>>([])
+watch(() => assistant.sessionId, () => { browserTasks.value = [] })
+const stoppingAll = ref(false)
+async function stopCurrentTask() {
+  if (stoppingAll.value) return
+  const session = assistant.sessionId
+  stoppingAll.value = true
+  try {
+    await assistant.cancel()
+    if (session) {
+      const tasks = await api.browserAgentTasks(session)
+      for (const task of tasks.filter(t => ['submitted', 'working', 'input-required', 'auth-required'].includes(t.status.state))) {
+        await api.browserAgentControl(task.id, 'cancel', task.metadata?.promptId)
+      }
+    }
+    if (session === assistant.sessionId) browserAgentActive.value = false
+  } catch (e) { assistant.error = e instanceof Error ? e.message : '任务暂时无法停止' }
+  finally { stoppingAll.value = false }
+}
 const historyExpanded = ref(false)
 const followingLatest = ref(true)
 const unseenActivityCount = ref(0)
@@ -30,12 +52,20 @@ let conversationObserver: MutationObserver | undefined
 
 type HistoryTurn = { id: string; user?: AssistantMessage; assistant: AssistantMessage[] }
 
+function historicalBrowserTasks(turn: HistoryTurn) {
+  const traces = new Set(turn.assistant.map(message => message.traceId))
+  return browserTasks.value.filter(task =>
+    ['completed', 'failed', 'canceled', 'rejected'].includes(task.status.state)
+    && task.conversationTraceIds?.some(trace => traces.has(trace)))
+}
+
 const contextLabel = computed(() => assistant.selection?.range.join('、') || assistant.contextTitle || '项目概览')
 const running = computed(() => !assistant.interrupted && (['QUEUED', 'RUNNING'].includes(assistant.run?.status ?? '') || assistant.streaming))
 const waitingConfirmation = computed(() => assistant.needsConfirmation && (!assistant.run || assistant.run.status === 'WAITING_CONFIRMATION'))
 const pendingApprovalSteps = computed(() => assistant.plan?.steps.filter(step => step.requiresConfirmation && step.status === 'PENDING') ?? [])
 const rememberBrowserAuthorization = ref(true)
-const hasBrowserAuthorization = computed(() => pendingApprovalSteps.value.some(step => ['browser.open', 'browser.commit'].includes(step.tool)))
+const hasBrowserAuthorization = computed(() => pendingApprovalSteps.value.some(step => ['browser.open', 'browser.commit', 'browser.delegate'].includes(step.tool)))
+const hasDomainAuthorization = computed(() => pendingApprovalSteps.value.some(step => step.tool === 'browser.delegate'))
 watch(() => assistant.plan?.planHash, () => { rememberBrowserAuthorization.value = true })
 const controlsLocked = computed(() => assistant.busy || waitingConfirmation.value
   || ['QUEUED', 'RUNNING'].includes(assistant.run?.status ?? ''))
@@ -48,6 +78,8 @@ const taskState = computed(() => {
   if (assistant.error || assistant.run?.status === 'FAILED') return { code: 'failed', label: '未完成', detail: businessError(assistant.error || assistant.run?.resultSummary || '执行遇到问题') }
   if (assistant.run?.status === 'CANCELED') return { code: 'canceled', label: '已停止', detail: '后续步骤没有继续执行' }
   if (assistant.run?.status === 'ROLLED_BACK') return { code: 'completed', label: '已撤销', detail: '已恢复到执行前状态' }
+  if (assistant.run?.status === 'SUCCEEDED' && assistant.run.result?.workStatus === 'REVIEW_ONLY') return { code: 'completed', label: '已核对资料', detail: '本轮未执行新的操作' }
+  if (assistant.run?.status === 'SUCCEEDED' && assistant.run.result?.workStatus === 'DELEGATED') return { code: 'waiting', label: '网页操作', detail: '执行状态与需要你处理的事项显示在输入框上方' }
   if (assistant.run?.status === 'SUCCEEDED' && assistant.run.result?.workStatus === 'WAITING_INPUT') return { code: 'waiting', label: '需要你的输入', detail: assistant.run.resultSummary }
   if (assistant.run?.status === 'SUCCEEDED') return { code: 'completed', label: '本轮已完成', detail: '' }
   if (waitingConfirmation.value) return { code: 'waiting', label: '等待确认', detail: assistant.run?.resultSummary || '确认后会继续修改工作台' }
@@ -194,7 +226,7 @@ onMounted(() => {
   clockTimer = window.setInterval(() => { now.value = Date.now() }, 1000)
   if (conversation.value) {
     conversationObserver = new MutationObserver(() => {
-      if ((running.value || waitingConfirmation.value) && followingLatest.value) void scrollToLatest()
+      if ((running.value || waitingConfirmation.value || hasBrowserAgentTasks.value) && followingLatest.value) void scrollToLatest()
     })
     conversationObserver.observe(conversation.value, { childList: true, subtree: true, characterData: true })
   }
@@ -219,8 +251,8 @@ onBeforeUnmount(() => {
         </div>
         <div class="assistant-header-actions">
           <div class="assistant-mode-switch" role="group" aria-label="Agent 执行模式">
-            <button type="button" :class="{ active: displayedExecutionMode === 'AUTO' }" :disabled="controlsLocked" title="自动执行 LLM 选择的工具" @click="assistant.setExecutionMode('AUTO')"><Zap :size="13" />自动执行</button>
-            <button type="button" :class="{ active: displayedExecutionMode === 'APPROVAL' }" :disabled="controlsLocked" title="修改前需要确认" @click="assistant.setExecutionMode('APPROVAL')"><ShieldCheck :size="13" />逐步确认</button>
+            <button type="button" :class="{ active: displayedExecutionMode === 'AUTO' }" :disabled="controlsLocked" title="浏览器在本次任务范围内自动操作，包括发送和提交；登录等必要操作仍会提醒" @click="assistant.setExecutionMode('AUTO')"><Zap :size="13" />自动执行</button>
+            <button type="button" :class="{ active: displayedExecutionMode === 'APPROVAL' }" :disabled="controlsLocked" title="修改前确认；浏览器自动准备，在对外提交前确认内容" @click="assistant.setExecutionMode('APPROVAL')"><ShieldCheck :size="13" />逐步确认</button>
           </div>
           <button class="icon-button assistant-collapse-button" type="button" title="收起助手" @click="assistant.open = false"><PanelRightClose :size="18" /></button>
         </div>
@@ -264,24 +296,24 @@ onBeforeUnmount(() => {
             <AssistantRichText v-for="message in earlierAssistant(turn)" :key="message.id" :content="message.content" />
           </details>
           <AssistantRichText :content="lastAssistant(turn)!.content" />
+          <BrowserAgentTasks :session-id="assistant.sessionId || ''" :items="historicalBrowserTasks(turn)" />
         </article>
       </section>
 
-      <template v-if="assistant.currentRequest">
-        <article class="assistant-user-turn">
+        <article v-if="assistant.currentRequest" class="assistant-user-turn">
           <div class="assistant-turn-label">你</div>
           <p>{{ assistant.currentRequest }}</p>
         </article>
 
-        <article class="assistant-agent-turn" :data-state="taskState.code">
+        <article v-show="assistant.currentRequest || hasBrowserAgentTasks || waitingConfirmation" class="assistant-agent-turn" :data-state="taskState.code">
           <div class="assistant-agent-avatar"><Sparkles :size="13" /></div>
           <div class="assistant-turn-label">
             Agent
-            <span class="assistant-stream-health" :data-state="assistant.eventConnection"><Radio :size="10" />{{ streamHealthLabel }}</span>
-            <time class="assistant-elapsed"><Clock3 :size="12" />{{ elapsedLabel }}</time>
+            <span v-if="assistant.run?.result?.workStatus !== 'DELEGATED'" class="assistant-stream-health" :data-state="assistant.eventConnection"><Radio :size="10" />{{ streamHealthLabel }}</span>
+            <time v-if="assistant.run?.result?.workStatus !== 'DELEGATED'" class="assistant-elapsed"><Clock3 :size="12" />{{ elapsedLabel }}</time>
           </div>
 
-          <div class="assistant-run-state" aria-live="polite">
+          <div v-if="!hasBrowserAgentTasks || assistant.run?.result?.workStatus !== 'DELEGATED'" class="assistant-run-state" aria-live="polite">
             <LoaderCircle v-if="taskState.code === 'running'" :size="16" class="assistant-spinner" />
             <CheckCircle2 v-else-if="taskState.code === 'completed'" :size="16" />
             <AlertCircle v-else-if="taskState.code === 'failed' || taskState.code === 'canceled'" :size="16" />
@@ -319,15 +351,27 @@ onBeforeUnmount(() => {
             </div>
           </section>
 
-          <AssistantRichText v-if="assistant.assistantMessage && assistant.run?.status === 'SUCCEEDED'" class="assistant-final-answer" :content="assistant.assistantMessage" />
+          <AssistantRichText v-if="assistant.assistantMessage && assistant.run?.status === 'SUCCEEDED' && assistant.run.result?.workStatus !== 'DELEGATED'" class="assistant-final-answer" :content="assistant.assistantMessage" />
           <div v-if="assistant.error" class="assistant-error"><AlertCircle :size="15" /><span>{{ businessError(assistant.error) }}</span><details><summary>问题详情</summary><pre>{{ assistant.error }}</pre></details></div>
 
 
           <div v-if="assistant.run?.status === 'SUCCEEDED' && assistant.run.result?.createdProjectId" class="result-actions">
             <button class="secondary-button" type="button" @click="assistant.rollback"><RotateCcw :size="15" />撤销本次操作</button>
           </div>
+      <BrowserAgentTasks :session-id="assistant.sessionId || ''" :step-ids="assistant.plan?.steps.map(step => step.id) || []" @updated="browserTasks = $event" @present="hasBrowserAgentTasks = $event" @active="browserAgentActive = $event" />
+      <BrowserTaskHandoff v-if="!hasBrowserAgentTasks" :session-id="assistant.sessionId || ''" :locked="controlsLocked || assistant.stopping" :waiting="taskState.code === 'waiting'" @continue="continueBrowserTask" />
+      <div v-if="waitingConfirmation" class="assistant-confirm-inline" role="region" aria-label="待确认操作">
+        <ShieldCheck :size="18" /><p><strong>需要你的确认</strong><span>{{ businessText(taskState.detail, '确认后执行待授权操作') }}</span></p>
+        <button class="approval-action" type="button" :disabled="assistant.busy" @click="assistant.confirm(hasBrowserAuthorization && rememberBrowserAuthorization)">{{ assistant.busy ? '确认中…' : hasDomainAuthorization ? '允许访问' : '允许执行' }}</button>
+        <p v-if="assistant.error" class="assistant-confirm-error">{{ businessError(assistant.error) }}</p>
+        <details v-if="pendingApprovalSteps.length" class="assistant-approval-scope" open>
+          <summary>本次确认范围</summary>
+          <span v-if="hasDomainAuthorization">网站授权保存到当前账号，30天内复用，可随时撤销</span>
+          <label v-else-if="hasBrowserAuthorization"><input v-model="rememberBrowserAuthorization" type="checkbox" /> 记住相同目标与范围，30天内有效；修改内容须重新确认</label>
+          <pre v-for="step in pendingApprovalSteps" :key="step.id">{{ step.description }}</pre>
+        </details>
+      </div>
         </article>
-      </template>
     </div>
 
     <button v-if="showJumpToLatest" class="assistant-jump-latest" type="button" title="恢复自动跟随" @click="jumpToLatest">
@@ -335,24 +379,13 @@ onBeforeUnmount(() => {
     </button>
 
     <footer class="assistant-composer">
-      <BrowserTaskHandoff :session-id="assistant.sessionId || ''" :locked="controlsLocked || assistant.stopping" @continue="continueBrowserTask" />
-      <div v-if="waitingConfirmation" class="assistant-confirm-inline" role="region" aria-label="待确认操作">
-        <ShieldCheck :size="18" /><p><strong>需要你的确认</strong><span>{{ businessText(taskState.detail, '确认后执行待授权操作') }}</span></p>
-        <button class="primary-button" type="button" :disabled="assistant.busy" @click="assistant.confirm(hasBrowserAuthorization && rememberBrowserAuthorization)">{{ assistant.busy ? '正在确认…' : '确认执行' }}</button>
-        <p v-if="assistant.error" class="assistant-confirm-error">{{ businessError(assistant.error) }}</p>
-        <details v-if="pendingApprovalSteps.length" class="assistant-approval-scope" open>
-          <summary>本次确认范围</summary>
-          <label v-if="hasBrowserAuthorization"><input v-model="rememberBrowserAuthorization" type="checkbox" /> 记住此授权范围，30天内有效，可随时撤销</label>
-          <pre v-for="step in pendingApprovalSteps" :key="step.id">{{ step.description }}</pre>
-        </details>
-      </div>
       <div class="assistant-context-chip"><span></span>{{ contextLabel }}</div>
       <div class="assistant-composer-box">
         <textarea ref="composer" v-model="assistant.input" rows="1" placeholder="向 Agent 交代任务或继续追问" @keydown="composerKeyboard.keydown" @compositionstart="composerKeyboard.compositionStart" @compositionend="composerKeyboard.compositionEnd" @blur="composerKeyboard.blur"></textarea>
-        <button v-if="assistant.canInterrupt || assistant.stopping" class="send-button stop" type="button" :title="assistant.stopping ? '正在中断' : '中断当前任务'" :disabled="assistant.stopping" @click="assistant.cancel"><LoaderCircle v-if="assistant.stopping" :size="14" class="assistant-spinner" /><Square v-else :size="14" /></button>
+        <button v-if="assistant.canInterrupt || browserAgentActive || assistant.stopping || stoppingAll" class="send-button stop" type="button" :title="assistant.stopping || stoppingAll ? '正在中断' : '中断当前任务'" :disabled="assistant.stopping || stoppingAll" @click="stopCurrentTask"><LoaderCircle v-if="assistant.stopping || stoppingAll" :size="14" class="assistant-spinner" /><Square v-else :size="14" /></button>
         <button v-else class="send-button" type="button" title="发送" :disabled="controlsLocked || assistant.stopping || !assistant.input.trim()" @click="send"><ArrowUp :size="18" /></button>
       </div>
-      <p><span>{{ displayedExecutionMode === 'AUTO' ? '自动执行 · 高风险操作仍需授权' : '逐步确认后执行' }}</span><i>·</i> Enter 发送 <i>·</i> Shift+Enter 换行</p>
+      <p><span>{{ displayedExecutionMode === 'AUTO' ? '自动执行' : '逐步确认' }}</span><i>·</i> Enter 发送 <i>·</i> Shift+Enter 换行</p>
     </footer>
   </aside>
 </template>

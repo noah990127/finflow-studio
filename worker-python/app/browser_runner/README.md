@@ -1,6 +1,6 @@
 # Browser Runner
 
-独立 Playwright 执行进程，默认端口 `8002`。通用交互使用结构化观察与受控动作；可选 browser-use 探索不能绕过主服务授权。
+历史 Playwright 执行进程，默认端口 `8002`。仅保留已有连接及固定查询导出工序兼容。新网站任务使用 [独立 browser-use Agent](../browser_agent/README.md)，不再通过此处的 observe/act 循环执行。
 
 ## 本地启用
 

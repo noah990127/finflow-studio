@@ -11,6 +11,7 @@ public record FixedToolCall(String tool, int version, Map<String, Object> argume
             "research.fetch", Set.of("url"),
             "research.collect", Set.of("sources", "maxSources"),
             "browser.run", Set.of("script", "parameters"),
+            "browser.replay", Set.of("sourceTask", "hash", "parameters"),
             "document.render", Set.of("format", "pptSkill", "document"));
 
     public static FixedToolCall parse(ObjectMapper json, FixedWorkDefinition.Step step) {
@@ -25,6 +26,7 @@ public record FixedToolCall(String tool, int version, Map<String, Object> argume
             case "research.fetch" -> "url";
             case "research.collect" -> "sources";
             case "browser.run" -> "script";
+            case "browser.replay" -> "sourceTask";
             default -> "document";
         };
         if (!call.arguments.containsKey(required)) throw new IllegalArgumentException("固定工具缺少参数：" + required);
@@ -32,6 +34,11 @@ public record FixedToolCall(String tool, int version, Map<String, Object> argume
             if (!(call.arguments.get("script") instanceof Map<?, ?> script) || containsBinding(script))
                 throw new IllegalArgumentException("浏览器脚本必须固化，不允许用输入替换操作逻辑");
             if (!call.arguments.containsKey("parameters")) throw new IllegalArgumentException("浏览器执行缺少parameters");
+        }
+        if ("browser.replay".equals(call.tool)) {
+            if (!(call.arguments.get("sourceTask") instanceof String id) || !id.matches("[a-f0-9-]{36}")
+                    || !(call.arguments.get("hash") instanceof String hash) || !hash.matches("[a-f0-9]{64}"))
+                throw new IllegalArgumentException("浏览器重放必须绑定固定任务和实现校验值");
         }
         if ("document.render".equals(call.tool) && !Set.of("pptx", "docx", "pdf", "html_slides").contains(Objects.toString(call.arguments.get("format"), "")))
             throw new IllegalArgumentException("文档格式必须固定为pptx、docx、pdf或html_slides");
@@ -94,6 +101,14 @@ public record FixedToolCall(String tool, int version, Map<String, Object> argume
 
     public void validateArguments(Map<String, Object> args) {
         switch (tool) {
+            case "browser.replay" -> {
+                if (!binding(args.get("parameters"))) {
+                    if (!(args.get("parameters") instanceof Map<?, ?> map) || map.size() > 100)
+                        throw new IllegalArgumentException("浏览器输入必须为JSON对象，最多100项");
+                    for (var value : map.values()) if (!binding(value) && (!(value instanceof String text) || text.length() > 10000))
+                        throw new IllegalArgumentException("浏览器输入值必须为不超过10000字符的字符串");
+                }
+            }
             case "research.discover" -> {
                 var topic = args.get("topic");
                 if (!binding(topic)) {

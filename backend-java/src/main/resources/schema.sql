@@ -552,6 +552,63 @@ create table if not exists agent_work_title (
     primary key (project_id, session_id)
 );
 
+create table if not exists browser_agent_task (
+    task_id varchar(128) primary key,
+    step_id varchar(128) not null unique,
+    owner_id varchar(128) not null,
+    session_id varchar(128) not null,
+    last_result clob not null,
+    created_at timestamp default current_timestamp not null
+);
+
+create table if not exists browser_procedure_artifact (
+    task_id varchar(128) primary key references browser_agent_task(task_id),
+    script_resource_id varchar(64) not null,
+    parameters_resource_id varchar(64) not null,
+    result_resource_id varchar(64) not null,
+    content_hash varchar(64) not null
+);
+
+create table if not exists browser_task_artifact (
+    task_id varchar(128) not null references browser_agent_task(task_id),
+    part_key varchar(64) not null,
+    resource_id varchar(64) not null,
+    resource_version integer not null,
+    primary key(task_id, part_key)
+);
+
+create table if not exists technical_artifact (
+    owner_kind varchar(32) not null,
+    owner_id varchar(128) not null,
+    part_key varchar(100) not null,
+    project_id varchar(64) not null,
+    resource_id varchar(64) not null,
+    resource_version integer not null,
+    content_hash varchar(80) not null,
+    created_at timestamp with time zone not null,
+    primary key(owner_kind, owner_id, part_key)
+);
+
+create table if not exists technical_step_execution (
+    run_id varchar(64) not null,
+    step_id varchar(80) not null,
+    definition_id varchar(64) not null,
+    business_stage_id varchar(80) not null,
+    step_order integer not null,
+    code_hash varchar(80) not null,
+    inputs_json text not null,
+    output_json text not null default '{}',
+    status varchar(32) not null,
+    error text not null default '',
+    started_at timestamp with time zone not null,
+    finished_at timestamp with time zone,
+    primary key(run_id, step_id)
+);
+
+alter table browser_agent_task add column if not exists reconciled boolean not null default false;
+alter table browser_agent_task add column if not exists reconciliation_error text not null default '';
+alter table browser_agent_task add column if not exists reconciliation_checked_at timestamp with time zone;
+
 create table if not exists browser_user_grant (
     id varchar(64) primary key,
     owner_id varchar(160) not null,
@@ -639,3 +696,7 @@ create table if not exists tacit_ontology_publication (
     unique(project_id, target_id, model_digest)
 );
 create index if not exists idx_tacit_publication_history on tacit_ontology_publication(project_id,created_at,id);
+create table if not exists fixed_work_interaction (
+    run_id varchar(128) primary key,
+    interaction_json clob not null
+);

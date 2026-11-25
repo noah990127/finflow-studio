@@ -28,7 +28,7 @@ public class BrowserAuthorizationService {
     public record Grant(String id, String kind, String label, String status, Instant createdAt, Instant expiresAt) { }
     public record Audit(String id, String grantId, String stepId, String event, String label, Instant createdAt) { }
 
-    public boolean handles(String tool) { return Set.of("browser.open", "browser.commit").contains(tool); }
+    public boolean handles(String tool) { return Set.of("browser.open", "browser.commit", "browser.delegate").contains(tool); }
 
     static String approvalDescription(Map<String, Object> preview) {
         var action = Objects.toString(preview.get("action"), "");
@@ -85,6 +85,15 @@ public class BrowserAuthorizationService {
     }
 
     public Scope scope(String tool, Map<String, Object> args) {
+        if ("browser.delegate".equals(tool)) {
+            // Exact task scope, never a blanket website or external-write permission.
+            var canonical = new TreeMap<String, Object>(args);
+            canonical.putIfAbsent("human_login", true);
+            canonical.put("allowed_domains", args.get("allowed_domains") instanceof List<?> domains
+                    ? domains.stream().map(Object::toString).sorted().distinct().toList() : List.of());
+            return new Scope("BROWSER_TASK", HashSupport.sha256("browser-task:v1:" + json.writeValueAsString(canonical)),
+                    BrowserAgentService.approvalDescription(args));
+        }
         if ("browser.open".equals(tool)) {
             var origin = origin(entryUrl(args));
             return new Scope("WEBSITE", HashSupport.sha256("website:v2:" + origin), "连接 " + origin + "（正常联网、浏览与填写；填写可能自动保存，对外操作仍需授权）");
@@ -107,7 +116,49 @@ public class BrowserAuthorizationService {
                 .param("owner", ActorContext.current()).param("scope", scope.key()).param("now", Instant.now()).query(String.class).optional();
     }
 
-    public boolean canReuse(String tool, Map<String, Object> args) { return handles(tool) && activeGrant(scope(tool, args)).isPresent(); }
+    public boolean canReuse(String tool, Map<String, Object> args) {
+        if ("browser.delegate".equals(tool)) return missingDomains(args).isEmpty();
+        return handles(tool) && activeGrant(scope(tool, args)).isPresent();
+    }
+
+    public static List<String> requestedDomains(Map<String, Object> args) {
+        var domains = new TreeSet<String>();
+        domains.add(URI.create(normalizedUrl(Objects.toString(args.get("url"), ""))).getHost());
+        if (args.get("allowed_domains") instanceof List<?> values) {
+            for (var value : values) {
+                var host = Objects.toString(value, "").toLowerCase(Locale.ROOT);
+                if (!host.matches("[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+") || host.length() > 253)
+                    throw new IllegalArgumentException("网站授权必须提供具体域名，不能使用通配符或URL");
+                domains.add(host);
+            }
+        }
+        // Explicit URLs in the task are also destinations; never infer authorization from page content.
+        var urls = java.util.regex.Pattern.compile("https?://[a-zA-Z0-9.-]+(?=[:/\\s]|$)")
+                .matcher(Objects.toString(args.get("goal"), ""));
+        while (urls.find()) domains.add(URI.create(urls.group()).getHost().toLowerCase(Locale.ROOT));
+        if (domains.size() > 10) throw new IllegalArgumentException("单次任务最多申请10个具体网站域名");
+        if (domains.stream().mapToInt(String::length).sum() > 700)
+            throw new IllegalArgumentException("网站授权范围过长，请拆分任务；不会截断授权域名");
+        return List.copyOf(domains);
+    }
+
+    private Scope domainScope(String host) {
+        return new Scope("DOMAIN", HashSupport.sha256("browser-domain:v1:" + host), host);
+    }
+
+    public List<String> missingDomains(Map<String, Object> args) {
+        return requestedDomains(args).stream().filter(host -> activeGrant(domainScope(host)).isEmpty()).toList();
+    }
+
+    public String domainApprovalDescription(Map<String, Object> args) {
+        return "允许当前平台账号访问以下网站：\n" + String.join("\n", missingDomains(args))
+                + "\n授权保存到当前账号，30天内复用，可在网站授权中撤销。此授权仅限网站访问，业务提交仍遵循执行模式。";
+    }
+
+    public void requireDomains(Map<String, Object> args) {
+        var missing = missingDomains(args);
+        if (!missing.isEmpty()) throw new IllegalStateException("需先授权网站访问：" + String.join("、", missing));
+    }
 
     public void registerSession(Map<String, Object> args, String sessionId) {
         if (jdbc.sql("select count(*) from browser_authorized_session where session_id=:session and owner_id=:owner")
@@ -177,6 +228,20 @@ public class BrowserAuthorizationService {
     public void approve(List<AssistantModels.PlanStep> steps, boolean remember) {
         for (var step : steps) {
             if (!"PENDING".equals(step.status()) || !step.requiresConfirmation() || !handles(step.tool())) continue;
+            if ("browser.delegate".equals(step.tool())) {
+                for (var host : requestedDomains(step.arguments())) {
+                    var domain = domainScope(host);
+                    var grant = activeGrant(domain);
+                    if (grant.isPresent()) continue;
+                    var id = UUID.randomUUID().toString();
+                    var now = Instant.now();
+                    jdbc.sql("insert into browser_user_grant(id,owner_id,kind,scope_key,label,status,created_at,expires_at) values (:id,:owner,'DOMAIN',:scope,:label,'ACTIVE',:now,:expires)")
+                            .param("id", id).param("owner", ActorContext.current()).param("scope", domain.key()).param("label", host)
+                            .param("now", now).param("expires", now.plus(30, ChronoUnit.DAYS)).update();
+                    audit(id, step.id(), "GRANTED", "网站访问 · " + host);
+                }
+                continue;
+            }
             var scope = scope(step.tool(), step.arguments());
             jdbc.sql("insert into browser_approval_receipt(step_id,owner_id,scope_key,consumed) values (:step,:owner,:scope,false)")
                     .param("step", step.id()).param("owner", ActorContext.current()).param("scope", scope.key()).update();
@@ -196,6 +261,11 @@ public class BrowserAuthorizationService {
     }
 
     public <T> T execute(String tool, Map<String, Object> args, String stepId, Supplier<T> action) {
+        if ("browser.delegate".equals(tool)) {
+            requireDomains(args);
+            audit("", stepId, "AUTHORIZATION_REUSED", "网站访问 · " + String.join("、", requestedDomains(args)));
+            return action.get();
+        }
         var scope = scope(tool, args);
         var consumed = jdbc.sql("update browser_approval_receipt set consumed=true where step_id=:step and owner_id=:owner and scope_key=:scope and consumed=false")
                 .param("step", stepId).param("owner", ActorContext.current()).param("scope", scope.key()).update();

@@ -2,8 +2,9 @@
 import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { Play, LoaderCircle } from 'lucide-vue-next'
 import { api } from '../api/client'
+import { browserStates } from '../domain/browserHandoff'
 
-const props = defineProps<{ sessionId: string; locked: boolean }>()
+const props = defineProps<{ sessionId: string; locked: boolean; waiting?: boolean }>()
 const emit = defineEmits<{ continue: [sessionId: string, browserSession: string] }>()
 const connections = ref<Awaited<ReturnType<typeof api.browserConnections>>>([])
 const error = ref('')
@@ -18,13 +19,11 @@ async function refresh() {
   fetching = true
   try {
     const events = await api.listAssistantEvents(conversation)
-    const ids = new Set(events.flatMap(event => {
-      const output = event.payload?.output as Record<string, unknown> | undefined
-      return typeof output?.session === 'string' ? [output.session] : []
-    }))
+    const states = browserStates(events)
     const active = await api.browserConnections()
     if (version === generation) {
-      connections.value = active.filter(item => ids.has(item.session) && item.status === 'HUMAN_CONTROL')
+      connections.value = active.filter(item => states.has(item.session) && (item.status === 'HUMAN_CONTROL'
+        || (props.waiting && item.status === 'AGENT_CONTROL' && states.get(item.session) === 'HUMAN_CONTROL')))
       error.value = ''
     }
   } catch { if (version === generation) error.value = '无法读取人工操作状态，请重试' }
@@ -35,7 +34,9 @@ async function complete(id: string) {
   const conversation = props.sessionId
   busy.value = true; error.value = ''
   try {
-    await api.browserControl(id, 'resume')
+    const current = connections.value.find(item => item.session === id)
+    if (!current) throw new Error('网站连接已变化，请刷新状态后重试')
+    if (current.status === 'HUMAN_CONTROL') await api.browserControl(id, 'resume')
     if (conversation !== props.sessionId) return
     connections.value = connections.value.filter(item => item.session !== id)
     emit('continue', conversation, id)
@@ -50,7 +51,7 @@ onUnmounted(() => { generation++; if (timer) clearInterval(timer) })
 <template>
   <section v-if="connections.length || error" class="task-handoff" aria-label="需要你操作网站">
     <div v-for="item in connections" :key="item.session" class="handoff-row">
-      <div><strong>请完成网站中的操作</strong><span>{{ item.origin.replace(/^https?:\/\//, '') }} · 完成后继续当前任务</span></div>
+      <div><strong>{{ item.status === 'HUMAN_CONTROL' ? '请完成网站中的操作' : '控制权已交还，可以继续任务' }}</strong><span>{{ item.origin.replace(/^https?:\/\//, '') }} · 完成后继续当前任务</span></div>
       <button class="primary-button" :disabled="busy || locked" @click="complete(item.session)"><LoaderCircle v-if="busy" :size="14" /><Play v-else :size="14" />{{ busy ? '正在继续…' : '我已完成，继续执行' }}</button>
     </div>
     <p v-if="error" role="alert">{{ error }} <button class="text-button" @click="refresh">重试</button></p>

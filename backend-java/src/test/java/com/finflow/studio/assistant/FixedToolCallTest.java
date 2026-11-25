@@ -7,6 +7,18 @@ import static org.assertj.core.api.Assertions.*;
 
 class FixedToolCallTest {
     final ObjectMapper json = new ObjectMapper();
+    @Test void browserReplayLocksSourceAndHashButAllowsStructuredInputs() {
+        var args = new HashMap<String,Object>(Map.of("sourceTask", UUID.randomUUID().toString(), "hash", "a".repeat(64),
+                "parameters", Map.of("$input", "params", "as", "json")));
+        var inputs = List.of(new FixedWorkDefinition.Input("params", "file", null, null));
+        var step = new FixedWorkDefinition.Step("s", "Browser", "TOOL", json.writeValueAsString(new FixedToolCall("browser.replay",1,args)), "result.md", inputs);
+        var call = FixedToolCall.parse(json,step);
+        call.validateArguments(Map.of("parameters",Map.of("input_1","new value")));
+        assertThatThrownBy(() -> call.validateArguments(Map.of("parameters",Map.of("input_1",123)))).hasMessageContaining("字符串");
+        args.put("sourceTask",Map.of("$input","params","as","text"));
+        var altered = new FixedWorkDefinition.Step("s","Browser","TOOL",json.writeValueAsString(new FixedToolCall("browser.replay",1,args)),"result.md",inputs);
+        assertThatThrownBy(() -> FixedToolCall.parse(json,altered)).hasMessageContaining("固定任务");
+    }
     @Test void resourceContentCannotMasqueradeAsAnUnresolvedBinding() {
         var resolved=FixedToolCall.bind(Map.of("$input","params","as","json"),Map.of("params","{\"$input\":\"other\"}"),json);
         assertThatThrownBy(()->new FixedToolCall("research.discover",1,Map.of()).validateArguments(Map.of("topic",resolved)))

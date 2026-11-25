@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<title>浏览器自动化本地验证</title>
+<style>
+body{font:16px system-ui;margin:40px;max-width:560px;color:#24352d;background:#f5f8f6}
+label{display:block;margin:18px 0 5px} input,[contenteditable]{display:block;padding:10px;border:1px solid #87978e;background:white;width:90%}
+button{padding:10px 18px;margin-top:20px;background:#267052;color:white;border:0}
+[role=status]{margin-top:24px;white-space:pre-wrap}
+</style>
+<h1>费用登记验证</h1>
+<form id="form">
+  <label for="name">事项</label><input id="name" required>
+  <label for="amount">金额</label><input id="amount" type="number" required>
+  <label id="note-label">备注</label><div id="note" contenteditable="true" role="textbox" aria-labelledby="note-label"></div>
+  <button type="submit">登记</button>
+</form>
+<div role="status" id="result"></div>
+<script>
+document.querySelector('#form').addEventListener('submit',async event=>{
+ event.preventDefault();
+ const entry={name:document.querySelector('#name').value,amount:document.querySelector('#amount').value,note:document.querySelector('#note').innerText};
+ const response=await fetch('/submissions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(entry)});
+ if(!response.ok){document.querySelector('#result').textContent='登记失败';return;}
+ const result=await response.json();
+ document.querySelector('#result').textContent=`登记成功\n事项：${entry.name}\n金额：${entry.amount}\n备注：${entry.note}\n登记次数：${result.count}`;
+});
+</script>
+</html>

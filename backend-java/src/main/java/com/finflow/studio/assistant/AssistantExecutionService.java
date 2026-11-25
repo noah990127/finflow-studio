@@ -73,6 +73,8 @@ public class AssistantExecutionService {
     private FixedWorkService fixedWorks;
     @org.springframework.beans.factory.annotation.Autowired
     private BrowserAuthorizationService browserAuthorizations;
+    @org.springframework.beans.factory.annotation.Autowired
+    private BrowserAgentService browserAgent;
     private final int maxDynamicActions;
     private final AssistantInterruptions interruptions;
     private final String gatewayBaseUrl;
@@ -335,10 +337,15 @@ public class AssistantExecutionService {
             request.put("max_tool_calls", maxDynamicActions);
         if (isCliRuntime(continuousRuntimeMode)) {
             request.put("capabilities", AssistantCapabilityRegistry.catalog().stream()
-                    .filter(cap -> runtime.stage().permits(cap.get("id").toString())).toList());
+                    .filter(cap -> runtime.stage().permits(cap.get("id").toString()))
+                    .filter(item -> !item.get("id").toString().startsWith("browser.")
+                            || Set.of("browser.delegate", "browser.task_status").contains(item.get("id")))
+                    .toList());
             request.put("max_tool_calls", maxDynamicActions);
         }
         request.put("observation", Map.of("previousEffects", readEffects(run.id()),
+                "browserTasks", browserAgent == null ? List.of() : browserAgent.conversationTasks(run.sessionId()),
+                "browserTaskGuidance", "browserTasks 是当前对话已有任务。继续、核对或固化时先用 browser.task_status 查询原 task_id；项目资源为空不代表浏览器未执行。不得为固化而重发或重新委派。执行成功与固化成功分别判断，NEEDS_REVIEW 应报告具体绑定问题，不得声称数据已变化。",
                 "work", runtime.projectId() == null ? List.of() : agentWorks.list(runtime.projectId()).stream()
                         .filter(work -> work.sessionId().equals(run.sessionId())).toList(),
                 "approvedActions", loadSteps(run.planId()).stream().filter(step -> "PENDING".equals(step.status()) && !"agent.execute".equals(step.tool()))
@@ -366,14 +373,16 @@ public class AssistantExecutionService {
                     if (raw.get("arguments") instanceof Map<?, ?> values) {
                         values.forEach((key, item) -> arguments.put(String.valueOf(key), item));
                     }
-                    var description = "resource.delete_batch".equals(tool)
+                    var description = "browser.delegate".equals(tool)
+                            ? browserAuthorizations.domainApprovalDescription(arguments)
+                            : "resource.delete_batch".equals(tool)
                             ? workspaceTools.deletionDescription(arguments) : "browser.commit".equals(tool)
                             ? BrowserAuthorizationService.approvalDescription(browserSession("preview", arguments)) : "browser.open".equals(tool)
                             ? browserAuthorizations.scope(tool, arguments).label()
                               + (Boolean.FALSE.equals(arguments.get("human_login")) ? "。本次由Agent浏览公开页面。" : "。本次先交给你操作，再打开网站；登录后由你交还Agent。")
                               + "网站可正常加载数据和维持连接；填写可能触发自动保存。发送、发布、删除等操作另行确认。不允许访问未授权的本机私有服务。记住授权有效期为30天。" : capability.description();
                     var proposed = new PlanStep(UUID.randomUUID().toString(), 0, capability.id(), capability.mode(),
-                            capability.title(), description, arguments, capability.risk(), true, "PENDING");
+                            "browser.delegate".equals(tool) ? "授权网站访问" : capability.title(), description, arguments, capability.risk(), true, "PENDING");
                     staged.add(appendDynamicStep(run.planId(), proposed, "APPROVAL",
                             "Agent 已停在执行前，等待确认写入操作"));
                 }
@@ -509,6 +518,10 @@ public class AssistantExecutionService {
             AssistantToolContracts.validate(tool, arguments);
             return Map.of("success", true, "output", fixedWorks.state(fixedWorks.projectForRun(runId), run.sessionId()));
         }
+        if ("browser.task_status".equals(tool)) {
+            AssistantToolContracts.validate(tool, arguments);
+            return Map.of("success", true, "output", browserAgent.status(arguments.get("task_id").toString()));
+        }
         if ("browser.inspect".equals(tool)) {
             AssistantToolContracts.validate(tool, arguments);
             return Map.of("success", true, "output", worker.browser("inspect", arguments));
@@ -560,6 +573,11 @@ public class AssistantExecutionService {
         selectedLock.lock();
         try {
             var existingEffects = readEffects(runId);
+            if ("browser.delegate".equals(tool) && !browserAuthorizations.canReuse(tool, arguments)) {
+                return Map.of("success", false, "error", browserAuthorizations.domainApprovalDescription(arguments),
+                        "failureType", "AUTHORIZATION", "retryable", false,
+                        "recoveryHint", "等待用户授权网站访问；自动执行模式不能跳过网站安全授权");
+            }
             var completedRun = completedWorkflowRunObservation(tool, arguments, runtime.goal(), existingEffects);
             if (completedRun != null) return completedRun;
             PlanStep step;
@@ -568,7 +586,7 @@ public class AssistantExecutionService {
                         .filter(item -> "PENDING".equals(item.status()) && item.tool().equals(tool) && item.arguments().equals(arguments))
                         .findFirst().orElse(null);
                 if (step == null) {
-                    if (!"READ".equals(capability.mode()) && (!"AUTO".equalsIgnoreCase(runtime.executionMode())
+                    if (!"browser.delegate".equals(tool) && !"READ".equals(capability.mode()) && (!"AUTO".equalsIgnoreCase(runtime.executionMode())
                             || capability.risk() == RiskLevel.DESTRUCTIVE_OR_EXTERNAL)
                             && !browserAuthorizations.canReuse(tool, arguments)) {
                         return Map.of("success", false, "error", "该写入操作尚未获得用户确认",
@@ -760,7 +778,8 @@ public class AssistantExecutionService {
     private PlanStep appendDynamicStep(String planId, PlanStep proposed, String executionMode, String summary) {
         var current = loadSteps(planId);
         var order = current.stream().mapToInt(PlanStep::order).max().orElse(0) + 1;
-        var requiresConfirmation = !"AUTO".equalsIgnoreCase(executionMode) && proposed.risk().requiresConfirmation();
+        var requiresConfirmation = !"AUTO".equalsIgnoreCase(executionMode)
+                && (proposed.requiresConfirmation() || proposed.risk().requiresConfirmation());
         var step = new PlanStep(UUID.randomUUID().toString(), order, proposed.tool(), proposed.mode(),
                 proposed.title(), proposed.description(), proposed.arguments(), proposed.risk(), requiresConfirmation, "PENDING");
         var risk = java.util.stream.Stream.concat(loadSteps(planId).stream().map(PlanStep::risk),
@@ -808,7 +827,38 @@ public class AssistantExecutionService {
                 "message", "等待确认动态追加的步骤：“" + next.title() + "”"));
     }
 
+    @org.springframework.context.event.EventListener(org.springframework.boot.context.event.ApplicationReadyEvent.class)
+    @org.springframework.transaction.annotation.Transactional
+    public void repairWaitingDomainApprovals() {
+        // Repair only the inconsistent waiting records created before explicit consent was preserved.
+        var plans = jdbc.sql("""
+                select distinct s.plan_id from assistant_plan_step s join assistant_run r on r.plan_id=s.plan_id
+                where r.status='WAITING_CONFIRMATION' and s.status='PENDING'
+                  and s.tool_name='browser.delegate' and s.title='授权网站访问' and s.requires_confirmation=false
+                """).query(String.class).list();
+        for (var planId : plans) {
+            jdbc.sql("""
+                    update assistant_plan_step set requires_confirmation=true where plan_id=:id
+                    and status='PENDING' and tool_name='browser.delegate' and title='授权网站访问'
+                    """).param("id", planId).update();
+            var version = jdbc.sql("select version from assistant_plan where id=:id").param("id", planId).query(Integer.class).single() + 1;
+            var hash = HashSupport.sha256(writeJson(Map.of("planId", planId, "version", version, "steps", loadSteps(planId))));
+            jdbc.sql("""
+                    update assistant_plan set status='WAITING_CONFIRMATION',version=:version,plan_hash=:hash,expires_at=:expires
+                    where id=:id and status <> 'CANCELED'
+                    """).param("id", planId).param("version", version).param("hash", hash)
+                    .param("expires", Instant.now().plusSeconds(1800)).update();
+        }
+    }
+
+    static java.util.Optional<AgentWorkService.Stage> completionBlocker(List<AgentWorkService.Stage> stages) {
+        if (stages.stream().anyMatch(s -> "WAITING_INPUT".equals(s.status()))) return java.util.Optional.empty();
+        return stages.stream().filter(s -> Set.of("FAILED", "STALE").contains(s.status())).findFirst();
+    }
+
     private void finishRun(RunResponse run, String summary, Map<String, Object> effects) {
+        boolean delegated = effects.get("browserAgentTask") instanceof Map<?, ?> task
+                && task.get("id") instanceof String;
         if (effects.get("fixedRunId") != null) {
             var state = fixedWorks.state(fixedWorks.projectForRun(run.id()), run.sessionId());
             var execution = state.runs().stream().filter(r -> r.id().equals(effects.get("fixedRunId"))).findFirst().orElseThrow();
@@ -819,21 +869,28 @@ public class AssistantExecutionService {
         var runtime = loadRuntime(run.planId());
         var goal = runtime.goal();
         var knowledgeTask = runtime.stage();
-        verifyTaskCompletion(planSteps, effects, goal, knowledgeTask);
+        if (!delegated) verifyTaskCompletion(planSteps, effects, goal, knowledgeTask);
         var safeSummary = summary == null || summary.isBlank() ? "已完成工作台操作。" : summary;
-        if (knowledgeTask != TacitAgentTask.OTHER) {
+        if (delegated) {
+            // The coordinator turn is finished, not the external task. Its A2A card
+            // owns the outcome; do not manufacture completed business stages.
+            safeSummary = "正在处理网页操作，进展与需要你确认的事项会显示在当前对话中。";
+            effects.put("workStatus", "DELEGATED");
+            jdbc.sql("update assistant_run set effects_json=:effects where id=:id")
+                    .param("effects", writeJson(effects)).param("id", run.id()).update();
+        } else if (knowledgeTask != TacitAgentTask.OTHER) {
             safeSummary = knowledgeTask == TacitAgentTask.DISCUSS ? TacitAgentTools.discussionOutcome(safeSummary)
                     : tacitTools.verifiedOutcome(knowledgeTask, runtime.projectId(), planSteps, effects.get("tacitArtifactReceipt"));
         } else if (isCliRuntime(effects.get("agentRuntime"))) {
             var stages = agentWorks.stages(run.id());
-            var blocked = stages.stream().filter(s -> Set.of("FAILED", "STALE").contains(s.status())).findFirst();
+            var waiting = stages.stream().filter(s -> "WAITING_INPUT".equals(s.status())).findFirst();
+            var blocked = completionBlocker(stages);
             if (blocked.isPresent()) {
                 var stage = blocked.get();
-                var reason = "STALE".equals(stage.status()) ? "输入或产物已变化，需要重新执行该工序"
+                var reason = "STALE".equals(stage.status()) ? "工序结果待重新核验：" + (stage.summary() == null ? "请检查引用版本或原执行记录" : stage.summary())
                         : stage.summary() == null || stage.summary().isBlank() ? "执行失败，请查看技术详情" : stage.summary();
                 throw new IllegalStateException("工序“" + stage.title() + "”未完成：" + reason);
             }
-            var waiting = stages.stream().filter(s -> "WAITING_INPUT".equals(s.status())).findFirst();
             if (waiting.isPresent()) {
                 safeSummary = "需要你的输入：" + waiting.get().question();
                 effects.put("workStatus", "WAITING_INPUT");
@@ -842,7 +899,12 @@ public class AssistantExecutionService {
             } else if (stages.isEmpty() && loadSteps(run.planId()).stream().anyMatch(s -> !"READ".equals(s.mode()))) {
                 throw new IllegalStateException("Agent 未登记业务工序及产物，不能报告完成");
             }
-            if (waiting.isEmpty() && stages.stream().anyMatch(s -> !s.outputs().isEmpty())) fixedWorks.requirePublished(run.id());
+            if (waiting.isEmpty() && isReadOnlyReview(loadSteps(run.planId()), effects)) {
+                effects.put("workStatus", "REVIEW_ONLY");
+                safeSummary = "本轮仅核对已有资料，未执行新的操作。\n\n" + safeSummary;
+            } else if (waiting.isEmpty() && stages.stream().anyMatch(s -> !s.outputs().isEmpty())) {
+                fixedWorks.requirePublished(run.id());
+            }
             jdbc.sql("update assistant_run set effects_json = :effects where id = :id")
                     .param("effects", writeJson(effects)).param("id", run.id()).update();
         }
@@ -1067,6 +1129,14 @@ public class AssistantExecutionService {
         } catch (IOException exception) {
             throw new IllegalStateException("结果验证失败：无法读取输出文件", exception);
         }
+    }
+
+    static boolean isReadOnlyReview(List<PlanStep> steps, Map<String, Object> effects) {
+        if (effects.containsKey("fixedImplementationId") || effects.containsKey("fixedRunId")
+                || effects.containsKey("browserAgentTask")) return false;
+        var actual = steps.stream().filter(step -> !"agent.execute".equals(step.tool())).toList();
+        return !actual.isEmpty() && actual.stream().allMatch(step -> "READ".equals(step.mode())
+                && "SUCCEEDED".equals(step.status()));
     }
 
     private void verifyTaskCompletion(List<PlanStep> steps, Map<String, Object> effects, String goal, TacitAgentTask stage) {
@@ -1467,6 +1537,11 @@ public class AssistantExecutionService {
     String executeStep(PlanStep step, Map<String, Object> effects) {
         AssistantToolContracts.validate(step.tool(), step.arguments());
         return switch (step.tool()) {
+            case "browser.delegate" -> {
+                effects.put("browserAgentTask", browserAuthorizations.execute(step.tool(), step.arguments(), step.id(),
+                        () -> browserAgent.start(step.id(), step.arguments())));
+                yield "已委派独立浏览器 Agent；请查看任务状态，不能把已启动当作完成";
+            }
             case "browser.open" -> {
                 var result = browserAuthorizations.execute(step.tool(), step.arguments(), step.id(), () -> {
                     var args = new LinkedHashMap<String, Object>(step.arguments());
@@ -1513,6 +1588,7 @@ public class AssistantExecutionService {
         tools.addAll(Set.of("work.update", "work.publish_implementation", "work.implementation_status",
                 "work.execute_implementation", "browser.sites", "browser.inspect", "browser.explore"));
         tools.addAll(Set.of("browser.open", "browser.observe", "browser.act", "browser.commit", "browser.close", "browser.login", "browser.resume"));
+        tools.addAll(Set.of("browser.delegate", "browser.task_status"));
         tools.addAll(Set.of(
                 "workspace.inspect", "workspace.navigate", "assistant.respond", "assistant.analyze_context",
                 "project.create_workspace", "knowledge.discover_external_sources", "knowledge.search", "knowledge.add",

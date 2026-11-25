@@ -49,6 +49,62 @@ class BrowserAuthorizationServiceTest {
         }
     }
 
+    @Test void delegatedDomainsAreOwnerScopedRevocableAndIndependentOfTaskContent() {
+        var goal = Map.<String,Object>of("url", "https://example.com/", "goal", "向已展示的收件人发送指定内容",
+                "allowed_domains", List.of("mail.example.com", "login.example.com"));
+        try (var ignored = ActorContext.bind("alice")) {
+            var approved = step("browser.delegate", goal);
+            service.approve(List.of(approved), true);
+            service.execute("browser.delegate", goal, approved.id(), () -> "task-1");
+            var reordered = new HashMap<>(goal);
+            reordered.put("allowed_domains", List.of("login.example.com", "mail.example.com"));
+            assertThat(service.canReuse("browser.delegate", reordered)).isTrue();
+            var changed = new HashMap<>(goal); changed.put("goal", "发送另一份内容");
+            assertThat(service.canReuse("browser.delegate", changed)).isTrue();
+            changed = new HashMap<>(goal); changed.put("allowed_domains", List.of("other.example.com"));
+            assertThat(service.canReuse("browser.delegate", changed)).isFalse();
+            service.execute("browser.delegate", goal, "new-step", () -> "task-2");
+            assertThat(service.history(0)).extracting(BrowserAuthorizationService.Audit::event).contains("AUTHORIZATION_REUSED");
+            try (var other = ActorContext.bind("bob")) { assertThat(service.canReuse("browser.delegate", goal)).isFalse(); }
+            service.revoke(service.grants().getFirst().id());
+            assertThat(service.canReuse("browser.delegate", goal)).isFalse();
+            assertThatThrownBy(() -> service.execute("browser.delegate", goal, "step-3", () -> "unexpected")).hasMessageContaining("需先授权网站访问");
+        }
+    }
+
+    @Test void domainApprovalIsPersistedEvenWithoutLegacyTaskRememberFlag() {
+        var goal = Map.<String,Object>of("url", "https://example.com/", "goal", "查询报表");
+        var approved = step("browser.delegate", goal);
+        service.approve(List.of(approved), false);
+        service.execute("browser.delegate", goal, approved.id(), () -> "task");
+        assertThat(service.canReuse("browser.delegate", goal)).isTrue();
+        assertThat(service.grants()).hasSize(1);
+        assertThat(service.grants().getFirst().kind()).isEqualTo("DOMAIN");
+    }
+
+    @Test void allDestinationsAreCheckedBeforeStartingAndOnlyMissingOnesAreShown() {
+        var goal = Map.<String,Object>of("url", "https://example.com/quote", "goal", "打开 https://mail.example.com/inbox", "allowed_domains", List.of("login.example.com"));
+        try (var ignored = ActorContext.bind("alice")) {
+            assertThat(service.missingDomains(goal)).containsExactly("example.com", "login.example.com", "mail.example.com");
+            service.approve(List.of(step("browser.delegate", Map.of("url", "https://example.com"))), true);
+            assertThat(service.missingDomains(goal)).containsExactly("login.example.com", "mail.example.com");
+            assertThatThrownBy(() -> service.execute("browser.delegate", goal, "id", () -> "must not start"))
+                    .hasMessageContaining("需先授权网站访问");
+            service.approve(List.of(step("browser.delegate", goal)), true);
+            var restored = new BrowserAuthorizationService(jdbc, worker, new ObjectMapper());
+            assertThat(restored.missingDomains(goal)).isEmpty();
+            jdbc.sql("update browser_user_grant set expires_at=:past").param("past", java.time.Instant.now().minusSeconds(60)).update();
+            assertThat(restored.missingDomains(goal)).hasSize(3);
+        }
+    }
+
+    @Test void domainApprovalDoesNotIncludeSiblingHostsOrWildcards() {
+        assertThatThrownBy(() -> BrowserAuthorizationService.requestedDomains(Map.of("url", "https://example.com", "allowed_domains", List.of("*.qq.com"))))
+                .isInstanceOf(IllegalArgumentException.class);
+        service.approve(List.of(step("browser.delegate", Map.of("url", "https://mail.example.com"))), true);
+        assertThat(service.canReuse("browser.delegate", Map.of("url", "https://other.example.com"))).isFalse();
+    }
+
     @Test void oldWebsiteGrantDoesNotSilentlyExpandToNormalTransportPermission() {
         var step = step("browser.open", website);
         service.approve(List.of(step), true);

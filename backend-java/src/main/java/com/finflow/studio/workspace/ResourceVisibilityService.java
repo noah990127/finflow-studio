@@ -20,6 +20,8 @@ public class ResourceVisibilityService {
     public Set<String> internalIds(String projectId) {
         var internal = new HashSet<String>();
         var visible = new HashSet<String>();
+        internal.addAll(jdbc.sql("select resource_id from technical_artifact where project_id=:project")
+                .param("project", projectId).query(String.class).list());
         jdbc.sql("""
                 select d.definition_json, r.stages_json from fixed_work_run r
                 join fixed_work_definition d on d.id=r.definition_id where d.project_id=:project

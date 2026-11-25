@@ -15,16 +15,45 @@ public class FixedToolExecutor {
     private final KnowledgeService knowledge;
     private final DeliverableService deliverables;
     private final ObjectMapper json;
+    @org.springframework.beans.factory.annotation.Autowired
+    @org.springframework.context.annotation.Lazy
+    private BrowserAgentService browserAgent;
+    @org.springframework.beans.factory.annotation.Autowired
+    private FixedInteractionService interactions;
     public FixedToolExecutor(WorkerClient worker, KnowledgeService knowledge, DeliverableService deliverables, ObjectMapper json) {
         this.worker = worker; this.knowledge = knowledge; this.deliverables = deliverables; this.json = json;
     }
 
     @SuppressWarnings("unchecked")
     public FixedWorkService.Bound execute(String project, FixedWorkDefinition.Step step, Map<String, String> inputs, Runnable check) {
+        return execute(project, step, inputs, check, "", "");
+    }
+
+    @SuppressWarnings("unchecked")
+    public FixedWorkService.Bound execute(String project, FixedWorkDefinition.Step step, Map<String, String> inputs, Runnable check, String session, String run) {
         var call = FixedToolCall.parse(json, step);
         var args = (Map<String, Object>) FixedToolCall.bind(call.arguments(), inputs, json);
         call.validateArguments(args);
         check.run();
+        if ("browser.replay".equals(call.tool())) {
+            if (session.isBlank() || run.isBlank()) throw new IllegalArgumentException("浏览器重放缺少执行上下文");
+            var report = browserAgent.replay(args.get("sourceTask").toString(), args.get("hash").toString(),
+                    (Map<String, Object>)args.get("parameters"), session, run + ":" + step.id(), check, task -> {
+                        var status = (Map<?, ?>)task.get("status");
+                        var meta = task.get("metadata") instanceof Map<?, ?> value ? value : Map.of();
+                        String message = "";
+                        if (status.get("message") instanceof Map<?, ?> m && m.get("parts") instanceof List<?> parts)
+                            message = parts.stream().filter(Map.class::isInstance).map(p -> Objects.toString(((Map<?, ?>)p).get("text"), "")).reduce("", String::concat);
+                        interactions.record(run, new FixedInteractionService.Interaction(step.id(), "browser", task.get("id").toString(),
+                                meta.get("promptId") instanceof Number n ? n.intValue() : 0,
+                                "input-required".equals(status.get("state")) ? "WAITING_INPUT" : "RUNNING", message,
+                                Boolean.TRUE.equals(meta.get("canFocus")),
+                                meta.get("interaction") instanceof Map<?, ?> pending ? Objects.toString(pending.get("kind"), "INPUT") : "INPUT"));
+                    });
+            check.run();
+            var file = knowledge.importBytes(project, step.outputName(), "text/markdown", report.getBytes(StandardCharsets.UTF_8));
+            return new FixedWorkService.Bound(file.id(), file.currentVersion(), file.name(), "FILE");
+        }
         if ("browser.run".equals(call.tool())) {
             var result = worker.browser("run", args);
             check.run();
