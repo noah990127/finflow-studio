@@ -95,12 +95,52 @@ public class AgentWorkService {
             var stages = current.stages();
             if (stages.isEmpty()) {
                 stages = history.stream().filter(r -> !r.stages().isEmpty()).findFirst().map(r -> r.stages().stream()
-                        .map(s -> new Stage(s.id(), s.title(), "STALE", s.summary(), "", s.inputs(), s.outputs())).toList()).orElse(List.of());
+                        .map(s -> new Stage(s.id(), s.title(), "PENDING", "沿用历史工序，待核对原执行结果", "", s.inputs(), s.outputs())).toList()).orElse(List.of());
             }
             var title = current.title();
             if (title == null || title.startsWith("新对话") || title.length() > 40) title = stages.isEmpty() ? "未命名工作" : stages.getLast().title();
-            return fixedWorks.overlay(projectId, new Work(current.id(), current.sessionId(), goal, current.status(), current.resultSummary(), title, current.createdAt(), stages, current.result()));
+            return fixedWorks.overlay(projectId, browserOutcome(new Work(current.id(), current.sessionId(), goal, current.status(), current.resultSummary(), title, current.createdAt(), stages, current.result())));
         }).toList();
+    }
+
+    private Work browserOutcome(Work work) {
+        if (!"DELEGATED".equals(work.result().get("workStatus"))
+                || !(work.result().get("browserAgentTask") instanceof Map<?, ?> reference)) return work;
+        var cached = jdbc.sql("select last_result from browser_agent_task where task_id=:id and session_id=:session and owner_id=:owner")
+                .param("id", reference.get("id")).param("session", work.sessionId()).param("owner", ActorContext.current())
+                .query(String.class).optional();
+        if (cached.isEmpty()) return work;
+        var outputs = jdbc.sql("select resource_id,resource_version from browser_task_artifact where task_id=:id order by part_key")
+                .param("id", reference.get("id")).query((rs, row) -> new ResourceRef(rs.getString(1), rs.getInt(2), "SUPPORTING")).list();
+        return projectBrowserOutcome(work, json.readValue(cached.get(), Map.class), outputs);
+    }
+
+    static Work projectBrowserOutcome(Work work, Map<String, Object> task, List<ResourceRef> outputs) {
+        if (!(task.get("status") instanceof Map<?, ?> status)) return work;
+        var state = Objects.toString(status.get("state"), "");
+        if (!Set.of("completed", "failed", "canceled", "rejected").contains(state)) return work;
+        var meta = task.get("metadata") instanceof Map<?, ?> m ? m : Map.of();
+        var succeeded = "completed".equals(state);
+        var outcome = succeeded ? "SUCCEEDED" : "canceled".equals(state) ? "CANCELED" : "FAILED";
+        var issue = Objects.toString(meta.get("procedureError"), "");
+        var summary = succeeded ? issue.isBlank() ? "本次网页操作已完成；固定实现状态请查看技术详情"
+                : "本次网页操作已完成；工序尚未固化：" + issue : "网页操作已结束但未完成，请查看对话中的任务结果";
+        var stages = work.stages();
+        // One delegated business stage represents the task. Do not infer success of unrelated stages.
+        if (stages.size() == 1) {
+            var stage = stages.getFirst();
+            var merged = new ArrayList<>(stage.outputs());
+            for (var ref : outputs) if (merged.stream().noneMatch(r -> r.resourceId().equals(ref.resourceId()))) merged.add(ref);
+            stages = List.of(new Stage(stage.id(), stage.title(), outcome, summary, "", stage.inputs(), merged));
+        }
+        var result = new LinkedHashMap<>(work.result());
+        var taskSummary = new LinkedHashMap<>(task);
+        taskSummary.remove("artifacts");
+        taskSummary.remove("history");
+        result.put("browserAgentTask", taskSummary);
+        result.put("workStatus", succeeded ? "BROWSER_COMPLETED" : "BROWSER_FAILED");
+        result.put("procedureState", Objects.toString(meta.get("procedureState"), "NOT_GENERATED"));
+        return new Work(work.id(), work.sessionId(), work.goal(), outcome, summary, work.title(), work.createdAt(), stages, result);
     }
 
     @Transactional

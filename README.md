@@ -8,6 +8,7 @@
 - 业务工序按用户检查的成果组织，技术片段与辅助材料不抢占主成果展示。
 - Codex CLI / OpenCode CLI 任务运行时切换，结构化工具契约、审批、审计、流式进展与中止。
 - 固定版本重复执行：输入可以更新，已发布 SQL、提示词或工具逻辑不因重跑自动改写；改逻辑时生成新版本。
+- 已发布实现归档为固定版本资源，执行前校验内容；逐步骤记录输入版本、代码校验值和结果，技术资源默认隐藏，可在技术详情下载。浏览器脚本从资源库加载，后台只补归档、不重做外部操作。
 - SearxNG 搜索、网页读取与快照、结构化数据处理，以及报告、文档和演示文稿输出。
 - 独立浏览器执行服务：用户登录、Agent 操作、对外操作确认与结果核验。定时执行尚未实现。
 
@@ -19,6 +20,7 @@
 | [Java 后端](backend-java/README.md) | 工具契约、业务工序、授权与密钥 |
 | [Python Worker](worker-python/README.md) | CLI 运行时、搜索、文档与测试 |
 | [浏览器执行](worker-python/app/browser_runner/README.md) | 授权边界、登录接管、编辑器和诊断 |
+| [独立浏览器 Agent](worker-python/app/browser_agent/README.md) | browser-use + 官方 A2A SDK，任务委派、原地接管与取消 |
 | [PPT 渲染](worker-python/app/ppt_skills/README.md) | 内容规划、模板和格式限制 |
 | [部署指南](docs/Docker%20部署指南.md) | Docker、持久卷与离线部署 |
 | [演示案例](examples/cases/README.md) | 脱敏数据与历史兼容性样例 |

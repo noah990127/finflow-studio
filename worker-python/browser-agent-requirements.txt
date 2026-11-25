@@ -1,0 +1,6 @@
+# Isolated environment: do not install these into the document worker.
+# 0.13 retains native action tools and pause hooks; 1.x executes unrestricted Python.
+browser-use==0.13.14
+a2a-sdk[http-server]==0.3.25
+uvicorn>=0.35,<1
+jsonschema>=4.23,<5

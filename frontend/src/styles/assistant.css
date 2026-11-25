@@ -307,7 +307,7 @@
 .assistant-tool-row code { display: block; margin-top: 5px; color: #8291a2; font-size: 11px; overflow-wrap: anywhere; }
 .assistant-tool-row > small { font-size: 11px; }
 
-.assistant-confirm-inline { grid-template-columns: 22px minmax(0, 1fr) auto; padding: 11px; }
+.assistant-confirm-inline { grid-template-columns: 18px minmax(0, 1fr) auto; padding: 6px 0; border: 0; border-radius: 0; background: transparent; color: var(--text-body); }
 .assistant-confirm-inline p strong { font-size: 12px; }
 .assistant-confirm-inline p span { margin-top: 3px; font-size: 11px; }
 .assistant-confirm-inline .primary-button { min-height: 34px; padding-inline: 11px; font-size: 11px; }
@@ -315,6 +315,8 @@
 .assistant-composer .assistant-confirm-inline { margin: 0 0 10px; }
 .assistant-confirm-inline > p { min-width: 0; overflow-wrap: anywhere; }
 .assistant-confirm-inline > button { white-space: nowrap; }
+.assistant-confirm-inline .approval-action { display: inline-flex; align-items: center; justify-content: center; width: auto; min-width: 0; height: 28px; min-height: 28px; padding: 0 9px; border: 1px solid #b9ccc3; border-radius: 4px; background: #f5faf7; color: #235c43; font-size: 12px; cursor: pointer; }
+.assistant-confirm-inline .approval-action:disabled { opacity: .5; cursor: wait; }
 .assistant-approval-scope { grid-column: 1 / -1; min-width: 0; max-height: min(180px, 24dvh); overflow: auto; font-size: 11px; }
 .assistant-approval-scope pre { margin: 6px 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-body); }
 .assistant-codex-panel > * { min-width: 0; }

@@ -6,7 +6,7 @@ RUN_DIR="$ROOT/.run"
 OFFICE_CONTAINER="${FINFLOW_ONLYOFFICE_CONTAINER:-finflow-onlyoffice}"
 SEARXNG_CONTAINER="${FINFLOW_SEARXNG_CONTAINER:-finflow-searxng}"
 
-for name in frontend java java-launcher python demo-api inventory-api browser-runner browser-demo; do
+for name in frontend java java-launcher python demo-api inventory-api browser-runner browser-agent browser-demo; do
   pid_file="$RUN_DIR/$name.pid"
   if [[ -f "$pid_file" ]]; then
     pid="$(cat "$pid_file")"

@@ -26,7 +26,7 @@ final class BusinessWorkProjection {
                 outputs.add(new AgentWorkService.ResourceRef(member.output().resourceId(), member.output().version(), role));
             }
             String status = "PENDING";
-            for (var candidate : List.of("FAILED", "CANCELED", "RUNNING"))
+            for (var candidate : List.of("FAILED", "CANCELED", "WAITING_INPUT", "RUNNING"))
                 if (members.stream().anyMatch(s -> candidate.equals(s.status()))) { status = candidate; break; }
             if ("PENDING".equals(status) && members.size() == stage.stepIds().size()
                     && members.stream().allMatch(s -> "SUCCEEDED".equals(s.status()))) {

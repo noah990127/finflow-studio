@@ -15,6 +15,7 @@ mvn test
 - `assistant/AssistantExecutionService`：工具执行、审批、事件和错误传播。
 - `assistant/AgentWorkService`、`BusinessWorkProjection`：业务工序与成果投影。
 - `assistant/FixedWorkService`、`FixedToolExecutor`：固定版本执行。
+- `assistant/TechnicalArtifactService`、`TechnicalExecutionJournal`、`TechnicalArchiveReconciler`：固定技术资源、逐步执行记录、后台归档恢复。详见[技术实现归档与固定执行](../docs/技术实现归档与固定执行.md)。
 - `assistant/BrowserAuthorizationService`：网站授权、会话归属、审批范围与审计。
 - `worker/WorkerClient`：Worker 和 Browser Runner 调用。
 - `knowledge/NativeDocumentController` / `workspace/ResourceVisibilityService`：原生文档与资源可见性。

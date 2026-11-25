@@ -19,6 +19,7 @@ const labels: Record<string, string> = {
   EXECUTION_FAILED: '执行失败', DENIED: '授权校验未通过', BROWSER_OPERATION: '浏览器操作', BROWSER_OPERATION_FAILED: '浏览器操作失败',
   SESSION_CLOSE_UNCONFIRMED: '已撤销，窗口关闭待核对',
   USER_CONTROL_REQUESTED: '用户切换浏览器控制权',
+  SUBMISSION_APPROVED: '用户确认本次提交', BROWSER_HUMAN_CONTROL: '用户处理浏览器待办',
 }
 const date = (value: string) => new Date(value).toLocaleString('zh-CN')
 async function load() {

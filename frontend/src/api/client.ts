@@ -3,8 +3,11 @@ export type AuthUser = { username: string }
 export type Selection = { type: string; resourceId: string; range: string[] }
 export type ArtifactRef = { resourceId: string; version: number; role?: 'PRIMARY' | 'SUPPORTING' | 'INTERNAL' }
 export type FixedBound = ArtifactRef & { name: string; type: string }
-export type FixedRun = { id: string; definitionId: string; status: string; createdAt: string; error: string; snapshot: Record<string, FixedBound>; businessStages?: WorkStage[]; stages: Array<{ id: string; title: string; status: string; inputs: FixedBound[]; output: FixedBound | null; error: string }> }
-export type FixedWorkState = { definition: { id: string; version: number; hash: string; verified: boolean; createdAt: string; implementation: { title: string; steps: Array<{ id: string; title: string; kind: string; code: string; outputName: string; inputs: unknown[] }>; modelSnapshot: Record<string, unknown> } } | null; runs: FixedRun[] }
+export type FixedInteraction = { stepId: string; provider: string; taskId: string; promptId: number; status: string; message: string; canFocus: boolean; kind?: string }
+export type FixedRun = { id: string; definitionId: string; status: string; createdAt: string; error: string; snapshot: Record<string, FixedBound>; interaction?: FixedInteraction | null; businessStages?: WorkStage[]; stages: Array<{ id: string; title: string; status: string; inputs: FixedBound[]; output: FixedBound | null; error: string }> }
+export type TechnicalArtifact = { part: string; resourceId: string; version: number; hash: string }
+export type FixedExecutionDetails = { steps: Record<string, unknown>[]; artifacts: TechnicalArtifact[]; implementationArtifacts: TechnicalArtifact[] }
+export type FixedWorkState = { definition: { id: string; version: number; hash: string; verified: boolean; createdAt: string; implementation: { title: string; steps: Array<{ id: string; title: string; kind: string; code: string; outputName: string; inputs: unknown[] }>; modelSnapshot: Record<string, unknown> } } | null; runs: FixedRun[]; artifacts?: TechnicalArtifact[] }
 export type WorkStage = { id: string; title: string; status: string; summary?: string; question?: string; inputs: ArtifactRef[]; outputs: ArtifactRef[] }
 export type AgentWork = { id: string; sessionId: string; title?: string; goal: string; status: string; resultSummary: string; createdAt: string; stages: WorkStage[]; result: Record<string, unknown> }
 export type ArtifactReview = ArtifactRef & { reviewedBy: string; reviewedAt: string }
@@ -90,7 +93,8 @@ async function request<T>(url: string, options: RequestInit = {}, timeoutMs = 0)
       }
       throw new Error(body.message ?? body.detail ?? `请求没有完成（HTTP ${response.status}）`)
     }
-    return response.status === 204 ? (undefined as T) : response.json() as Promise<T>
+    const raw = await response.text()
+    return raw.trim() ? JSON.parse(raw) as T : undefined as T
   } catch (error) {
     if (timeout?.aborted) throw new Error('服务响应超时，请确认后台服务正常后重试')
     throw error
@@ -99,6 +103,8 @@ async function request<T>(url: string, options: RequestInit = {}, timeoutMs = 0)
 
 export const api = {
   browserAuthorizations: () => request<Array<{ id: string; kind: string; label: string; status: string; createdAt: string; expiresAt: string }>>('/api/browser/authorizations'),
+  browserAgentTasks: (sessionId: string) => request<Array<{ id: string; stepId?: string; conversationTraceIds?: string[]; status: { state: string; message?: { parts: Array<{ text?: string }> } }; metadata?: { promptId?: number; canFocus?: boolean; interaction?: { kind: string; message: string }; failureCode?: string; procedureState?: string; procedureError?: string; procedure?: { hash: string; engine: string } }; procedureState?: string; procedureIssue?: string; procedureError?: string; savedProcedure?: { definitionId?: string; scriptResourceId: string; parametersResourceId: string; notice?: string }; files?: Array<{ name: string; url: string }> }>>(`/api/browser/agent-tasks?sessionId=${encodeURIComponent(sessionId)}`),
+  browserAgentControl: (id: string, action: 'resume' | 'approve' | 'cancel' | 'focus', promptId = 0) => request(`/api/browser/agent-tasks/${encodeURIComponent(id)}/${action}`, { method: 'POST', body: JSON.stringify({ promptId }) }),
   browserConnections: () => request<Array<{ session: string; origin: string; status: string; loginWindowExpired: boolean }>>('/api/browser/authorizations/connections'),
   browserControl: (session: string, action: 'login' | 'restart_login' | 'resume' | 'close') => request<{ session: string; status: string }>(`/api/browser/authorizations/connections/${encodeURIComponent(session)}/${action}`, { method: 'POST' }),
   browserAuthorizationHistory: (page = 0) => request<Array<{ id: string; grantId: string; stepId: string; event: string; label: string; createdAt: string }>>(`/api/browser/authorizations/history?page=${page}`),
@@ -175,9 +181,11 @@ export const api = {
   renameWork: (projectId: string, sessionId: string, title: string) => request<void>(`/api/projects/${projectId}/works/${sessionId}/title`, { method: 'PATCH', body: JSON.stringify({ title }) }),
   listWorks: (projectId: string) => request<AgentWork[]>(`/api/projects/${projectId}/works`),
   fixedWorkState: (projectId: string, sessionId: string) => request<FixedWorkState>(`/api/projects/${projectId}/works/${sessionId}/implementation`),
+  fixedExecutionDetails: (projectId: string, sessionId: string, runId: string) => request<FixedExecutionDetails>(`/api/projects/${projectId}/works/${sessionId}/implementation/runs/${runId}/details`),
   fixedWorkDefinition: (projectId: string, sessionId: string, definitionId: string) => request<NonNullable<FixedWorkState['definition']>>(`/api/projects/${projectId}/works/${sessionId}/implementation/versions/${definitionId}`),
   startFixedWork: (projectId: string, sessionId: string, definitionId: string, requestId: string) => request<FixedRun>(`/api/projects/${projectId}/works/${sessionId}/implementation/runs`, { method: 'POST', body: JSON.stringify({ definitionId, requestId }) }),
   cancelFixedWork: (projectId: string, sessionId: string, runId: string) => request<void>(`/api/projects/${projectId}/works/${sessionId}/implementation/runs/${runId}/cancel`, { method: 'POST' }),
+  controlFixedInteraction: (projectId: string, sessionId: string, runId: string, taskId: string, promptId: number, action: 'resume' | 'approve' | 'focus') => request<void>(`/api/projects/${projectId}/works/${sessionId}/implementation/runs/${runId}/interaction/${action}`, { method: 'POST', body: JSON.stringify({ taskId, promptId }) }),
   listArtifactReviews: (projectId: string) => request<ArtifactReview[]>(`/api/projects/${projectId}/artifact-reviews`),
   reviewArtifact: (projectId: string, artifact: ArtifactRef) => request<ArtifactReview>(`/api/projects/${projectId}/artifact-reviews`, { method: 'POST', body: JSON.stringify(artifact) }),
   getWebPreview: (projectId: string, resourceId: string, refresh = false) => request<WebPreview>(`/api/projects/${projectId}/workspace/web-preview/${resourceId}${refresh ? '?refresh=true' : ''}`),

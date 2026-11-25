@@ -56,6 +56,7 @@ final class AssistantToolContracts {
                 .orElseThrow(() -> new IllegalArgumentException("参数错误：工具 " + tool + " 未注册，请重新搜索工具"));
         validateObject(tool, arguments == null ? Map.of() : arguments, capability.inputSchema(), "参数");
         if (arguments == null) return;
+        if ("browser.delegate".equals(tool)) BrowserAgentService.approvalDescription(arguments);
         if ("browser.open".equals(tool) && arguments.containsKey("site") && arguments.containsKey("url"))
             throw new IllegalArgumentException("参数错误：site与url只需提供一个");
         if ("browser.act".equals(tool) && Set.of("fill", "select", "assert_text").contains(arguments.get("action"))) {
@@ -157,6 +158,8 @@ final class AssistantToolContracts {
 
     private static List<String> required(String tool) {
         return switch (tool) {
+            case "browser.delegate" -> List.of("url", "goal");
+            case "browser.task_status" -> List.of("task_id");
             case "browser.open" -> List.of();
             case "browser.observe", "browser.close", "browser.login", "browser.resume" -> List.of("session");
             case "browser.act" -> List.of("session", "action", "target");
@@ -214,6 +217,11 @@ final class AssistantToolContracts {
 
     private static Map<String, Object> property(String tool, String name) {
         if (tool.startsWith("browser.")) {
+            if ("allowed_domains".equals(name)) return Map.of("type", "array", "maxItems", 10,
+                    "items", Map.of("type", "string", "minLength", 3, "maxLength", 253,
+                            "pattern", "(?:\\*\\.)?[a-zA-Z0-9-]+(?:\\.[a-zA-Z0-9-]+)+"));
+            if ("task_id".equals(name)) return Map.of("type", "string", "minLength", 1, "maxLength", 128);
+            if ("browser.delegate".equals(tool) && "goal".equals(name)) return Map.of("type", "string", "minLength", 1, "maxLength", 600);
             if ("human_login".equals(name)) return Map.of("type", "boolean", "default", true, "description", "默认先进入人工接管再加载网站；仅公开网页无需登录时传false。复用连接时不会重置页面或登录状态。");
             if ("frame".equals(name)) return Map.of("type", "integer", "minimum", 0, "maximum", 20);
             if (Set.of("session", "pending").contains(name)) return Map.of("type", "string", "minLength", 1, "maxLength", 128);

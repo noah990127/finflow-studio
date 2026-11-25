@@ -29,6 +29,7 @@ class AgentWorkServiceTest {
     @Autowired KnowledgeService files;
     @Autowired JdbcClient jdbc;
     @Autowired ObjectMapper json;
+    @Autowired BrowserAgentService browserAgent;
 
     String seed(String projectId) {
         var session = assistant.createSession(projectId, "经营分析");
@@ -64,6 +65,24 @@ class AgentWorkServiceTest {
         }
         jdbc.sql("update assistant_run set status = 'CANCELED' where id = :id").param("id", run).update();
         assertThatThrownBy(() -> works.update(run, Map.of("stages", stages))).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test void browserAttachmentsAreArchivedEvenWhenPublicationFails() {
+        var project = projects.create("浏览器附件归档", ""); var run = seed(project.id());
+        var session = jdbc.sql("select session_id from assistant_run where id=:id").param("id", run).query(String.class).single();
+        var taskId = UUID.randomUUID().toString(); var step = UUID.randomUUID().toString();
+        jdbc.sql("insert into assistant_plan_step(id,plan_id,step_order,tool_name,tool_mode,title,description,arguments_json,risk_level,requires_confirmation,status) values(:id,:plan,1,'browser.delegate','WRITE','浏览器','','{}','READ_ONLY',false,'SUCCEEDED')")
+                .param("id", step).param("plan", run).update();
+        var task = Map.of("id", taskId, "status", Map.of("state", "completed"), "metadata", Map.of("procedureError", "需要整理动作", "procedureState", "NEEDS_REVIEW"),
+                "artifacts", List.of(Map.of("parts", List.of(Map.of("file", Map.of("name", "report.md", "mimeType", "text/markdown", "bytes", "IyBSZXBvcnQ="))))));
+        jdbc.sql("insert into browser_agent_task(task_id,step_id,owner_id,session_id,last_result) values(:id,:step,:owner,:session,:result)")
+                .param("id", taskId).param("step", step).param("owner", ActorContext.current()).param("session", session).param("result", json.writeValueAsString(task)).update();
+        var first = browserAgent.status(taskId);
+        assertThat(first).doesNotContainKey("archiveIssue");
+        assertThat((List<?>) first.get("archivedResources")).hasSize(1);
+        assertThat(browserAgent.status(taskId).get("archivedResources")).isEqualTo(first.get("archivedResources"));
+        assertThat(jdbc.sql("select count(*) from browser_task_artifact where task_id=:id").param("id", taskId).query(Integer.class).single()).isEqualTo(1);
+        assertThat(first).containsEntry("procedureState", "NEEDS_REVIEW").doesNotContainKey("savedProcedure");
     }
 
     @Test void reviewsAreDurableAndBoundToArtifactVersion() {
@@ -112,6 +131,17 @@ class AgentWorkServiceTest {
         var other = projects.create("其他项目", "");
         assertThatThrownBy(() -> works.rename(other.id(), work.sessionId(), "越界修改")).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> works.rename(p.id(), work.sessionId(), " ")).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test void nextTurnInheritsPendingStagesRatherThanInventingVersionChanges() {
+        var p = projects.create("历史工序", ""); var original = seed(p.id());
+        works.update(original, Map.of("stages", List.of(new AgentWorkService.Stage(
+                "quote", "查询", "RUNNING", "", "", List.of(), List.of()))));
+        var next = seed(p.id());
+        jdbc.sql("update assistant_run set session_id=(select session_id from assistant_run where id=:old), created_at=DATEADD('SECOND',1,current_timestamp) where id=:next")
+                .param("old", original).param("next", next).update();
+        assertThat(works.list(p.id()).getFirst().stages()).extracting(AgentWorkService.Stage::status)
+                .containsExactly("PENDING");
     }
 
     @Test void sourceVersionChangesInvalidateDependentStages() {

@@ -39,6 +39,10 @@ public class FixedWorkService {
     private final Map<String, Thread> threads = new ConcurrentHashMap<>();
     @org.springframework.beans.factory.annotation.Autowired
     private FixedToolExecutor tools;
+    @org.springframework.beans.factory.annotation.Autowired
+    private TechnicalArtifactService artifacts;
+    @org.springframework.beans.factory.annotation.Autowired
+    private TechnicalExecutionJournal journal;
 
     public FixedWorkService(JdbcClient jdbc, ObjectMapper json, ProjectService projects,
             WorkspaceResourceService workspace, KnowledgeService knowledge, DeliverableService deliverables,
@@ -51,9 +55,12 @@ public class FixedWorkService {
     public record Definition(String id, int version, String hash, boolean verified, FixedWorkDefinition implementation, Instant createdAt) { }
     public record Bound(String resourceId, int version, String name, String type) { }
     public record StageResult(String id, String title, String status, List<Bound> inputs, Bound output, String error) { }
+    @org.springframework.beans.factory.annotation.Autowired
+    private FixedInteractionService interactions;
     public record Run(String id, String definitionId, String status, Map<String, Bound> snapshot,
-                      List<StageResult> stages, String error, Instant createdAt, List<AgentWorkService.Stage> businessStages) { }
-    public record State(Definition definition, List<Run> runs) { }
+                      List<StageResult> stages, String error, Instant createdAt, List<AgentWorkService.Stage> businessStages,
+                      FixedInteractionService.Interaction interaction) { }
+    public record State(Definition definition, List<Run> runs, List<TechnicalArtifactService.Artifact> artifacts) { }
     public record Start(String definitionId, String requestId) { }
 
     private void authorize(String project, String session) {
@@ -72,7 +79,48 @@ public class FixedWorkService {
     }
     public State state(String project, String session) {
         authorize(project, session);
-        return new State(latestDefinition(project, session), runs(project, session));
+        var definition = latestDefinition(project, session);
+        return new State(definition, runs(project, session), definition == null ? List.of() : artifacts.list("DEFINITION", definition.id()));
+    }
+
+    public Map<String, Object> executionDetails(String project, String session, String runId) {
+        authorize(project, session);
+        var run = getRun(project, session, runId);
+        return Map.of("steps", journal.entries(runId), "artifacts", artifacts.list("EXECUTION", runId),
+                "implementationArtifacts", artifacts.list("DEFINITION", run.definitionId()));
+    }
+
+    /** Persist the already executed browser implementation without replaying its side effects. */
+    public Definition retainBrowser(String sourceRun, String taskId, String hash, String parametersId) {
+        var project = projectForRun(sourceRun);
+        var session = jdbc.sql("select session_id from assistant_run where id=:id").param("id", sourceRun).query(String.class).single();
+        authorize(project, session);
+        return tx.execute(status -> {
+            lock(session);
+            var current = latestDefinition(project, session);
+            if (current != null) {
+                if (current.implementation().steps().stream().anyMatch(s -> s.code().contains(taskId))) return current;
+                throw new IllegalStateException("当前工作已有其他实现；浏览器脚本已保留，请通过Agent明确合并，不覆盖原工序");
+            }
+            var code = json.writeValueAsString(Map.of("tool", "browser.replay", "version", 1, "arguments",
+                    Map.of("sourceTask", taskId, "hash", hash, "parameters", Map.of("$input", "parameters", "as", "json"))));
+            var recorded = jdbc.sql("select stages_json from agent_work where run_id=:run").param("run",sourceRun).query(String.class).optional().orElse("[]");
+            var stages = json.readValue(recorded, AgentWorkService.Stage[].class);
+            if (stages.length > 1) throw new IllegalStateException("浏览器实现尚未映射到各业务工序，请明确技术步骤归属后发布；不会把全部操作挂到最后一道工序");
+            var title = stages.length == 0 ? "执行浏览器操作" : stages[stages.length-1].title();
+            var step = new FixedWorkDefinition.Step("browser", title, "TOOL", code, "浏览器执行结果.md",
+                    List.of(new FixedWorkDefinition.Input("parameters", parametersId, null, null)));
+            var implementation = new FixedWorkDefinition(title, List.of(step), Map.of(),
+                    List.of(new FixedWorkDefinition.BusinessStage("browser", title, "按已固化操作处理本轮输入",
+                            "核对本轮页面实际结果", List.of("browser"), List.of(new FixedWorkDefinition.Outcome("browser", "PRIMARY")))));
+            implementation.validate(); FixedToolCall.parse(json, step);
+            var id = UUID.randomUUID().toString(); var now = Instant.now(); var encoded = json.writeValueAsString(implementation);
+            artifacts.archiveDefinition(project, id, encoded, HashSupport.sha256(encoded));
+            jdbc.sql("insert into fixed_work_definition(id,project_id,session_id,source_run_id,version,definition_json,content_hash,verified,created_at) values(:id,:project,:session,:run,1,:definition,:hash,false,:now)")
+                    .param("id", id).param("project", project).param("session", session).param("run", sourceRun)
+                    .param("definition", encoded).param("hash", HashSupport.sha256(encoded)).param("now", now).update();
+            return new Definition(id, 1, HashSupport.sha256(encoded), false, implementation, now);
+        });
     }
     AgentWorkService.Work overlay(String project, AgentWorkService.Work work) {
         var latest = runs(project, work.sessionId(), 1).stream().findFirst().orElse(null);
@@ -106,10 +154,24 @@ public class FixedWorkService {
         var implementation = jdbc.sql("select definition_json from fixed_work_definition where id=:id")
                 .param("id", rs.getString("definition_id")).query(String.class).single();
         var stages = Arrays.asList(json.readValue(rs.getString("stages_json"), StageResult[].class));
-        return new Run(rs.getString("id"), rs.getString("definition_id"), rs.getString("status"),
+        var interaction = interactions.get(rs.getString("id"));
+        var status = rs.getString("status");
+        if ("RUNNING".equals(status) && interaction != null && "WAITING_INPUT".equals(interaction.status())) {
+            status = "WAITING_INPUT";
+            var waiting = interaction;
+            stages = stages.stream().map(s -> s.id().equals(waiting.stepId()) && "RUNNING".equals(s.status())
+                    ? new StageResult(s.id(), s.title(), "WAITING_INPUT", s.inputs(), s.output(), "") : s).toList();
+        } else if (!"RUNNING".equals(status)) interaction = null;
+        return new Run(rs.getString("id"), rs.getString("definition_id"), status,
                 readSnapshot(rs.getString("snapshot_json")), stages,
                 rs.getString("error"), rs.getTimestamp("created_at").toInstant(),
-                BusinessWorkProjection.project(json.readValue(implementation, FixedWorkDefinition.class), stages));
+                BusinessWorkProjection.project(json.readValue(implementation, FixedWorkDefinition.class), stages), interaction);
+    }
+    public void controlInteraction(String project, String session, String runId, String taskId, int promptId, String action) {
+        authorize(project, session);
+        if (!"WAITING_INPUT".equals(getRun(project, session, runId).status()))
+            throw new IllegalStateException("本轮没有待处理事项，请刷新状态");
+        interactions.control(runId, taskId, promptId, action);
     }
     private Run getRun(String project, String session, String id) {
         return jdbc.sql("select r.* from fixed_work_run r join fixed_work_definition d on d.id=r.definition_id where r.id=:id and r.session_id=:session and d.project_id=:project")
@@ -164,6 +226,7 @@ public class FixedWorkService {
             int expected = arguments.get("expected_version") instanceof Number n ? n.intValue() : 0;
             if (expected != (current == null ? 0 : current.version())) throw new IllegalStateException("实现版本已变化，请重新读取后修改");
             var id = UUID.randomUUID().toString(); var now = Instant.now(); int version = expected + 1;
+            artifacts.archiveDefinition(project, id, encoded, hash);
             jdbc.sql("""
                     insert into fixed_work_definition(id, project_id, session_id, source_run_id, version, definition_json, content_hash, verified, created_at)
                     values (:id,:project,:session,:run,:version,:definition,:hash,false,:now)
@@ -184,6 +247,14 @@ public class FixedWorkService {
     void requirePublished(String runId) {
         var recorded = json.readValue(jdbc.sql("select effects_json from assistant_run where id=:id").param("id", runId).query(String.class).single(), Map.class);
         var published = Objects.toString(recorded.get("fixedImplementationId"), "");
+        if (!published.isBlank()) {
+            var valid = jdbc.sql("""
+                    select count(*) from fixed_work_definition d join assistant_run r on r.session_id=d.session_id
+                    where r.id=:run and d.id=:definition and d.project_id=:project
+                    """).param("run", runId).param("definition", published).param("project", projectForRun(runId))
+                    .query(Integer.class).single();
+            if (valid == 0) throw new IllegalStateException("本轮关联的固定实现不存在或不属于当前工作，请重新读取实现版本");
+        }
         if (jdbc.sql("select count(*) from fixed_work_definition where source_run_id=:id")
                 .param("id", runId).query(Integer.class).single() == 0 && published.isBlank())
             throw new IllegalStateException("产物已保存，但本轮尚未固化可重复执行的工序；请继续保存固定工具调用及输入绑定，不能报告工作全部完成");
@@ -227,10 +298,14 @@ public class FixedWorkService {
                     .param("id", session).param("source", sourceRun).query(Integer.class).single() > 0) throw new IllegalStateException("Agent正在修改工作，请等待结束");
             var definition = latestDefinition(project, session);
             if (definition == null || !definition.id().equals(request.definitionId())) throw new IllegalStateException("实现不存在或版本已变化，请刷新后重试");
+            var encoded = jdbc.sql("select definition_json from fixed_work_definition where id=:id").param("id", definition.id()).query(String.class).single();
+            // Explicit compatibility migration before dispatch; existing archives are never replaced.
+            artifacts.archiveDefinition(project, definition.id(), encoded, definition.hash());
+            var executable = artifacts.loadDefinition(definition.id(), definition.hash());
             var snapshot = new LinkedHashMap<String, Bound>();
             var previous = runs(project, session).stream().filter(r -> r.definitionId().equals(definition.id())).toList();
             var boundResources = new HashMap<String, Bound>();
-            for (var step : definition.implementation().steps()) for (var input : step.inputs()) {
+            for (var step : executable.steps()) for (var input : step.inputs()) {
                 if (input.resourceId() == null || input.resourceId().isBlank()) continue;
                 var id = input.resourceId();
                 if (input.previousOutput() != null && !input.previousOutput().isBlank())
@@ -238,7 +313,7 @@ public class FixedWorkService {
                             .map(s -> s.output().resourceId()).findFirst().orElse(id);
                 snapshot.put(step.id() + "/" + input.alias(), boundResources.computeIfAbsent(id, key -> bind(project, key)));
             }
-            var stages = definition.implementation().steps().stream().map(s -> new StageResult(s.id(), s.title(), "PENDING", List.of(), null, "")).toList();
+            var stages = executable.steps().stream().map(s -> new StageResult(s.id(), s.title(), "PENDING", List.of(), null, "")).toList();
             var id = UUID.randomUUID().toString();
             jdbc.sql("""
                     insert into fixed_work_run(id, definition_id, session_id, request_id, status, snapshot_json, stages_json, error, created_at)
@@ -275,6 +350,7 @@ public class FixedWorkService {
     }
     private void execute(String project, String session, String id) {
         if (threads.putIfAbsent(id, Thread.currentThread()) != null) return;
+        boolean dispatched = false;
         try {
             int changed = jdbc.sql("update fixed_work_run set status='RUNNING' where id=:id and status='QUEUED'").param("id", id).update();
             if (changed == 0) {
@@ -282,9 +358,10 @@ public class FixedWorkService {
                         .param("id", id).param("now", Instant.now()).update();
                 return;
             }
+            dispatched = true;
             var run = getRun(project, session, id);
-            var definition = jdbc.sql("select definition_json from fixed_work_definition where id=:id").param("id", run.definitionId()).query(String.class).single();
-            var implementation = json.readValue(definition, FixedWorkDefinition.class);
+            var hash = jdbc.sql("select content_hash from fixed_work_definition where id=:id").param("id", run.definitionId()).query(String.class).single();
+            var implementation = artifacts.loadDefinition(run.definitionId(), hash);
             var stages = new ArrayList<>(run.stages());
             try {
                 for (int index = 0; index < implementation.steps().size(); index++) {
@@ -298,6 +375,7 @@ public class FixedWorkService {
                     }
                     stages.set(index, new StageResult(step.id(), step.title(), "RUNNING", List.copyOf(inputs.values()), null, ""));
                     saveStages(id, stages);
+                    journal.begin(id, run.definitionId(), implementation, step, index, inputs);
                     Bound output;
                     if ("SQL".equals(step.kind())) {
                         var upstream = new LinkedHashMap<String, Map<String, Object>>();
@@ -311,7 +389,7 @@ public class FixedWorkService {
                     } else if ("TOOL".equals(step.kind())) {
                         var texts = new LinkedHashMap<String, String>();
                         for (var entry : inputs.entrySet()) texts.put(entry.getKey(), readText(entry.getValue()));
-                        output = tools.execute(project, step, texts, () -> check(id));
+                        output = tools.execute(project, step, texts, () -> check(id), session, id);
                     } else {
                         var texts = new LinkedHashMap<String, String>();
                         for (var entry : inputs.entrySet()) texts.put(entry.getKey(), readText(entry.getValue()));
@@ -324,6 +402,7 @@ public class FixedWorkService {
                     }
                     // Keep already-produced outputs visible even if cancellation arrived during a tool call.
                     stages.set(index, new StageResult(step.id(), step.title(), "SUCCEEDED", List.copyOf(inputs.values()), output, ""));
+                    journal.complete(id, step.id(), output);
                     saveStages(id, stages); check(id);
                 }
                 if (BusinessWorkProjection.project(implementation, stages).stream().anyMatch(s -> !"SUCCEEDED".equals(s.status())))
@@ -352,6 +431,15 @@ public class FixedWorkService {
             jdbc.sql("update fixed_work_run set status='FAILED', error=:error, finished_at=:now where id=:id and status in ('RUNNING','QUEUED')")
                     .param("error", Objects.toString(failure.getMessage(), "执行初始化失败")).param("now", Instant.now()).param("id", id).update();
         } finally {
+            try {
+                if (dispatched) {
+                    journal.interrupted(id, "本轮中断或调用未返回明确结果；不得自动重复提交");
+                    journal.archive(project, id);
+                }
+            }
+            catch (RuntimeException archiveError) {
+                org.slf4j.LoggerFactory.getLogger(getClass()).error("Execution journal archive failed for {}", id, archiveError);
+            }
             threads.remove(id, Thread.currentThread()); Thread.interrupted();
             jdbc.sql("update fixed_work_run set status='CANCELED', finished_at=:now where id=:id and status='CANCEL_REQUESTED'")
                     .param("now", Instant.now()).param("id", id).update();

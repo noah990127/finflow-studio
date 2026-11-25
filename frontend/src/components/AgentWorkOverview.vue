@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { ArrowRight, Files, MessageSquare, Paperclip, RefreshCw, Pencil, Info } from 'lucide-vue-next'
+import { ArrowRight, Files, MessageSquare, Paperclip, RefreshCw, Pencil, Info, Send, LoaderCircle } from 'lucide-vue-next'
 import { api, type AgentWork, type FixedWorkState, type ArtifactRef, type CitationSource, type Project, type WorkspaceResource } from '../api/client'
 import { feedbackContext, resolveArtifact, workStages, workStatus, workStatusLabels, preferredExecutionStage, primaryArtifacts, supportingArtifacts } from '../domain/agentWork'
 import { useAssistantStore } from '../stores/assistant'
@@ -129,7 +129,17 @@ function readable(text: string) {
 
         <nav class="business-tabs" aria-label="工序内容"><button :class="{ active: tab === 'output' }" @click="tab = 'output'"><Files :size="15"/>产物</button><button :class="{ active: tab === 'input' }" @click="tab = 'input'"><Paperclip :size="15"/>输入</button><button class="stage-feedback" @click="feedbackOpen = !feedbackOpen"><MessageSquare :size="15"/>提出修改</button></nav>
         <div v-if="stage.question && stage.status === 'WAITING_INPUT'" class="work-question"><strong>需要你的输入</strong><p>{{ stage.question }}</p><button class="text-button" @click="feedbackOpen = true">补充输入<ArrowRight :size="14"/></button></div>
-        <form v-if="feedbackOpen" class="work-feedback" @submit.prevent="respond"><p>修改范围：{{ stage.title }}<span v-for="item in outputRefs" :key="item.resourceId"> · {{ title(item) }} 第 {{ item.version }} 版</span></p><label>补充判断或修改要求<textarea v-model="feedback" rows="3" required /></label><button class="primary-button" :disabled="!feedback.trim() || assistant.canInterrupt || submitting">{{ submitting ? '正在发送' : '交给 Agent 继续' }}<ArrowRight :size="15"/></button><button type="button" class="text-button" @click="feedbackOpen = false">取消</button><p v-if="assistant.canInterrupt">当前任务仍在执行，请等待结束或先停止。</p></form>
+        <form v-if="feedbackOpen" class="work-feedback" @submit.prevent="respond">
+          <p class="feedback-scope">修改 {{ stage.title }}<span v-for="item in outputRefs" :key="item.resourceId"> · {{ title(item) }} 第 {{ item.version }} 版</span></p>
+          <textarea v-model="feedback" aria-label="修改要求" placeholder="补充判断或修改要求…" rows="3" required :disabled="submitting" />
+          <div class="feedback-footer">
+            <span v-if="assistant.canInterrupt" class="feedback-wait" role="status">当前任务仍在执行，请等待结束或先停止。</span>
+            <div class="feedback-actions">
+              <button type="button" class="feedback-cancel" :disabled="submitting" @click="feedbackOpen = false">取消</button>
+              <button type="submit" class="feedback-send" :disabled="!feedback.trim() || assistant.canInterrupt || submitting"><LoaderCircle v-if="submitting" class="feedback-spinner" :size="14"/><Send v-else :size="14"/>{{ submitting ? '发送中' : '发送' }}</button>
+            </div>
+          </div>
+        </form>
         <template v-if="tab === 'output'">
           <details v-if="supportingRefs.length" class="supporting-artifacts"><summary>辅助材料 · {{ supportingRefs.length }}</summary><button v-for="item in supportingRefs" :key="item.resourceId" class="stage-input" @click="emit('openResource', item.resourceId)"><Paperclip :size="14"/>{{ title(item) }} · v{{ item.version }}</button></details>
           <details v-if="stage.summary && outputRefs.length" class="stage-summary-disclosure"><summary>工序摘要</summary><p class="stage-summary">{{ readable(stage.summary) }}</p></details><p v-else-if="stage.summary" class="stage-summary">{{ readable(stage.summary) }}</p>
@@ -151,6 +161,25 @@ function readable(text: string) {
 </template>
 
 <style scoped>
+.agent-work-overview .work-feedback{padding:12px 0 16px}
+.agent-work-overview .feedback-scope{margin:0 0 8px;color:#7b8794;font-size:12px;line-height:1.6;overflow-wrap:anywhere}
+.agent-work-overview .work-feedback textarea{margin:0;min-height:88px;max-height:240px;padding:10px 12px;font-size:13px;line-height:1.6;border-radius:6px;background:#fff;color:#35465c}
+.work-feedback textarea::placeholder{color:#8b97a7}
+.work-feedback textarea:focus-visible{outline:2px solid #b8d3f5;outline-offset:1px;border-color:#6d9edb}
+.feedback-footer{display:flex;align-items:center;justify-content:flex-end;gap:12px;margin-top:8px;flex-wrap:wrap}
+.feedback-wait{flex:1;min-width:180px;font-size:12px;color:#7b8794;line-height:1.6}
+.feedback-actions{display:flex;align-items:center;gap:8px;margin-left:auto;flex-shrink:0}
+.feedback-actions button{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:32px;padding:0 12px;border:1px solid transparent;border-radius:4px;font:inherit;font-size:12px;font-weight:500;cursor:pointer;white-space:nowrap}
+.feedback-cancel{background:transparent;color:#69788c}
+.feedback-cancel:hover:not(:disabled){background:#f3f5f8}
+.feedback-send{min-width:72px;background:#236dcc;color:#fff}
+.feedback-send:hover:not(:disabled){background:#195eb5}
+.feedback-send:disabled{background:#edf1f5;color:#99a4b2;cursor:default}
+.feedback-cancel:disabled{opacity:.5;cursor:default}
+.feedback-actions button:focus-visible{outline:2px solid #236dcc;outline-offset:2px}
+.feedback-spinner{animation:feedback-spin 1s linear infinite}
+@keyframes feedback-spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.feedback-spinner{animation:none}}
 .agent-work-overview .compact-heading .work-title-line{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .agent-work-overview .compact-heading h1{margin:4px 0;font-size:20px}
 .work-status{font-size:11px;color:#7b8794}

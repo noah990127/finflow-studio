@@ -29,6 +29,86 @@ class FixedWorkServiceTest {
     @Autowired AssistantService assistant;
     @Autowired JdbcClient jdbc;
     @Autowired FakeWorker worker;
+    @Autowired FixedInteractionService interactions;
+    @Autowired TechnicalArtifactService technicalArtifacts;
+    @Autowired TechnicalExecutionJournal journal;
+    @Autowired com.finflow.studio.workspace.ResourceVisibilityService visibility;
+
+    @Test void publishedCodeIsPinnedAndEachExecutionArchivesItsActualInputs() throws Exception {
+        var c = seed();
+        files.createTextVersion(c.input(), 1, "https://example.org/first".getBytes());
+        var d = publish(c, "TOOL", """
+                {"tool":"research.fetch","version":1,"arguments":{"url":{"$input":"source"}}}
+                """);
+        var archived = fixed.state(c.project(), c.session()).artifacts();
+        assertThat(archived).hasSize(2);
+        var code = archived.stream().filter(a -> !a.part().equals("@manifest")).findFirst().orElseThrow();
+        assertThat(visibility.internalIds(c.project())).contains(code.resourceId());
+        var originalCode = technicalArtifacts.read(code);
+        files.createTextVersion(code.resourceId(), 1, "manually changed display version".getBytes());
+        assertThat(technicalArtifacts.loadDefinition(d.id(), d.hash()).steps().getFirst().code()).isEqualTo(originalCode);
+        completeAgent(c);
+        fixed.start(c.project(), c.session(), new FixedWorkService.Start(d.id(), UUID.randomUUID().toString()));
+        var first = waitRun(c);
+        assertThat(first.status()).isEqualTo("SUCCEEDED");
+        files.createTextVersion(c.input(), 2, "https://example.org/second".getBytes());
+        fixed.start(c.project(), c.session(), new FixedWorkService.Start(d.id(), UUID.randomUUID().toString()));
+        var second = waitRun(c);
+        assertThat(second.status()).isEqualTo("SUCCEEDED");
+        var firstEntry = journal.entries(first.id()).getFirst();
+        var secondEntry = journal.entries(second.id()).getFirst();
+        assertThat(firstEntry.get("code_hash")).isEqualTo(secondEntry.get("code_hash"));
+        assertThat(firstEntry.get("inputs")).isNotEqualTo(secondEntry.get("inputs"));
+        assertThat(secondEntry.get("status")).isEqualTo("SUCCEEDED");
+        for (int i = 0; i < 100 && technicalArtifacts.list("EXECUTION", second.id()).isEmpty(); i++) Thread.sleep(20);
+        assertThat(technicalArtifacts.list("EXECUTION", second.id())).hasSize(1);
+        assertThat(fixed.executionDetails(c.project(), c.session(), second.id())).containsKey("implementationArtifacts");
+        assertThatThrownBy(() -> technicalArtifacts.save(c.project(), "DEFINITION", d.id(), code.part(), "overwrite.txt", "different"))
+                .hasMessageContaining("不可覆盖");
+    }
+
+    @Test void corruptedPinnedCodeBlocksDispatch() throws Exception {
+        var c = seed();
+        var d = publish(c, "PROMPT", "固定提示词");
+        var code = technicalArtifacts.list("DEFINITION", d.id()).stream().filter(a -> !a.part().equals("@manifest")).findFirst().orElseThrow();
+        java.nio.file.Files.writeString(files.filePath(code.resourceId(), code.version()), "corrupted");
+        completeAgent(c);
+        assertThatThrownBy(() -> fixed.start(c.project(), c.session(), new FixedWorkService.Start(d.id(), UUID.randomUUID().toString())))
+                .hasMessageContaining("完整性校验失败");
+        assertThat(fixed.state(c.project(), c.session()).runs()).isEmpty();
+    }
+
+    @Test void backgroundReconciliationRetriesPersistenceWithoutStartingBrowserTasks() {
+        var browser = mock(BrowserAgentService.class);
+        var reconciler = new TechnicalArchiveReconciler(jdbc, browser, journal);
+        var id = UUID.randomUUID().toString();
+        jdbc.sql("insert into browser_agent_task(task_id,step_id,owner_id,session_id,last_result) values(:id,:id,'default','background-test','{}')")
+                .param("id", id).update();
+        when(browser.status(id)).thenReturn(
+                Map.of("status", Map.of("state", "completed"), "archiveIssue", "temporary failure"),
+                Map.of("status", Map.of("state", "completed")));
+        reconciler.reconcileBrowser(id);
+        assertThat(jdbc.sql("select reconciled from browser_agent_task where task_id=:id").param("id", id).query(Boolean.class).single()).isFalse();
+        reconciler.reconcile();
+        assertThat(jdbc.sql("select reconciled from browser_agent_task where task_id=:id").param("id", id).query(Boolean.class).single()).isTrue();
+        reconciler.reconcile();
+        verify(browser, times(2)).status(id);
+        verifyNoMoreInteractions(browser);
+    }
+
+    @Test void ambiguousDispatchCannotBeSilentlyRetriedOrReportedSuccessful() {
+        var c = seed();
+        var d = publish(c, "PROMPT", "固定提示词");
+        var id = UUID.randomUUID().toString();
+        var step = d.implementation().steps().getFirst();
+        journal.begin(id, d.id(), d.implementation(), step, 0, Map.of());
+        assertThatThrownBy(() -> journal.begin(id, d.id(), d.implementation(), step, 0, Map.of()))
+                .isInstanceOf(org.springframework.dao.DuplicateKeyException.class);
+        journal.interrupted(id, "未收到明确结果，不自动重试");
+        journal.archive(c.project(), id);
+        assertThat(journal.entries(id).getFirst().get("status")).isEqualTo("NEEDS_VERIFICATION");
+        assertThat(technicalArtifacts.list("EXECUTION", id)).hasSize(1);
+    }
     @org.springframework.boot.test.context.TestConfiguration
     static class Config {
         @org.springframework.context.annotation.Bean
@@ -115,6 +195,43 @@ class FixedWorkServiceTest {
         assertThatThrownBy(() -> fixed.requirePublished(c.run())).hasMessageContaining("尚未固化");
         assertThatThrownBy(() -> publish(c,"TOOL","{\"tool\":\"resource.delete\",\"version\":1,\"arguments\":{}}"))
                 .hasMessageContaining("不受支持");
+    }
+
+    @Test void waitingInteractionProjectsOnlyItsOwnRunAndStopsOnTerminalState() {
+        var c = seed();
+        var definition = publish(c, "PROMPT", "Summarize");
+        var id = UUID.randomUUID().toString();
+        jdbc.sql("""
+                insert into fixed_work_run(id,definition_id,session_id,request_id,status,snapshot_json,stages_json,error,created_at)
+                values(:id,:definition,:session,:id,'RUNNING','{}',:stages,'',CURRENT_TIMESTAMP)
+                """).param("id", id).param("definition", definition.id()).param("session", c.session())
+                .param("stages", "[{\"id\":\"s1\",\"title\":\"处理数据\",\"status\":\"RUNNING\",\"inputs\":[],\"output\":null,\"error\":\"\"}]").update();
+        interactions.record(id, new FixedInteractionService.Interaction("s1", "test-provider", "task-1", 2, "WAITING_INPUT", "需要确认", false));
+        var run = fixed.state(c.project(), c.session()).runs().getFirst();
+        assertThat(run.status()).isEqualTo("WAITING_INPUT");
+        assertThat(run.stages().getFirst().status()).isEqualTo("WAITING_INPUT");
+        assertThat(run.businessStages().getFirst().status()).isEqualTo("WAITING_INPUT");
+        assertThatThrownBy(() -> interactions.control(id, "other-task", 2, "resume")).hasMessageContaining("待办已变化");
+        assertThatThrownBy(() -> interactions.control(id, "task-1", 1, "resume")).hasMessageContaining("待办已变化");
+        var other = seed();
+        assertThatThrownBy(() -> fixed.controlInteraction(other.project(), other.session(), id, "task-1", 2, "resume"))
+                .hasMessageContaining("执行记录不存在");
+        jdbc.sql("update fixed_work_run set status='FAILED' where id=:id").param("id", id).update();
+        assertThat(fixed.state(c.project(), c.session()).runs().getFirst().interaction()).isNull();
+        assertThatThrownBy(() -> fixed.controlInteraction(c.project(), c.session(), id, "task-1", 2, "resume"))
+                .hasMessageContaining("没有待处理事项");
+    }
+
+    @Test void completionRejectsForeignOrMissingImplementationReference() {
+        var current = seed();
+        var other = seed();
+        var definition = publish(other, "PROMPT", "Summarize input");
+        for (var id : List.of(definition.id(), UUID.randomUUID().toString())) {
+            jdbc.sql("update assistant_run set effects_json=:effects where id=:id")
+                    .param("effects", "{\"fixedImplementationId\":\"" + id + "\"}")
+                    .param("id", current.run()).update();
+            assertThatThrownBy(() -> fixed.requirePublished(current.run())).hasMessageContaining("不属于当前工作");
+        }
     }
 
     @Test void agentCanExecutePublishedWorkWithoutEndingItsConversation() throws Exception {
