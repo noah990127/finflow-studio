@@ -1,0 +1,166 @@
+{
+  "formatVersion": 1,
+  "project": {
+    "name": "项目协同管理｜会议到周报",
+    "description": "客户服务平台与经营数据看板：会议任务跟进、WBS、人员分工、繁忙程度热力图与管理汇报。"
+  },
+  "reportDate": "2026-11-26",
+  "period": "2026-11-30至2026-12-04",
+  "files": [
+    {
+      "key": "before_excel",
+      "name": "项目任务台账_会议前.xlsx",
+      "path": "inputs/项目任务台账_会议前.xlsx",
+      "mediaType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "sha256": "5358337ea286e1ebf7a7b3910d64b1e371feff6a54d16d417326c466ba7a6135"
+    },
+    {
+      "key": "after_excel",
+      "name": "项目任务台账_会后.xlsx",
+      "path": "inputs/项目任务台账_会后.xlsx",
+      "mediaType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "sha256": "f8b3854c6d83624d1673544f13dd2fd51f167f82d38fb52745dc143458c0663b"
+    },
+    {
+      "key": "meeting",
+      "name": "项目周会口述稿.txt",
+      "path": "inputs/项目周会口述稿.txt",
+      "mediaType": "text/plain",
+      "sha256": "06cc1800c60832469f5fe696a5267f44bebe29d4af6f65a006e471733519173d"
+    },
+    {
+      "key": "guide",
+      "name": "项目管理说明.txt",
+      "path": "inputs/项目管理说明.txt",
+      "mediaType": "text/plain",
+      "sha256": "0ba99fd21786678ad7b4527eb926209e1f9ff4cd289ce136fe95fa40ae89ea36"
+    },
+    {
+      "key": "ledger_source",
+      "name": "任务台账_同源数据.json",
+      "path": "inputs/任务台账_同源数据.json",
+      "mediaType": "application/json",
+      "sha256": "04557a961acc4c607a88a49a1fe668e717ce6352c7ac745defedf35161f0481e"
+    },
+    {
+      "key": "heatmap_template",
+      "name": "人员繁忙程度热力图.view.json",
+      "path": "inputs/人员繁忙程度热力图.view.json",
+      "mediaType": "application/json",
+      "sha256": "cb363705107d1648aa38c4a44350d0b6cd9c53cfa7526377b7ada95da262345e"
+    },
+    {
+      "key": "output_changes_data",
+      "name": "周会变更与待确认数据.json.md",
+      "path": "outputs/周会变更与待确认数据.json.md",
+      "mediaType": "application/json",
+      "sha256": "12e66f46b5d7e01ad57dee3496a6e8e1d03ebbab458bba0e7023fad804fc0065"
+    },
+    {
+      "key": "output_changes_view",
+      "name": "周会变更与待确认清单.view.json",
+      "path": "outputs/周会变更与待确认清单.view.json",
+      "mediaType": "application/json",
+      "sha256": "4a25c84029d09f30b5c0d360f3e67380e1b2f063ddf2cb684bea54fb8c9edb25"
+    },
+    {
+      "key": "output_ledger_data",
+      "name": "会后完整结构化任务台账.json.md",
+      "path": "outputs/会后完整结构化任务台账.json.md",
+      "mediaType": "application/json",
+      "sha256": "a2a7e309b54f914fb6221d0f51e274e01222701d94fe47c0489bdaa4a1156811"
+    },
+    {
+      "key": "output_ledger_doc",
+      "name": "会后台账阅读版数据.json.md",
+      "path": "outputs/会后台账阅读版数据.json.md",
+      "mediaType": "application/json",
+      "sha256": "9fb4289aa6b6ce3d212def6b2a984e7e0a54294180588e707c4d668ac3e4e2d7"
+    },
+    {
+      "key": "output_ledger_view",
+      "name": "会后完整任务台账.view.json",
+      "path": "outputs/会后完整任务台账.view.json",
+      "mediaType": "application/json",
+      "sha256": "9fb4289aa6b6ce3d212def6b2a984e7e0a54294180588e707c4d668ac3e4e2d7"
+    },
+    {
+      "key": "output_project_doc",
+      "name": "项目任务层级数据.json.md",
+      "path": "outputs/项目任务层级数据.json.md",
+      "mediaType": "application/json",
+      "sha256": "ffa2a3de149639ca2d8865160ba5a550757cbb47269dd24e9647331185374022"
+    },
+    {
+      "key": "output_project_view",
+      "name": "项目工作包任务全景.view.json",
+      "path": "outputs/项目工作包任务全景.view.json",
+      "mediaType": "application/json",
+      "sha256": "ffa2a3de149639ca2d8865160ba5a550757cbb47269dd24e9647331185374022"
+    },
+    {
+      "key": "output_people_doc",
+      "name": "人员任务层级数据.json.md",
+      "path": "outputs/人员任务层级数据.json.md",
+      "mediaType": "application/json",
+      "sha256": "11f3ae5f5cd8daaa1922c512e3f3111b9b4affb4d047cdba837ec15ea5f4d2e5"
+    },
+    {
+      "key": "output_people_view",
+      "name": "人员项目任务分工.view.json",
+      "path": "outputs/人员项目任务分工.view.json",
+      "mediaType": "application/json",
+      "sha256": "11f3ae5f5cd8daaa1922c512e3f3111b9b4affb4d047cdba837ec15ea5f4d2e5"
+    },
+    {
+      "key": "output_heatmap_data",
+      "name": "人员繁忙程度图表数据.json.md",
+      "path": "outputs/人员繁忙程度图表数据.json.md",
+      "mediaType": "application/json",
+      "sha256": "1cc65b82ccb85dbe51f310f6ee986877652aa893deafe290356eee0939135d49"
+    },
+    {
+      "key": "output_heatmap_view",
+      "name": "人员繁忙程度热力图.view.json",
+      "path": "outputs/人员繁忙程度热力图.view.json",
+      "mediaType": "application/json",
+      "sha256": "1cc65b82ccb85dbe51f310f6ee986877652aa893deafe290356eee0939135d49"
+    },
+    {
+      "key": "output_report_data",
+      "name": "项目风险与管理汇报数据.json.md",
+      "path": "outputs/项目风险与管理汇报数据.json.md",
+      "mediaType": "application/json",
+      "sha256": "bcdbc2e3f36f4de123cb56b8730626277d7e198580162b3e34271e31c04e7715"
+    },
+    {
+      "key": "output_risk_view",
+      "name": "项目风险与资源调配评估.view.json",
+      "path": "outputs/项目风险与资源调配评估.view.json",
+      "mediaType": "application/json",
+      "sha256": "d564d78781bc177fc96b6d6db5982d1fb0d8fd809ca9c1709712035112ed76d3"
+    },
+    {
+      "key": "output_load_view",
+      "name": "下周人员负载会前会后对比.view.json",
+      "path": "outputs/下周人员负载会前会后对比.view.json",
+      "mediaType": "application/json",
+      "sha256": "3574e524937172eab5fdf85e52f6143b0c95a683ba2f1106ae660255d237392d"
+    },
+    {
+      "key": "output_ppt",
+      "name": "双项目周会风险与资源安排.pptx",
+      "path": "outputs/双项目周会风险与资源安排.pptx",
+      "mediaType": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      "sha256": "ca7ab3749d2239477d14e6cfbec8bc4572fa4ad82e08453c3c842cb33157d1af"
+    }
+  ],
+  "expected": {
+    "taskCount": 17,
+    "capacityHours": 184,
+    "plannedHours": 176,
+    "overloadedPeople": 3,
+    "overloadHours": 44
+  },
+  "workflowSha256": "9d5267631ebc371c455e734c4bd173b18a1e8d1e18df4a928aa3c4253e278319"
+}

@@ -1,0 +1,17 @@
+.git
+**/.env
+**/.env.*
+**/node_modules
+**/.venv*
+**/__pycache__
+**/*.pyc
+**/target
+**/dist
+**/data
+.run
+.local-runtime
+outputs
+artifacts
+**/*.log
+**/*.pid
+.finflow-test-accounts
